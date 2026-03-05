@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────
-# AgentB v0.3.0 Configuration
-# Drop-in memory coprocessor for AI agents
-# https://github.com/GuyMannDude/agentb
+# Mnemo Cortex v0.3.0 Configuration
+# "I remember everything so your agent doesn't have to."
+# https://github.com/GuyMannDude/mnemo-cortex
 # ─────────────────────────────────────────────
 
 data_dir: ~/.agentb

@@ -576,7 +576,7 @@ class TestServerSmoke:
         from agentb.server import create_app
         app = create_app(basic_config)
         assert app is not None
-        assert app.title == "AgentB"
+        assert app.title == "Mnemo Cortex"
 
     def test_health_endpoint_exists(self, basic_config):
         """Health route is registered."""

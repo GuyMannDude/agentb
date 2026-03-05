@@ -1,14 +1,15 @@
 """
-AgentB v0.3.0 — Drop-in Memory Coprocessor for AI Agents
-=========================================================
-Multi-tenant isolation • Provider fallback chains • Persona modes
+Mnemo Cortex v0.3.0 — Drop-in Memory Superhero for AI Agents
+=============================================================
+Every AI agent has amnesia. Mnemo Cortex is the cure.
+Four endpoints. Any LLM. Total recall.
 
   /health      → System status + provider failover state
   /context     → Persona-aware L1/L2/L3 memory retrieval
   /preflight   → Persona-aware PASS / ENRICH / WARN / BLOCK
   /writeback   → Agent-isolated session archiving
 
-https://github.com/GuyMannDude/agentb
+https://github.com/GuyMannDude/mnemo-cortex
 """
 
 import json
@@ -202,7 +203,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     for agent_name in config.agents:
         tenants.get(agent_name)
 
-    app = FastAPI(title="AgentB", description="Drop-in memory coprocessor for AI agents", version="0.3.0")
+    app = FastAPI(title="Mnemo Cortex", description="Drop-in memory superhero for AI agents", version="0.3.0")
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -410,7 +411,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
-        log.info(f"AgentB v0.3.0 starting")
+        log.info(f"⚡ Mnemo Cortex v0.3.0 — I remember everything so your agent doesn't have to.")
         log.info(f"  Reasoning: {reasoner.status}")
         log.info(f"  Embedding: {embedder.status}")
         log.info(f"  Data dir:  {config.data_dir}")

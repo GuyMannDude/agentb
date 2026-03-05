@@ -321,7 +321,7 @@ class OpenRouterReasoning(ReasoningProvider):
     async def generate(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         import httpx
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json",
-                   "HTTP-Referer": "https://github.com/GuyMannDude/agentb", "X-Title": "AgentB"}
+                   "HTTP-Referer": "https://github.com/GuyMannDude/mnemo-cortex", "X-Title": "Mnemo Cortex"}
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
