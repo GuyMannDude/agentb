@@ -180,9 +180,30 @@ If Ollama hangs, Mnemo Cortex silently falls through the chain. The `/health` en
 
 ## Framework Adapters
 
+### OpenClaw (full integration)
+
+Two hooks that work together:
+
+| Hook | What it does | Event |
+|------|-------------|-------|
+| **mnemo-ingest** | Archives session on `/new`, injects context on bootstrap | `command:new`, `agent:bootstrap` |
+| **SKILL-MNEMO-LIVEWIRE.md** | Teaches agent to call `/ingest` after every response | Always active |
+
+```bash
+# Install both:
+cp -r adapters/openclaw/mnemo-ingest ~/.openclaw/workspace/hooks/
+cp adapters/openclaw/SKILL-MNEMO-LIVEWIRE.md ~/.openclaw/workspace/
+openclaw hooks enable mnemo-ingest
+export MNEMO_AGENT_ID=rocky
+openclaw gateway restart
+```
+
+Your agent now captures every exchange automatically, gets memory context injected on startup, and archives sessions when you issue `/new`. Zero manual effort.
+
+### Other Frameworks
+
 | Framework | Adapter | Setup |
 |-----------|---------|-------|
-| **OpenClaw** | Bootstrap hook | `cp -r adapters/openclaw/agentb-context ~/.openclaw/workspace/hooks/` |
 | **Agent Zero** | Skill file | Copy `adapters/agent-zero/SKILL-AGENTB.md` to Agent Zero skills |
 | **Any framework** | HTTP/curl | See `adapters/generic/INTEGRATION.md` |
 
