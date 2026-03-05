@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────
+# AgentB Configuration
+# Drop-in memory coprocessor for AI agents
+# https://github.com/GuyMannDude/agentb
+# ─────────────────────────────────────────────
+
+# Where AgentB stores memories, cache, and logs
+data_dir: ~/.agentb
+
+# Logging level: debug | info | warning | error
+log_level: info
+
+# ── Reasoning Provider ──
+# Used for preflight checks (PASS/ENRICH/WARN/BLOCK)
+# Providers: ollama | openai | anthropic | openrouter | google
+reasoning:
+  provider: ollama
+  model: qwen2.5:32b-instruct
+  api_base: http://localhost:11434
+  timeout: 30
+
+  # --- OpenAI example ---
+  # provider: openai
+  # model: gpt-4o-mini
+  # api_key: ${OPENAI_API_KEY}
+
+  # --- Anthropic example ---
+  # provider: anthropic
+  # model: claude-sonnet-4-5-20250929
+  # api_key: ${ANTHROPIC_API_KEY}
+
+  # --- OpenRouter example (access any model) ---
+  # provider: openrouter
+  # model: nousresearch/hermes-3-llama-3.1-405b:free
+  # api_key: ${OPENROUTER_API_KEY}
+
+  # --- Google Gemini example ---
+  # provider: google
+  # model: gemini-2.5-flash
+  # api_key: ${GEMINI_API_KEY}
+
+# ── Embedding Provider ──
+# Used for semantic search across memory
+# Providers: ollama | openai | huggingface | google | openrouter
+embedding:
+  provider: ollama
+  model: nomic-embed-text
+  api_base: http://localhost:11434
+
+  # --- OpenAI example ---
+  # provider: openai
+  # model: text-embedding-3-small
+  # api_key: ${OPENAI_API_KEY}
+
+  # --- HuggingFace local example ---
+  # provider: huggingface
+  # model: sentence-transformers/all-MiniLM-L6-v2
+  # api_base: http://localhost:8080  # text-embeddings-inference server
+
+# ── Cache Settings ──
+cache:
+  l1_max_bundles: 50
+  l1_ttl_seconds: 86400       # 24 hours
+  l1_similarity_threshold: 0.75
+  l2_similarity_threshold: 0.5
+  l3_similarity_threshold: 0.4
+
+# ── Server Settings ──
+server:
+  host: 0.0.0.0
+  port: 50001
+  cors_origins: ["*"]
+  # auth_token: my-secret-token  # Uncomment to require X-API-KEY header
+
+# ── Multi-Agent Isolation (optional) ──
+# Each agent gets its own memory namespace
+# agents:
+#   rocky:
+#     data_dir: ~/.agentb/agents/rocky
+#   bw:
+#     data_dir: ~/.agentb/agents/bw
