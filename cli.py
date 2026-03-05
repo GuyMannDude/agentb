@@ -52,7 +52,7 @@ def main(ctx):
     """⚡ Mnemo Cortex — Drop-in memory superhero for AI agents."""
     if ctx.invoked_subcommand is None:
         console.print(BANNER)
-        console.print("  Commands: [bold]init[/] · [bold]start[/] · [bold]stop[/] · [bold]status[/] · [bold]logs[/] · [bold]test[/]")
+        console.print("  Commands: [bold]init[/] · [bold]start[/] · [bold]stop[/] · [bold]status[/] · [bold]watch[/] · [bold]logs[/] · [bold]test[/]")
         console.print()
         if not CONFIG_FILE.exists():
             console.print("  [yellow]→ Run [bold]mnemo-cortex init[/bold] to get started![/]")
@@ -400,6 +400,12 @@ def status():
         if agents:
             console.print(f"  Agents:     {', '.join(agents)}")
 
+        # Watcher
+        if _is_watcher_running():
+            console.print(f"  Watcher:    [green]running[/] (PID {_get_watcher_pid()}) — auto-capturing sessions")
+        else:
+            console.print(f"  Watcher:    [yellow]stopped[/] — run [bold]mnemo-cortex watch[/] to auto-capture")
+
         console.print()
 
     except Exception as e:
@@ -484,6 +490,104 @@ def test(agent):
         console.print(f"  [green bold]All {passed} tests passed! ⚡[/]")
     else:
         console.print(f"  [yellow]{passed} passed, {failed} failed[/]")
+
+
+# ─────────────────────────────────────────────
+#  Watch — Session Watcher
+# ─────────────────────────────────────────────
+
+WATCHER_PID_FILE = DATA_DIR / "watcher.pid"
+
+@main.command()
+@click.option("--backfill", "-b", is_flag=True, help="Backfill existing sessions first")
+@click.option("--backfill-count", default=10, help="Number of recent sessions to backfill")
+@click.option("--foreground", "-f", is_flag=True, help="Run in foreground")
+def watch(backfill, backfill_count, foreground):
+    """Start the session watcher (auto-captures OpenClaw conversations)."""
+    console.print(BANNER)
+
+    if _is_watcher_running():
+        console.print("[yellow]Watcher is already running.[/]")
+        return
+
+    if backfill:
+        console.print("[cyan]Backfilling existing sessions...[/]")
+        from agentb.watcher import backfill_sessions
+        backfill_sessions(backfill_count)
+        console.print()
+
+    env = os.environ.copy()
+    env.setdefault("MNEMO_URL", "http://artforge:50001")
+    env.setdefault("MNEMO_AGENT_ID", "rocky")
+
+    watcher_script = Path(__file__).parent / "watcher.py"
+    cmd = [sys.executable, str(watcher_script)]
+
+    if foreground:
+        console.print("[yellow]Watcher running in foreground... (Ctrl+C to stop)[/]")
+        try:
+            subprocess.run(cmd, env=env)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Watcher stopped.[/]")
+    else:
+        log_file = DATA_DIR / "logs" / "watcher.log"
+        (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
+        log_fh = open(log_file, "a")
+        proc = subprocess.Popen(
+            cmd, env=env,
+            stdout=log_fh, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        WATCHER_PID_FILE.write_text(str(proc.pid))
+
+        time.sleep(1)
+        if proc.poll() is None:
+            console.print(f"[green]⚡ Session watcher started![/]")
+            console.print(f"  PID: {proc.pid}")
+            console.print(f"  Log: {log_file}")
+            console.print(f"  Watching: ~/.openclaw/agents/main/sessions/")
+            console.print()
+            console.print("  [dim]Every exchange Rocky has is now auto-captured.[/]")
+            console.print("  [dim]mnemo-cortex unwatch — stop the watcher[/]")
+        else:
+            console.print("[red]Watcher failed to start. Check logs.[/]")
+
+
+@main.command()
+def unwatch():
+    """Stop the session watcher."""
+    if not _is_watcher_running():
+        console.print("[yellow]Watcher is not running.[/]")
+        WATCHER_PID_FILE.unlink(missing_ok=True)
+        return
+
+    pid = _get_watcher_pid()
+    try:
+        os.kill(pid, signal.SIGTERM)
+        console.print(f"[green]Watcher stopped (PID {pid})[/]")
+    except ProcessLookupError:
+        console.print("[yellow]Watcher process already gone.[/]")
+    WATCHER_PID_FILE.unlink(missing_ok=True)
+
+
+def _get_watcher_pid() -> int:
+    try:
+        return int(WATCHER_PID_FILE.read_text().strip())
+    except Exception:
+        return 0
+
+
+def _is_watcher_running() -> bool:
+    pid = _get_watcher_pid()
+    if pid == 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 # ─────────────────────────────────────────────

@@ -37,21 +37,11 @@ AI agents forget everything between sessions. Mnemo Cortex gives them a brain th
 - **Framework adapters.** OpenClaw hook, Agent Zero skill, or raw HTTP from anything.
 - **Zero cloud lock-in.** Runs fully local with Ollama, or use any API provider.
 
-## The Live Wire (`/ingest`)
+## The Live Wire (`/ingest`) + The Watcher
 
-This is the feature that changes everything. Rocky calls `/ingest` after every single exchange with you. If Anthropic pulls the plug, if the server crashes, if the power goes out — every conversation up to the last exchange is already on disk.
+This is the feature that changes everything. `mnemo-cortex watch` runs a lightweight daemon outside your agent that silently watches its session transcripts. The millisecond your agent replies, the watcher captures the user's prompt and the agent's response, strips any internal noise/metadata, and pipes it straight to `/ingest`. 
 
-```bash
-# Rocky calls this after every prompt/response pair
-curl -X POST http://localhost:50001/ingest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "What was our Easter pricing?",
-    "response": "Easter gnomes were $20-30 each",
-    "agent_id": "rocky"
-  }'
-# Response: {"status": "captured", "session_id": "2026-03-05_143022_a1b2c3", "entry_number": 7}
-```
+If Anthropic pulls the plug, if the server crashes, if the power goes out — every conversation up to the exact last letter is already on disk in your Cortex.
 
 **Session Lifecycle:**
 | Tier | Age | Storage | Search Speed | What Happens |
@@ -60,7 +50,7 @@ curl -X POST http://localhost:50001/ingest \
 | **WARM** | Days 4-30 | Summarized + compressed | Fast (L2 semantic) | Auto-summarized, embedded, indexed |
 | **COLD** | Day 30+ | Compressed archive | Slow (L3 scan) | Deep storage, still searchable |
 
-No manual saves. No handoff scripts. No lost sessions. The superhero never sleeps.
+No manual saves. No handoff scripts. No lost sessions. The watcher never sleeps.
 
 ## Quick Start
 
@@ -69,6 +59,7 @@ No manual saves. No handoff scripts. No lost sessions. The superhero never sleep
 pip install mnemo-cortex
 mnemo-cortex init          # interactive wizard — pick providers, enter keys, done
 mnemo-cortex start         # server starts in background
+mnemo-cortex watch --backfill # start the live watcher and ingest history
 mnemo-cortex status        # verify everything is green
 ```
 
@@ -84,6 +75,7 @@ cd mnemo-cortex
 pip install -e ".[dev]"
 mnemo-cortex init
 mnemo-cortex start
+mnemo-cortex watch --backfill
 ```
 
 ## CLI Commands
@@ -93,7 +85,9 @@ mnemo-cortex init      # Interactive setup wizard
 mnemo-cortex start     # Start server (background)
 mnemo-cortex start -f  # Start in foreground
 mnemo-cortex stop      # Stop server
-mnemo-cortex status    # Health check + session stats
+mnemo-cortex watch     # Start the session watcher (auto-capture)
+mnemo-cortex unwatch   # Stop the session watcher
+mnemo-cortex status    # Health check + session stats + watcher status
 mnemo-cortex logs      # View server logs
 mnemo-cortex logs -f   # Follow logs live
 mnemo-cortex test      # Quick connectivity test
@@ -187,16 +181,7 @@ Two hooks that work together:
 | Hook | What it does | Event |
 |------|-------------|-------|
 | **mnemo-ingest** | Archives session on `/new`, injects context on bootstrap | `command:new`, `agent:bootstrap` |
-| **SKILL-MNEMO-LIVEWIRE.md** | Teaches agent to call `/ingest` after every response | Always active |
-
-```bash
-# Install both:
-cp -r adapters/openclaw/mnemo-ingest ~/.openclaw/workspace/hooks/
-cp adapters/openclaw/SKILL-MNEMO-LIVEWIRE.md ~/.openclaw/workspace/
-openclaw hooks enable mnemo-ingest
-export MNEMO_AGENT_ID=rocky
-openclaw gateway restart
-```
+| **Watcher Daemon** | Silently pushes Live Wire tape state into Cortex. | Always active |
 
 Your agent now captures every exchange automatically, gets memory context injected on startup, and archives sessions when you issue `/new`. Zero manual effort.
 
@@ -243,6 +228,20 @@ Your agent now captures every exchange automatically, gets memory context inject
 │  │  rocky/ │ bw/ │ shared/     │            │
 │  └─────────────────────────────┘            │
 └─────────────────────────────────────────────┘
+                      ▲
+                      │
+               POST /ingest
+                      │
+      ┌───────────────┴───────────────┐
+      │        Watcher Daemon         │
+      │ Automatically reads sessions  │
+      └───────────────▲───────────────┘
+                      │
+            ┌─────────┴─────────┐
+            │ OpenClaw Storage  │
+            │  ~/.openclaw/     │
+            └───────────────────┘
+
 ```
 
 ## Testing
@@ -264,7 +263,7 @@ Adding a new provider is as easy as implementing two methods (`generate`/`embed`
 
 - [x] v0.2.0 — Core server, pluggable providers, framework adapters
 - [x] v0.3.0 — Multi-tenant isolation, circuit breaker fallbacks, persona modes
-- [x] v0.4.0 — Live Wire (`/ingest`), hot/warm/cold session lifecycle, `/sessions` API
+- [x] v0.4.0 — Live Wire (`/ingest`), hot/warm/cold session lifecycle, `/sessions` API, Session Watcher daemon
 - [ ] v0.5.0 — `/metrics` (Prometheus), proactive session pre-caching
 - [ ] v0.6.0 — SQLite + sqlite-vec storage backend, admin dashboard
 - [ ] v1.0.0 — Postgres + pgvector, pip installable, production hardened
