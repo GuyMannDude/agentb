@@ -270,7 +270,7 @@ Adding a new provider is as easy as implementing two methods (`generate`/`embed`
 
 ## Created By
 
-Guy Hoffman, Rocky Moltman 🦞, and Opie (Claude) — built for [Project Sparks](https://projectsparks.ai).
+Guy Hutchins, Rocky Moltman 🦞, and Opie (Claude) — built for [Project Sparks](https://projectsparks.ai).
 
 *"I remember everything so your agent doesn't have to."*
 
