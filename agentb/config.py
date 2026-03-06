@@ -191,21 +191,21 @@ def load_config(path: Optional[str] = None) -> AgentBConfig:
 
 def _parse_config(raw: dict) -> AgentBConfig:
     cfg = AgentBConfig()
-    if "reasoning" in raw:
+    if "reasoning" in raw and raw["reasoning"]:
         cfg.reasoning = _build_resilient(raw["reasoning"])
-    if "embedding" in raw:
+    if "embedding" in raw and raw["embedding"]:
         cfg.embedding = _build_resilient(raw["embedding"])
-    if "storage" in raw:
+    if "storage" in raw and raw["storage"]:
         s = raw["storage"]
         cfg.storage = StorageConfig(
             backend=s.get("backend", "json"),
             path=_resolve_env(s.get("path", "")),
             connection_string=_resolve_env(s.get("connection_string", "")),
         )
-    if "cache" in raw:
+    if "cache" in raw and raw["cache"]:
         c = raw["cache"]
         cfg.cache = CacheConfig(**{k: c[k] for k in c if hasattr(CacheConfig, k)})
-    if "server" in raw:
+    if "server" in raw and raw["server"]:
         s = raw["server"]
         cfg.server = ServerConfig(
             host=s.get("host", "0.0.0.0"),
@@ -218,16 +218,18 @@ def _parse_config(raw: dict) -> AgentBConfig:
     if "log_level" in raw:
         cfg.log_level = raw["log_level"]
     cfg.personas = dict(DEFAULT_PERSONAS)
-    if "personas" in raw:
+    if "personas" in raw and raw["personas"]:
         for name, pdata in raw["personas"].items():
-            cfg.personas[name] = _build_persona(name, pdata)
-    if "agents" in raw:
+            if pdata:
+                cfg.personas[name] = _build_persona(name, pdata)
+    if "agents" in raw and raw["agents"]:
         for name, adata in raw["agents"].items():
-            cfg.agents[name] = AgentConfig(
-                data_dir=_resolve_env(adata.get("data_dir", "")),
-                persona=adata.get("persona", "default"),
-                read_only=adata.get("read_only", False),
-            )
+            if adata:
+                cfg.agents[name] = AgentConfig(
+                    data_dir=_resolve_env(adata.get("data_dir", "")),
+                    persona=adata.get("persona", "default"),
+                    read_only=adata.get("read_only", False),
+                )
     return _apply_defaults(cfg)
 
 
