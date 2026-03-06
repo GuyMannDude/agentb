@@ -102,17 +102,94 @@ def extract_text(content) -> str:
     return str(content)
 
 
+def extract_tool_calls(content) -> list[dict]:
+    """Extract tool call summaries from assistant message content."""
+    calls = []
+    if not isinstance(content, list):
+        return calls
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "toolCall":
+            name = block.get("name", "unknown")
+            args = block.get("arguments", {})
+
+            # Summarize the call based on tool type
+            summary = ""
+            if name == "exec" and isinstance(args, dict):
+                cmd = args.get("command", "")
+                # Truncate long commands but keep the important parts
+                summary = cmd[:300] if cmd else ""
+            elif isinstance(args, dict):
+                summary = json.dumps(args)[:200]
+            else:
+                summary = str(args)[:200]
+
+            calls.append({
+                "id": block.get("id", ""),
+                "tool": name,
+                "summary": summary,
+            })
+    return calls
+
+
+def extract_thinking(content) -> str:
+    """Extract a brief summary of thinking blocks from assistant message content."""
+    if not isinstance(content, list):
+        return ""
+    thinking_parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "thinking":
+            text = block.get("text", "")
+            if text:
+                # Take first 200 chars as a thinking summary
+                thinking_parts.append(text[:200].strip())
+    if not thinking_parts:
+        return ""
+    # Join multiple thinking blocks, cap total
+    return " | ".join(thinking_parts)[:500]
+
+
 def strip_sender_metadata(text: str) -> str:
     """Remove the 'Sender (untrusted metadata)' wrapper OpenClaw adds to user messages."""
-    # Pattern: Sender (untrusted metadata):\n```json\n{...}\n```\n\nActual message
     pattern = r'^Sender \(untrusted metadata\):\s*```json\s*\{[^}]*\}\s*```\s*'
     cleaned = re.sub(pattern, '', text, flags=re.DOTALL).strip()
     return cleaned if cleaned else text
 
 
 def parse_session_lines(lines: list[str]) -> list[dict]:
-    """Parse JSONL lines and extract user/assistant message pairs."""
+    """
+    Parse JSONL lines and extract messages with full context.
+    Returns user messages, assistant messages (with tool calls + thinking),
+    and tool results — all linked together.
+    """
     messages = []
+    tool_results = {}  # toolCallId -> result summary
+
+    # First pass: collect tool results
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+            if entry.get("type") != "message":
+                continue
+            msg = entry.get("message", {})
+            if msg.get("role") == "toolResult":
+                call_id = msg.get("toolCallId", "")
+                if call_id:
+                    result_text = extract_text(msg.get("content", ""))
+                    details = msg.get("details", {})
+                    tool_results[call_id] = {
+                        "tool": msg.get("toolName", ""),
+                        "status": details.get("status", ""),
+                        "exit_code": details.get("exitCode"),
+                        "output": result_text[:300],  # truncated output
+                        "duration_ms": details.get("durationMs"),
+                    }
+        except json.JSONDecodeError:
+            continue
+
+    # Second pass: build messages with metadata
     for line in lines:
         line = line.strip()
         if not line:
@@ -123,22 +200,52 @@ def parse_session_lines(lines: list[str]) -> list[dict]:
                 continue
             msg = entry.get("message", {})
             role = msg.get("role")
-            if role not in ("user", "assistant"):
-                continue
 
-            text = extract_text(msg.get("content", ""))
             if role == "user":
+                text = extract_text(msg.get("content", ""))
                 text = strip_sender_metadata(text)
+                if len(text.strip()) < 2:
+                    continue
+                messages.append({
+                    "role": "user",
+                    "text": text[:MAX_CONTENT_LENGTH],
+                    "timestamp": msg.get("timestamp") or entry.get("timestamp", ""),
+                })
 
-            # Skip empty or very short messages
-            if len(text.strip()) < 2:
-                continue
+            elif role == "assistant":
+                content = msg.get("content", [])
+                text = extract_text(content)
 
-            messages.append({
-                "role": role,
-                "text": text[:MAX_CONTENT_LENGTH],
-                "timestamp": msg.get("timestamp") or entry.get("timestamp", ""),
-            })
+                # Extract tool calls and match with results
+                tool_calls = extract_tool_calls(content)
+                actions = []
+                for tc in tool_calls:
+                    action = {
+                        "tool": tc["tool"],
+                        "command": tc["summary"],
+                    }
+                    # Match with result
+                    if tc["id"] in tool_results:
+                        result = tool_results[tc["id"]]
+                        action["status"] = result.get("status", "")
+                        action["exit_code"] = result.get("exit_code")
+                        action["output"] = result.get("output", "")[:200]
+                    actions.append(action)
+
+                # Extract thinking summary
+                thinking = extract_thinking(content)
+
+                if len(text.strip()) < 2 and not actions:
+                    continue
+
+                messages.append({
+                    "role": "assistant",
+                    "text": text[:MAX_CONTENT_LENGTH],
+                    "timestamp": msg.get("timestamp") or entry.get("timestamp", ""),
+                    "actions": actions if actions else None,
+                    "thinking": thinking if thinking else None,
+                })
+
         except json.JSONDecodeError:
             continue
 
@@ -146,16 +253,27 @@ def parse_session_lines(lines: list[str]) -> list[dict]:
 
 
 def pair_messages(messages: list[dict]) -> list[dict]:
-    """Pair consecutive user/assistant messages into exchanges."""
+    """Pair consecutive user/assistant messages into exchanges with metadata."""
     pairs = []
     i = 0
     while i < len(messages) - 1:
         if messages[i]["role"] == "user" and messages[i + 1]["role"] == "assistant":
-            pairs.append({
+            exchange = {
                 "prompt": messages[i]["text"],
                 "response": messages[i + 1]["text"],
                 "timestamp": messages[i]["timestamp"],
-            })
+            }
+
+            # Attach metadata (not vectorized, but stored alongside)
+            metadata = {}
+            if messages[i + 1].get("actions"):
+                metadata["actions"] = messages[i + 1]["actions"]
+            if messages[i + 1].get("thinking"):
+                metadata["thinking_summary"] = messages[i + 1]["thinking"]
+            if metadata:
+                exchange["metadata"] = metadata
+
+            pairs.append(exchange)
             i += 2
         else:
             i += 1
@@ -232,10 +350,15 @@ def process_session_file(filepath: Path, position: int) -> tuple[int, int]:
 
     ingested = 0
     for pair in pairs:
+        # Merge source metadata with exchange metadata (actions, thinking)
+        meta = {"source": "openclaw-watcher", "session_file": filepath.name}
+        if pair.get("metadata"):
+            meta.update(pair["metadata"])
+
         success = ingest_exchange(
             prompt=pair["prompt"],
             response=pair["response"],
-            metadata={"source": "openclaw-watcher", "session_file": filepath.name},
+            metadata=meta,
         )
         if success:
             ingested += 1

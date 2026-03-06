@@ -175,7 +175,8 @@ class SessionManager:
 
     def search_hot(self, query: str, max_results: int = 10) -> list[dict]:
         """
-        Search hot session logs via simple text matching.
+        Search hot session logs via text matching.
+        Searches prompts, responses, AND tool call commands/output.
         Fast but not semantic — for hot data, speed > precision.
         """
         query_lower = query.lower()
@@ -189,15 +190,42 @@ class SessionManager:
                             entry = json.loads(line)
                             if entry.get("_type") != "exchange":
                                 continue
-                            text = f"{entry.get('prompt', '')} {entry.get('response', '')}"
-                            if query_lower in text.lower():
-                                results.append({
+
+                            # Build searchable text from all fields
+                            prompt = entry.get("prompt", "")
+                            response = entry.get("response", "")
+                            metadata = entry.get("metadata", {})
+                            actions = metadata.get("actions", [])
+                            thinking = metadata.get("thinking_summary", "")
+
+                            # Searchable text includes actions and thinking
+                            search_text = f"{prompt} {response}"
+                            action_summaries = []
+                            for action in actions:
+                                cmd = action.get("command", "")
+                                output = action.get("output", "")
+                                action_summaries.append(
+                                    f"[{action.get('tool','?')}] {cmd} → {output}"
+                                )
+                                search_text += f" {cmd} {output}"
+                            if thinking:
+                                search_text += f" {thinking}"
+
+                            if query_lower in search_text.lower():
+                                result = {
                                     "session_id": session_file.stem,
                                     "timestamp": entry.get("timestamp", ""),
-                                    "prompt": entry["prompt"][:200],
-                                    "response": entry["response"][:200],
+                                    "prompt": prompt[:200],
+                                    "response": response[:200],
                                     "tier": "hot",
-                                })
+                                }
+                                # Attach action summaries if present
+                                if action_summaries:
+                                    result["actions"] = action_summaries[:5]
+                                if thinking:
+                                    result["thinking"] = thinking[:150]
+
+                                results.append(result)
                                 if len(results) >= max_results:
                                     return results
                         except json.JSONDecodeError:

@@ -284,8 +284,16 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # HOT: Search recent session logs first (fastest, keyword matching)
         hot_results = sessions.search_hot(req.prompt, max_results=min(3, req.max_results))
         for hr in hot_results:
+            content = f"[{hr['timestamp'][:16]}] User: {hr['prompt']}\nAgent: {hr['response']}"
+
+            # Append action summaries if present (tool calls, commands)
+            if hr.get("actions"):
+                content += "\nActions: " + " | ".join(hr["actions"][:3])
+            if hr.get("thinking"):
+                content += f"\nThinking: {hr['thinking']}"
+
             all_chunks.append(ContextChunk(
-                content=f"[{hr['timestamp'][:16]}] User: {hr['prompt']}\nAgent: {hr['response']}",
+                content=content,
                 source=f"hot-session:{hr['session_id']}",
                 relevance=0.95,  # hot data is highly relevant by recency
                 cache_tier="HOT",
