@@ -91,9 +91,10 @@ Override via bridge env vars: `MNEMO_DECAY_TOPOLOGY_WARN_DAYS`,
 - The migration regex is the same pattern used by the write-time
   auto-suggester — single source of truth. Re-running the script touches
   zero records on a second pass.
-- Auto-sync watchers (e.g. `mnemo-cc-artforge-sync`) must now tag their
-  writes as `source: "tool", category: "session_log"` so they're hidden
-  from default recalls. Update bundled in this release.
+- Any auto-sync watcher (a periodic process that batches session
+  activity to Mnemo) must now tag its writes as `source: "tool",
+  category: "session_log"` so the mechanical noise stays hidden from
+  default recalls.
 
 ### Bridge internal writebacks — auto-tagged
 
@@ -145,8 +146,6 @@ quietly worse" — the failure mode Nate B Jones names in his SAP/Dreamio
 analysis. Pine Cone Nexus and SAP Dreamio bake the same idea (provenance,
 freshness, confidence) into enterprise retrieval contracts. v3 brings it
 to personal/small-team scale.
-
-Full spec: `mnemo-v3-provenance-spec.md` in the Sparks brain.
 
 ## 2.7.0 — 2026-05-03
 
