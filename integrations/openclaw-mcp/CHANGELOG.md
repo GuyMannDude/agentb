@@ -120,10 +120,12 @@ indistinguishable from agent inference. v3 tags them at the source:
   `decision`, not `incident`. Decision verbs are more diagnostic than
   failure nouns when both appear in the same record.
 - Narrowed the `relationship` regex to drop bare first-name matches
-  (`April`, `Peter`). The month "April" and the common name "Peter"
-  produced false-positive `relationship` tags on records that had
-  nothing to do with collaborators. Domain keywords (`hoffman`,
-  `customer`, `client`, `collaborator`, `merchant`) remain.
+  that collided with calendar months and common English given names.
+  Those patterns produced false-positive `relationship` tags on records
+  that had nothing to do with collaborators. Configure your own
+  collaborator/client keywords per deployment — the default ships with
+  generic role terms (`customer`, `client`, `collaborator`, `merchant`)
+  only.
 
 ### Backward compatibility
 
