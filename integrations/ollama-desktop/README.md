@@ -44,7 +44,7 @@ openclaw --version          # confirm: OpenClaw 2026.4.26+ (or current)
 ```bash
 mkdir -p ~/github && cd ~/github
 git clone https://github.com/GuyMannDude/mnemo-cortex.git
-cd mnemo-cortex/integrations/openclaw-mcp && npm install
+cd mnemo-cortex/integrations/mcp-bridge && npm install
 ```
 
 (Windows: replace `~/github` with `%USERPROFILE%\github` and adjust paths.)
@@ -60,7 +60,7 @@ OpenClaw stores config at `~/.openclaw/openclaw.json` (Windows: `%USERPROFILE%\.
       "mnemo-cortex": {
         "command": "node",
         "args": [
-          "/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"
+          "/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"
         ],
         "env": {
           "MNEMO_URL": "http://localhost:50001",
@@ -122,7 +122,7 @@ You can verify the bridge directly from a terminal, mimicking what OpenClaw will
 ```bash
 MNEMO_URL=http://localhost:50001 \
 MNEMO_AGENT_ID=ollama-yourname \
-node /path/to/mnemo-cortex/integrations/openclaw-mcp/server.js
+node /path/to/mnemo-cortex/integrations/mcp-bridge/server.js
 ```
 
 You should see `[mnemo-mcp] Connected to Mnemo Cortex (N memories, share: separate)` on stderr. Ctrl-C to exit. If you get a connection error, your `MNEMO_URL` is wrong or the server isn't reachable from this machine.
@@ -192,7 +192,7 @@ Pick `always` if you want this Ollama-driven agent to read what your other agent
        │
        │ spawns child process via stdio
        ▼
-[ openclaw-mcp/server.js (bridge) ]
+[ mcp-bridge/server.js (bridge) ]
        │
        │ HTTP POST to /writeback, /context
        ▼

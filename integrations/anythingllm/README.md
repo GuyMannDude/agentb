@@ -17,7 +17,7 @@ AnythingLLM speaks MCP through its plugin layer. With this integration, every wo
 
 ```bash
 git clone https://github.com/GuyMannDude/mnemo-cortex.git
-cd mnemo-cortex/integrations/openclaw-mcp
+cd mnemo-cortex/integrations/mcp-bridge
 npm install
 ```
 
@@ -40,7 +40,7 @@ If the file or its parent directory don't exist, create them. Add this entry und
   "mcpServers": {
     "mnemo-cortex": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"],
+      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"],
       "env": {
         "MNEMO_URL": "http://localhost:50001",
         "MNEMO_AGENT_ID": "anythingllm",
@@ -167,7 +167,7 @@ Each lane is independent. Cross-search across lanes only happens if `MNEMO_SHARE
 
 ## How It Works
 
-AnythingLLM spawns the Mnemo Cortex bridge (`openclaw-mcp/server.js`) as a child process via MCP stdio transport. When your model invokes a memory tool inside an Automatic-mode workspace, the bridge calls Mnemo Cortex's REST API:
+AnythingLLM spawns the Mnemo Cortex bridge (`mcp-bridge/server.js`) as a child process via MCP stdio transport. When your model invokes a memory tool inside an Automatic-mode workspace, the bridge calls Mnemo Cortex's REST API:
 
 - `mnemo_recall` → `POST /context` (your agent only)
 - `mnemo_search` → `POST /context` (cross-agent gated by share mode)

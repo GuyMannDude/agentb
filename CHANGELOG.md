@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.8.1 (2026-05-13) — MCP bridge directory rename
+
+`integrations/openclaw-mcp/` → `integrations/mcp-bridge/`. The bridge
+code at the old path was never OpenClaw-specific — it's the generic
+Node.js MCP server that every Mnemo Cortex integration (Claude Desktop,
+Claude Code, OpenClaw, LM Studio, AnythingLLM, Agent Zero, Hermes Agent,
+Ollama Desktop, etc.) spawns on stdio. The old directory name misled
+new users; the new path tells the truth.
+
+**Rename-only release. No functional change.** The 8 host-specific
+integration directories all had their install scripts + config
+examples + READMEs updated to point at the new path. Server.js +
+package.json + CHANGELOG + tests moved with `git mv`.
+
+**Back-compat:** the old path `integrations/openclaw-mcp/` is kept as
+a thin stub — symlinks at `server.js` and `package.json` resolve to
+the new location, plus a README explaining the move. Existing MCP
+client configs pointing at the old path keep working without action;
+update them at your convenience. Will be removed in a future major
+version.
+
+Full bridge release notes: [integrations/mcp-bridge/CHANGELOG.md](integrations/mcp-bridge/CHANGELOG.md)
+
 ## v2.7.1 (2026-05-04)
 
 Public-release scrub. Mnemo Cortex was developed inside Project Sparks

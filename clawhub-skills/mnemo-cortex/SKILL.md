@@ -63,7 +63,7 @@ Pick the host's integration guide and follow it:
 |---|---|
 | Claude Code | `integrations/claude-code/` — hooks or sync service |
 | Claude Desktop | `integrations/claude-desktop/` — drag-and-drop `.mcpb` bundle |
-| OpenClaw | `integrations/openclaw-mcp/` — one-line `openclaw mcp set` config |
+| OpenClaw | `integrations/mcp-bridge/` — one-line `openclaw mcp set` config |
 | LM Studio | `integrations/lmstudio/` — `mcp.json` + restart |
 | AnythingLLM | `integrations/anythingllm/` — MCP plugin config + Automatic mode |
 | Agent Zero | `integrations/agent-zero/` — in-container Docker setup |

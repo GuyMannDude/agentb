@@ -296,7 +296,7 @@ At session end:
 ```
 
 > Cross-agent search and brain-file tools are MCP-only today. If 
-> you need them via REST, the bridge in `integrations/openclaw-mcp/` 
+> you need them via REST, the bridge in `integrations/mcp-bridge/` 
 > is a small Node service you can run as a translator.
 
 ---

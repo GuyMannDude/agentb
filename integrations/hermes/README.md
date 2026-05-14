@@ -66,12 +66,11 @@ The bridge is a Node stdio MCP server bundled in the mnemo-cortex repo:
 
 ```bash
 git clone https://github.com/GuyMannDude/mnemo-cortex.git
-cd mnemo-cortex/integrations/openclaw-mcp
+cd mnemo-cortex/integrations/mcp-bridge
 npm install
 ```
 
-Two npm deps: `@modelcontextprotocol/sdk` and `zod`. Zero OpenClaw runtime
-dependency — the folder name is historical.
+Two npm deps: `@modelcontextprotocol/sdk` and `zod`.
 
 #### 2. Register with Hermes
 
@@ -80,7 +79,7 @@ Hermes ships with a built-in `mcp add` command. From anywhere on your shell:
 ```bash
 hermes mcp add mnemo \
     --command node \
-    --args /absolute/path/to/mnemo-cortex/integrations/openclaw-mcp/server.js \
+    --args /absolute/path/to/mnemo-cortex/integrations/mcp-bridge/server.js \
     --env MNEMO_URL=http://localhost:50001 MNEMO_AGENT_ID=hermes MNEMO_SHARE=separate
 ```
 
@@ -278,7 +277,7 @@ Most common causes, in order:
 2. **Wrong path to `server.js`.** The path in `args:` must be absolute and
    point at the real file. Test with `node /your/path/server.js < /dev/null`
    — it should hang waiting for stdin (Ctrl+C to exit), not error.
-3. **Bridge deps not installed.** `cd mnemo-cortex/integrations/openclaw-mcp
+3. **Bridge deps not installed.** `cd mnemo-cortex/integrations/mcp-bridge
    && npm install`.
 4. **Wrong `MNEMO_URL`.** If your Mnemo runs on a non-default port, update
    the env. Check with `curl http://localhost:50001/health`.

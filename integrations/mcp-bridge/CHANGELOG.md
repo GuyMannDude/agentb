@@ -8,6 +8,44 @@
 > those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.8.1 — 2026-05-13 — Rename: `openclaw-mcp` → `mcp-bridge`
+
+**Rename-only release. No functional change.** The directory hosting
+this code moved from `integrations/openclaw-mcp/` to
+`integrations/mcp-bridge/`. The old name was a leftover from when this
+bridge was OpenClaw-specific; the code has long since been the generic
+bridge that every Mnemo Cortex integration (Claude Desktop, Claude
+Code, OpenClaw, LM Studio, AnythingLLM, Agent Zero, Hermes Agent,
+Ollama Desktop, Open WebUI, llama.cpp, LobeChat, Jan) spawns on
+stdio. The new path tells the truth.
+
+### Migration
+
+- **Existing user configs** that point at `…/integrations/openclaw-mcp/server.js`
+  keep working — there's a symlink at the old path resolving to
+  `../mcp-bridge/server.js`. Update your MCP client config to the new
+  path when convenient.
+- **Fresh installs** (anyone following the README or running
+  `robot-install.sh` after this commit) see only the new path. No
+  action required.
+- **Windows users without symlink support** (most Git for Windows
+  installs handle them, but stricter configs may not): update your
+  MCP client config to point at `integrations/mcp-bridge/server.js`
+  directly. The symlink fallback won't resolve for you.
+
+### Package metadata
+
+- `package.json` `name`: `mnemo-cortex-openclaw-mcp` → `mnemo-cortex-mcp-bridge`.
+- `package.json` `version`: 2.8.0 → 2.8.1.
+- `server.js` McpServer version constant bumped to match.
+
+### Future deprecation
+
+The back-compat symlink at `integrations/openclaw-mcp/` is kept for
+existing users to migrate at their own pace. It will be removed in a
+future major version; the deprecation notice is in
+`integrations/openclaw-mcp/README.md`.
+
 ## 2.8.0 — 2026-05-13 — Mnemo Cortex v3: Provenance & Decay
 
 **The agent's own inference is no longer indistinguishable from a verified

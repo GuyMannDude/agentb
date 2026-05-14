@@ -1,6 +1,6 @@
 # Building `mnemo-cortex.mcpb`
 
-The bundle is the canonical Claude Desktop install path. Rebuild it whenever the openclaw-mcp bridge or its deps change.
+The bundle is the canonical Claude Desktop install path. Rebuild it whenever the mcp-bridge bridge or its deps change.
 
 ## Prerequisites
 
@@ -17,8 +17,8 @@ BUILD=integrations/mcpb-build
 # Fresh stage from the canonical bridge
 rm -rf "$BUILD"
 mkdir -p "$BUILD/server"
-cp integrations/openclaw-mcp/server.js     "$BUILD/server/"
-cp -r integrations/openclaw-mcp/node_modules "$BUILD/server/"
+cp integrations/mcp-bridge/server.js     "$BUILD/server/"
+cp -r integrations/mcp-bridge/node_modules "$BUILD/server/"
 
 # Icon (downscaled hero card)
 convert docs/mnemo-cortex-card-v1.png -resize 512x512 "$BUILD/icon.png"

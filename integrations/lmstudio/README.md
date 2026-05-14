@@ -17,11 +17,11 @@ LM Studio added native MCP client support in **v0.3.17**. With this integration,
 
 ```bash
 git clone https://github.com/GuyMannDude/mnemo-cortex.git
-cd mnemo-cortex/integrations/openclaw-mcp
+cd mnemo-cortex/integrations/mcp-bridge
 npm install
 ```
 
-The bridge lives in `openclaw-mcp/` — it's the same Node service used by every Mnemo MCP integration (LM Studio, Claude Desktop, OpenClaw, etc.).
+The bridge lives in `mcp-bridge/` — it's the same Node service used by every Mnemo MCP integration (LM Studio, Claude Desktop, OpenClaw, etc.).
 
 ### 2. Edit `mcp.json`
 
@@ -40,7 +40,7 @@ If the file doesn't exist, create it. Add this entry under `mcpServers`:
   "mcpServers": {
     "mnemo-cortex": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"],
+      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"],
       "env": {
         "MNEMO_URL": "http://localhost:50001",
         "MNEMO_AGENT_ID": "lmstudio",
@@ -150,7 +150,7 @@ Use `separate` if you also run other agents (Claude Desktop, OpenClaw, Claude Co
 
 ## How It Works
 
-LM Studio spawns the Mnemo Cortex bridge (`openclaw-mcp/server.js`) as a child process using MCP stdio transport. When your LM Studio model invokes a memory tool, the bridge calls Mnemo Cortex's REST API:
+LM Studio spawns the Mnemo Cortex bridge (`mcp-bridge/server.js`) as a child process using MCP stdio transport. When your LM Studio model invokes a memory tool, the bridge calls Mnemo Cortex's REST API:
 
 - `mnemo_recall` → `POST /context` (your agent only)
 - `mnemo_search` → `POST /context` (cross-agent gated by share mode)

@@ -22,7 +22,7 @@ You have two options. Pick one:
 docker exec <container-name> bash -c "
   cd /a0/usr &&
   git clone https://github.com/GuyMannDude/mnemo-cortex.git &&
-  cd mnemo-cortex/integrations/openclaw-mcp &&
+  cd mnemo-cortex/integrations/mcp-bridge &&
   npm install
 "
 ```
@@ -30,7 +30,7 @@ docker exec <container-name> bash -c "
 **B. Mount the host clone into the container:**
 Recreate the container with `-v /host/path/to/mnemo-cortex:/a0/usr/mnemo-cortex:ro`. Saves disk if you run multiple Agent Zero instances on one host.
 
-Either way, you end up with `/a0/usr/mnemo-cortex/integrations/openclaw-mcp/server.js` reachable from inside the container.
+Either way, you end up with `/a0/usr/mnemo-cortex/integrations/mcp-bridge/server.js` reachable from inside the container.
 
 ### 2. Wire Mnemo MCP into Agent Zero's settings
 
@@ -38,7 +38,7 @@ Agent Zero stores config at `/a0/usr/settings.json` inside the container. Find t
 
 ```json
 {
-  "mcp_servers": "{\"mcpServers\": {\"mnemo-cortex\": {\"command\": \"node\", \"args\": [\"/a0/usr/mnemo-cortex/integrations/openclaw-mcp/server.js\"], \"env\": {\"MNEMO_URL\": \"http://YOUR_MNEMO_HOST:50001\", \"MNEMO_AGENT_ID\": \"your-agent-name\", \"MNEMO_SHARE\": \"separate\"}}}}"
+  "mcp_servers": "{\"mcpServers\": {\"mnemo-cortex\": {\"command\": \"node\", \"args\": [\"/a0/usr/mnemo-cortex/integrations/mcp-bridge/server.js\"], \"env\": {\"MNEMO_URL\": \"http://YOUR_MNEMO_HOST:50001\", \"MNEMO_AGENT_ID\": \"your-agent-name\", \"MNEMO_SHARE\": \"separate\"}}}}"
 }
 ```
 
@@ -55,7 +55,7 @@ d["mcp_servers"] = json.dumps({
   "mcpServers": {
     "mnemo-cortex": {
       "command": "node",
-      "args": ["/a0/usr/mnemo-cortex/integrations/openclaw-mcp/server.js"],
+      "args": ["/a0/usr/mnemo-cortex/integrations/mcp-bridge/server.js"],
       "env": {
         "MNEMO_URL": "http://YOUR_MNEMO_HOST:50001",
         "MNEMO_AGENT_ID": "your-agent-name",
@@ -86,7 +86,7 @@ Once the container is back up, run a smoke test of the bridge from inside:
 
 ```bash
 docker exec <container-name> bash -c "
-  cd /a0/usr/mnemo-cortex/integrations/openclaw-mcp &&
+  cd /a0/usr/mnemo-cortex/integrations/mcp-bridge &&
   ( echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}}'
     sleep 1
     echo '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}'
@@ -156,7 +156,7 @@ Use `always` if you have a trusted team of agents that should learn from each ot
 [Agent Zero Web UI on container :80]
       │  (LLM decides to use a memory tool)
       ▼
-[Agent Zero MCP client] ──spawns via stdio──▶ [openclaw-mcp/server.js (in-container)]
+[Agent Zero MCP client] ──spawns via stdio──▶ [mcp-bridge/server.js (in-container)]
                                                        │
                                                        │ HTTP POST to /writeback, /context
                                                        ▼

@@ -42,7 +42,7 @@
 
 🖥️ **[Claude Desktop → one-click `.mcpb` bundle](integrations/claude-desktop/)** — Drag-and-drop install. No clone, no Node, no JSON editing. Works on Windows, macOS, and Linux.
 
-🦞 **[OpenClaw → MCP integration](integrations/openclaw-mcp/)** — Give Your ClawdBot a Brain. One Config Line.
+🦞 **[OpenClaw → MCP integration](integrations/mcp-bridge/)** — Give Your ClawdBot a Brain. One Config Line.
 
 🎛️ **[LM Studio → native MCP, GUI](integrations/lmstudio/)** — `mcp.json` + restart. Works with any tool-capable open-weights model.
 
@@ -147,7 +147,7 @@ The starter template repo: [github.com/GuyMannDude/mnemo-plan](https://github.co
 
 What's in the box: 5 MCP tools, a review queue, 32 content detectors (secrets, PII, prompt injection, generic fluff, duplicates), 4 provenance buckets, a policy layer with 4-way disposition outcomes, git-tracked audit, and a 200-entry eval corpus. Current eval: 53.0% accuracy / 0.458 macro-F1.
 
-MCP tools: `passport_get_user_context`, `passport_observe_behavior`, `passport_list_pending_observations`, `passport_promote_observation`, `passport_forget_or_override`. Reference integration via stdio MCP at [`integrations/openclaw-mcp/`](integrations/openclaw-mcp/). See [`passport/README.md`](passport/README.md) for the 5-minute quickstart.
+MCP tools: `passport_get_user_context`, `passport_observe_behavior`, `passport_list_pending_observations`, `passport_promote_observation`, `passport_forget_or_override`. Reference integration via stdio MCP at [`integrations/mcp-bridge/`](integrations/mcp-bridge/). See [`passport/README.md`](passport/README.md) for the 5-minute quickstart.
 
 Designed so the user owns the artifact, not the platform. The possessive in the name is deliberate — it drops when the hosted / browser-AI release for normal users ships. Today's release is for devs who wire MCP subprocesses into their own agent stacks.
 
@@ -167,7 +167,7 @@ Mnemo Cortex talks Model Context Protocol (MCP). Every modern local-LLM host eit
 2. **Clone this repo** somewhere your LLM host can reach:
    ```
    git clone https://github.com/GuyMannDude/mnemo-cortex.git
-   cd mnemo-cortex/integrations/openclaw-mcp && npm install
+   cd mnemo-cortex/integrations/mcp-bridge && npm install
    ```
    That's the bridge. It's a small Node script. Every host below points at the same `server.js`.
 
@@ -190,7 +190,7 @@ LM Studio added native MCP support in v0.3.17. Edit `mcp.json` and restart.
   "mcpServers": {
     "mnemo-cortex": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"],
+      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"],
       "env": {
         "MNEMO_URL": "http://localhost:50001",
         "MNEMO_AGENT_ID": "lmstudio"
@@ -212,7 +212,7 @@ Open WebUI works with any backend (Ollama, llama.cpp, OpenAI-compatible). In **S
 |---|---|
 | Name | `mnemo-cortex` |
 | Command | `node` |
-| Args | `/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js` |
+| Args | `/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js` |
 | Env | `MNEMO_URL=http://localhost:50001`<br>`MNEMO_AGENT_ID=open-webui` |
 
 Save. Open a chat. Tools appear inline.
@@ -238,7 +238,7 @@ AnythingLLM speaks MCP through its plugin layer. Two setup steps: drop in the MC
   "mcpServers": {
     "mnemo-cortex": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"],
+      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"],
       "env": {
         "MNEMO_URL": "http://localhost:50001",
         "MNEMO_AGENT_ID": "anythingllm"
@@ -297,7 +297,7 @@ mcpServers:
     type: local
     command:
       - "node"
-      - "/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"
+      - "/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"
     environment:
       MNEMO_URL: "http://localhost:50001"
       MNEMO_AGENT_ID: "ollama-mcphost"
@@ -327,7 +327,7 @@ In **Settings → Plugins → MCP → Add custom MCP server**:
 | Field | Value |
 |---|---|
 | Type | `stdio` |
-| Command | `node /ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js` |
+| Command | `node /ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js` |
 | Env | `MNEMO_URL=http://localhost:50001`<br>`MNEMO_AGENT_ID=lobechat` |
 
 ---
@@ -340,7 +340,7 @@ Jan exposes MCP through its Extensions panel. **Settings → Extensions → MCP 
 {
   "name": "mnemo-cortex",
   "command": "node",
-  "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"],
+  "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"],
   "env": {
     "MNEMO_URL": "http://localhost:50001",
     "MNEMO_AGENT_ID": "jan"
@@ -716,7 +716,7 @@ The server is now running. Pick your platform and follow its integration guide:
 | **Claude Desktop** | [`integrations/claude-desktop/`](integrations/claude-desktop/) — drag-and-drop `.mcpb` bundle |
 | **LM Studio** | [`integrations/lmstudio/`](integrations/lmstudio/) — native MCP, GUI |
 | **AnythingLLM** | [`integrations/anythingllm/`](integrations/anythingllm/) — desktop, multi-workspace |
-| **OpenClaw** | [`integrations/openclaw-mcp/`](integrations/openclaw-mcp/) — one-line MCP config |
+| **OpenClaw** | [`integrations/mcp-bridge/`](integrations/mcp-bridge/) — one-line MCP config |
 | **Agent Zero** | [`integrations/agent-zero/`](integrations/agent-zero/) — in-container Docker setup |
 | **Ollama Desktop** | [`integrations/ollama-desktop/`](integrations/ollama-desktop/) — `ollama launch` flow |
 

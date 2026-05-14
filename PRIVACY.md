@@ -50,7 +50,7 @@ Some optional features (cross-agent dreaming, the LLM-based memory compactor) ca
 
 ## Source code
 
-The bridge is open source: <https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/openclaw-mcp>
+The bridge is open source: <https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/mcp-bridge>
 
 The server is open source: <https://github.com/GuyMannDude/mnemo-cortex>
 

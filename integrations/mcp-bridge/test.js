@@ -31,7 +31,7 @@ await test("Health check", async () => {
 });
 
 // 2. Write a test memory
-const testSession = `test-openclaw-mcp-${Date.now()}`;
+const testSession = `test-mcp-bridge-${Date.now()}`;
 await test("Write memory", async () => {
   const res = await fetch(`${MNEMO_URL}/writeback`, {
     method: "POST",

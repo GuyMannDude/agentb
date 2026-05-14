@@ -8,7 +8,7 @@ mcp_servers:
     # Replace the path below with your actual mnemo-cortex checkout location.
     command: node
     args:
-      - /absolute/path/to/mnemo-cortex/integrations/openclaw-mcp/server.js
+      - /absolute/path/to/mnemo-cortex/integrations/mcp-bridge/server.js
     env:
       # Where your Mnemo Cortex API is running. Default: localhost:50001
       MNEMO_URL: http://localhost:50001

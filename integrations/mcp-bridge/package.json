@@ -1,0 +1,21 @@
+{
+  "name": "mnemo-cortex-mcp-bridge",
+  "version": "2.8.1",
+  "description": "Drop-in MCP bridge for any MCP-capable host. Generic shared bridge used by every Mnemo Cortex integration (Claude Desktop, Claude Code, OpenClaw, LM Studio, AnythingLLM, Agent Zero, Hermes Agent, Ollama, and more). Persistent semantic memory + Passport, plus optional brain-lane and wiki tools that auto-enable when those dirs exist.",
+  "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "keywords": ["mnemo-cortex", "mcp", "mcp-bridge", "memory", "ai-agent", "lmstudio", "ollama", "claude-desktop", "openclaw", "hermes", "local-llm"],
+  "author": "Project Sparks",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "zod": "^4.3.6"
+  }
+}

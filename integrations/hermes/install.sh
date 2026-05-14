@@ -42,9 +42,14 @@ NODE_MAJOR=$(node -v | sed 's/v\([0-9]*\).*/\1/')
 # ─────────────────────────────────────────────
 # Locate the mnemo-cortex repo (the bridge lives inside it)
 # ─────────────────────────────────────────────
-# When running from inside the repo, the bridge is at ../openclaw-mcp/server.js
+# When running from inside the repo, the bridge is at ../mcp-bridge/server.js
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BRIDGE_DIR="$(cd "${SCRIPT_DIR}/../openclaw-mcp" 2>/dev/null && pwd || echo "")"
+BRIDGE_DIR="$(cd "${SCRIPT_DIR}/../mcp-bridge" 2>/dev/null && pwd || echo "")"
+
+# Fall back to the legacy path for back-compat (it's a symlink to mcp-bridge).
+if [[ -z "$BRIDGE_DIR" || ! -f "$BRIDGE_DIR/server.js" ]]; then
+    BRIDGE_DIR="$(cd "${SCRIPT_DIR}/../openclaw-mcp" 2>/dev/null && pwd || echo "")"
+fi
 
 if [[ -z "$BRIDGE_DIR" || ! -f "$BRIDGE_DIR/server.js" ]]; then
     warn "Bridge not found relative to this script."
@@ -54,7 +59,7 @@ if [[ -z "$BRIDGE_DIR" || ! -f "$BRIDGE_DIR/server.js" ]]; then
     echo ""
     read -rp "Path to mnemo-cortex repo: " REPO_PATH
     REPO_PATH="${REPO_PATH%/}"
-    BRIDGE_DIR="${REPO_PATH}/integrations/openclaw-mcp"
+    BRIDGE_DIR="${REPO_PATH}/integrations/mcp-bridge"
     [[ -f "$BRIDGE_DIR/server.js" ]] || fail "No server.js at $BRIDGE_DIR"
 fi
 

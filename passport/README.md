@@ -47,7 +47,7 @@ A developer dropping Passport into their stack gets:
 | `passport_forget_or_override` | Mark a stable claim as wrong. Audit preserved; the original never disappears from history. |
 
 All five are exposed over MCP via the reference integration at
-[`integrations/openclaw-mcp/server.js`](../integrations/openclaw-mcp/server.js).
+[`integrations/mcp-bridge/server.js`](../integrations/mcp-bridge/server.js).
 The Python-side REST API lives under `/passport/*` and is mounted by
 `agentb_bridge` (see that repo for the HTTP host layer).
 
@@ -151,7 +151,7 @@ Honest list, not a roadmap:
   detector logic. The Karpathy-loop tuning harness is there; the learned
   classifier cascade isn't built.
 - **No hosted HTTP MCP wrapper.** Today's integration is stdio subprocess
-  (`openclaw-mcp/server.js`). A public streamable-HTTP MCP server speaking
+  (`mcp-bridge/server.js`). A public streamable-HTTP MCP server speaking
   to claude.ai / ChatGPT custom connectors is a future release.
 - **No review UI.** Pending observations are reviewed via `list_pending` +
   `promote_observation` tool calls. A web review panel is a future add.
@@ -172,7 +172,7 @@ Honest list, not a roadmap:
 - **Eval corpus:** `../tests/passport/corpus/` — 200 labeled entries across
   `benign.yaml`, `toxic.yaml`, `edge.yaml`, `adversarial.yaml`. Proposing a
   policy tweak? Run `corpus_score.py` and report the delta.
-- **Reference MCP integration:** `../integrations/openclaw-mcp/server.js` —
+- **Reference MCP integration:** `../integrations/mcp-bridge/server.js` —
   the cleanest example of how to expose Passport tools to an MCP client.
 
 ---

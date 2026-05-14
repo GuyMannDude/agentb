@@ -35,7 +35,7 @@ Use this path if you want to develop the bridge, run a custom build, or hold the
 
 ```bash
 git clone https://github.com/GuyMannDude/mnemo-cortex.git
-cd mnemo-cortex/integrations/openclaw-mcp && npm install
+cd mnemo-cortex/integrations/mcp-bridge && npm install
 ```
 
 Open Claude Desktop's config file:
@@ -53,7 +53,7 @@ Or open it via **Settings → Developer → Edit Config**. Add a `mnemo-cortex` 
   "mcpServers": {
     "mnemo-cortex": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/openclaw-mcp/server.js"],
+      "args": ["/ABSOLUTE/PATH/TO/mnemo-cortex/integrations/mcp-bridge/server.js"],
       "env": {
         "MNEMO_URL": "http://localhost:50001",
         "MNEMO_AGENT_ID": "claude-desktop",
