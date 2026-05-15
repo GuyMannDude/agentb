@@ -1,5 +1,82 @@
 # Changelog
 
+## v2.9.0 (2026-05-15) — Developer Dump (Mnemo v4 Phase 1)
+
+First piece of the Mnemo v4 roadmap. Adds bridge-level JSONL capture of
+every MCP tool call across all agents that route through the shared MCP
+bridge (CC, Opie, Rocky, Hermes, Claude Desktop, anything else). Default
+**off** — no surprise data collection for public users. Flip on with one
+env var.
+
+**Problem this solves.** When a tool call silently fails (Peter Widget
+went dark for hours and nobody noticed), there's no trace to look at. The
+bridge knew every detail of what happened — tool name, params, response,
+latency, success/failure — and threw it all away. Same loss when you want
+training data, a debugging trail, or to understand why an agent
+flip-flopped three times on the same answer.
+
+**What ships.** A new `dump.js` module in the MCP bridge that wraps every
+tool handler with a writer. One monkey-patch on `server.registerTool`
+covers all 18 existing tools and any future additions. Output is JSONL,
+one file per agent per day, human-greppable with `jq`:
+
+```bash
+# Turn it on for your bridge
+export MNEMO_DUMP=on
+# (optional) custom dir, default ~/.mnemo-cortex/dumps
+export MNEMO_DUMP_DIR=~/dumps
+```
+
+```jsonl
+{"ts":"2026-05-15T00:00:00.000Z","kind":"header","schema_version":1,"mnemo_version":"2.9.0","agent_id":"rocky"}
+{"schema_version":1,"ts":"2026-05-15T20:14:33.123Z","kind":"tool_call","agent_id":"rocky","tool":"mnemo_save","params":{...},"response":{...},"latency_ms":47,"ok":true}
+{"schema_version":1,"ts":"...","kind":"tool_call","agent_id":"rocky","tool":"mnemo_recall","params":{...},"response":null,"latency_ms":12,"ok":false,"error":"ECONNREFUSED"}
+```
+
+**Failure capture.** Handlers in the bridge catch internally and return
+`{isError: true}` instead of throwing — the dump still records those as
+`ok: false` with the error message extracted from the response text. Real
+thrown errors are also captured and then re-thrown unchanged.
+
+**Fail-loud on write errors.** If the dump directory becomes unwritable
+(disk full, permission flip), the writer logs `[MNEMO DUMP FAIL]` to
+stderr once per failure streak. Tool dispatch keeps working — the dump
+never breaks the bridge.
+
+**CLI for inspection** (server-side, via `mnemo-cortex`):
+
+```bash
+mnemo-cortex dump list                  # all dump files, size + line count
+mnemo-cortex dump tail rocky            # live-tail today's rocky dump
+mnemo-cortex dump tail rocky --no-follow # one-shot print
+```
+
+**Zero overhead when off.** `dump.wrap()` returns the original handler
+unchanged when `MNEMO_DUMP=off` (the default). No allocation, no closure,
+no measurable cost.
+
+**Schema versioning.** Every line carries `schema_version: 1`. Future
+Phase 1.5+ additions (per-agent message capture, custom content filters)
+will bump the schema cleanly.
+
+**Tests:** 10 new tests in `dump.test.js`, all passing — covers off-mode
+no-op, on-mode header+event, two-agent isolation, day rollover, write-
+failure handling, success capture, isError capture, thrown-error capture,
+disabled passthrough, and `listDumps()`. Runs without a Mnemo server.
+
+**Scope discipline.** Phase 1 only captures what the bridge sees — MCP
+tool traffic. Agent-side messages (user prompts, agent text responses,
+raw Claude API exchanges) live in agent processes and need per-agent
+hooks. That's the Phase 1.5 frontier. See
+`brain/mnemo-v4-phase1-dump-spec.md` in `sparks-brain-guy` for the design
+rationale; bus #223 for the pressure-tests that produced it.
+
+Version alignment: this release also bumps `pyproject.toml` (was 2.7.1)
+and the CLI `--version` string (was 2.6.4) to match the CHANGELOG /
+bridge versions. They had drifted across the last few releases.
+
+---
+
 ## v2.8.2 (2026-05-15) — Installer hardening (non-interactive + DRY_RUN fixes)
 
 Two installers had bugs that silently broke `curl | bash` and CI workflows.

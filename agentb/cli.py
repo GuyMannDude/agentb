@@ -53,7 +53,7 @@ from agentb.health import health
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.version_option(version="2.6.4", prog_name="mnemo-cortex")
+@click.version_option(version="2.9.0", prog_name="mnemo-cortex")
 def main(ctx):
     """⚡ Mnemo Cortex — Drop-in memory superhero for AI agents."""
     if ctx.invoked_subcommand is None:
@@ -1096,6 +1096,100 @@ def recall_pack(workspace, since, limit):
 
 main.add_command(doctor)
 main.add_command(health)
+
+
+# ─────────────────────────────────────────────
+#  Dump — Developer Dump (Mnemo v4 Phase 1)
+# ─────────────────────────────────────────────
+
+@main.group()
+def dump():
+    """Inspect Developer Dump files (MCP bridge tool-call captures).
+
+    \b
+    Commands:
+      mnemo-cortex dump list           — List dump files (size + mtime)
+      mnemo-cortex dump tail <agent>   — Live-tail today's dump for an agent
+
+    Dumps are written by the MCP bridge when MNEMO_DUMP=on. Default path:
+    ~/.mnemo-cortex/dumps/<agent_id>/<YYYY-MM-DD>.jsonl
+    Override with MNEMO_DUMP_DIR.
+    """
+    pass
+
+
+def _dump_root() -> Path:
+    return Path(os.environ.get(
+        "MNEMO_DUMP_DIR",
+        str(Path.home() / ".mnemo-cortex" / "dumps"),
+    )).expanduser()
+
+
+@dump.command("list")
+def dump_list():
+    """List dump files with size + line count + last modified."""
+    root = _dump_root()
+    if not root.exists():
+        console.print(f"[yellow]No dumps yet at {root}.[/]")
+        console.print("  Set MNEMO_DUMP=on in your MCP bridge env to start capturing.")
+        return
+
+    rows = []
+    for agent_dir in sorted(root.iterdir()):
+        if not agent_dir.is_dir():
+            continue
+        for f in sorted(agent_dir.glob("*.jsonl")):
+            st = f.stat()
+            try:
+                with f.open("rb") as fh:
+                    lines = sum(1 for _ in fh)
+            except OSError:
+                lines = -1
+            rows.append((agent_dir.name, f.stem, st.st_size, lines, st.st_mtime))
+
+    if not rows:
+        console.print(f"[yellow]No dump files under {root}.[/]")
+        return
+
+    rows.sort(key=lambda r: r[4], reverse=True)
+    table = Table(title=f"Developer Dump — {root}")
+    table.add_column("agent", style="cyan")
+    table.add_column("date")
+    table.add_column("size", justify="right")
+    table.add_column("lines", justify="right")
+    table.add_column("modified", style="dim")
+    for agent, date, size, lines, mtime in rows:
+        size_h = f"{size:,} B" if size < 1024 else f"{size / 1024:.1f} KB"
+        if size >= 1024 * 1024:
+            size_h = f"{size / (1024 * 1024):.1f} MB"
+        mtime_h = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+        table.add_row(agent, date, size_h, str(lines), mtime_h)
+    console.print(table)
+
+
+@dump.command("tail")
+@click.argument("agent_id")
+@click.option("-n", "--lines", default=20, help="Lines to show before tailing")
+@click.option("--no-follow", is_flag=True, help="Print and exit instead of following")
+def dump_tail(agent_id, lines, no_follow):
+    """Live-tail today's dump for AGENT_ID."""
+    today = time.strftime("%Y-%m-%d")
+    path = _dump_root() / agent_id / f"{today}.jsonl"
+    if not path.exists():
+        console.print(f"[yellow]No dump file for '{agent_id}' on {today}.[/]")
+        console.print(f"  Expected: {path}")
+        console.print("  Is MNEMO_DUMP=on in the bridge env? Has the agent made a tool call today?")
+        return
+
+    cmd = ["tail", "-n", str(lines)]
+    if not no_follow:
+        cmd.append("-f")
+    cmd.append(str(path))
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        pass
+
 
 if __name__ == "__main__":
     main()

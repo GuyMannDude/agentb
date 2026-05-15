@@ -558,6 +558,41 @@ mnemo-cortex recall "what happened today"
 
 ---
 
+## Developer Dump
+
+A bridge-level JSONL log of every MCP tool call your agents make through
+the Mnemo bridge. Off by default — when something silently breaks (a tool
+call that fails without a thrown error, an unexpected latency spike, a
+flip-flopping agent), flip it on and tail the file:
+
+```bash
+# In your MCP bridge env
+export MNEMO_DUMP=on
+# Optional — default is ~/.mnemo-cortex/dumps
+export MNEMO_DUMP_DIR=~/dumps
+
+# Inspect
+mnemo-cortex dump list                  # all dump files, size + line count
+mnemo-cortex dump tail rocky            # live-tail today's rocky dump
+```
+
+Output is one JSONL file per agent per day at
+`~/.mnemo-cortex/dumps/<agent_id>/<YYYY-MM-DD>.jsonl`. Each line has
+`tool`, full `params`, full `response`, `latency_ms`, `ok`, and an
+`error` field on failures. Captures both real thrown errors and the
+handler-internal `{isError: true}` returns. Greppable with `jq`:
+
+```bash
+jq 'select(.ok == false) | {tool, error, latency_ms}' \
+  ~/.mnemo-cortex/dumps/rocky/$(date -u +%F).jsonl
+```
+
+When `MNEMO_DUMP=off` (the default), `dump.wrap()` returns the original
+handler unchanged — no allocation, no overhead. Schema-versioned for
+future additions (Mnemo v4 Phase 1.5+).
+
+---
+
 ## What It Does
 
 Mnemo Cortex v2 is a **sidecar memory coprocessor** for AI agents. It watches your agent's session files from the outside, ingests every message into a local SQLite database, compresses older messages into summaries via LLM-backed compaction, and writes a `MNEMO-CONTEXT.md` file that your agent reads at bootstrap.

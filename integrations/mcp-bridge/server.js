@@ -5,6 +5,7 @@ import { readFile, readdir, writeFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { DumpWriter } from "./dump.js";
 
 // ── Configuration ──────────────────────────────────────────────
 // MNEMO_URL: where your Mnemo Cortex API lives
@@ -370,8 +371,24 @@ process.stdin.on("end", () => {
 
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.8.1",
+  version: "2.9.0",
 });
+
+// ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────
+// Wraps every tool handler with JSONL capture when MNEMO_DUMP=on.
+// Zero overhead when off. Monkey-patches server.registerTool so all
+// existing and future tool registrations are covered with one diff.
+// Output: ~/.mnemo-cortex/dumps/<agent_id>/<YYYY-MM-DD>.jsonl
+const dump = new DumpWriter(AGENT_ID);
+const _origRegisterTool = server.registerTool.bind(server);
+server.registerTool = (name, schema, handler) =>
+  _origRegisterTool(name, schema, dump.wrap(name, handler));
+
+if (dump.enabled) {
+  process.stderr.write(
+    `[mnemo-mcp] Developer Dump ON — writing to ${dump.dir}/${AGENT_ID}/<date>.jsonl\n`
+  );
+}
 
 // ── Tool: mnemo_recall ─────────────────────────────────────────
 // Semantic recall within this agent's own memories.
