@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.11.2 (2026-05-16) — Drop backfill input cap to 4000 chars
+
+Follow-up to v2.11.1. The 6000-char cap still 400'd on production data:
+opie's wiki FILE INDEX BATCH entries are path-heavy (long file URIs +
+UUIDs + hashes), and that content tokenizes much denser than typical
+English prose. A 6000-char input produced more tokens than nomic-embed
+-text's 2048-token window could hold, so the same circuit-breaker
+cascade re-occurred. Direct test confirmed 4000 chars succeeds where
+6000 fails on the same entries. Dropping the cap to 4000.
+
+This is conservative. Future work can adapt the cap per-entry by
+retrying with progressively shorter input on 400, but a constant cap
+is simpler and the lost tail of a wiki index batch contains mostly
+redundant path prefixes that don't change the semantic signature of
+the chunk.
+
+
 ## v2.11.1 (2026-05-16) — Backfill survives oversize memory entries
 
 Discovered during the artforge deploy of v2.11.0. The `opie` tenant has

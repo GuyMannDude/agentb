@@ -33,13 +33,15 @@ log = logging.getLogger("agentb.vec")
 EMBED_DIM = 768  # nomic-embed-text
 SCHEMA_VERSION = 1
 
-# nomic-embed-text accepts ~2048 tokens (~6-8k chars of typical English).
-# Memory entries larger than this — e.g. auto-generated FILE INDEX batches
-# from wiki ingest — get the input rejected with HTTP 400 by Ollama, which
-# trips the embedder circuit breaker and kills the rest of a backfill run.
-# Cap inputs and warn so the run survives. The truncated text is what gets
-# stored in vec_sources so the source stays consistent with the vector.
-MAX_EMBED_INPUT_CHARS = 6000
+# nomic-embed-text accepts ~2048 tokens. For typical English prose that's
+# ~6-8k chars, but path-heavy content (long file URIs, UUIDs, hash strings)
+# tokenizes much denser — a 6000-char wiki FILE INDEX batch still 400'd
+# on production data because the path tokens consumed more of the window
+# than a chars-based estimate predicted. 4000 chars is conservative enough
+# to survive the worst observed shapes while still retaining useful signal.
+# Oversize entries get truncated with a warning; the truncated text is what
+# lands in vec_sources so source and vector stay consistent.
+MAX_EMBED_INPUT_CHARS = 4000
 
 
 @dataclass
