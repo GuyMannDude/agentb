@@ -12,7 +12,8 @@
   "name": "Mnemo Cortex",
   "tagline": "Persistent semantic memory for AI agents — local-first, decay-aware, cross-agent dreaming.",
   "summary": "Memory coprocessor that gives AI agents persistent recall across sessions. Local SQLite + FTS5 working memory in front of an optional Mem0 cloud-deep fallback. Every memory record carries provenance (source + category) and decays on a category-aware schedule — topology facts age fast, doctrine stays perpetual, and recall returns a structured stale_warning when a fact is past its threshold so the agent verifies before acting. Cross-agent dreaming synthesizes every connected agent's memories into a shared nightly brief.",
-  "version": "2.8.0",
+  "backstory": "Guy Hutchins started exploring AI memory with ChatGPT 3.5 using basic text files. When OpenClaw launched and needed better memory, he gave Opie (Claude) a simple prompt: \"If you were a ClawdBot and your user wanted you to have the best memory you could build yourself, what would it look like?\" Opie was on extended thinking and just built it — no clarifying questions, no spec, just shipped a working memory system. Guy gave the same prompt to AL (ChatGPT), who built his own version independently. AL saw Opie's and said it was more in depth. Opie saw AL's and said it had ideas worth blending. The two versions merged. When it came time to name it, the first two suggestions were \"Mnemo\" and \"Cortex.\" Guy picked both. Mnemo Cortex.",
+  "version": "2.9.0",
   "license": "MIT",
   "homepage": "https://projectsparks.ai/mnemo-cortex",
   "source": "https://github.com/GuyMannDude/mnemo-cortex",
@@ -30,7 +31,8 @@
     "WikAI — auto-compiled knowledge base regenerated nightly from Mnemo data.",
     "Optional Mem0 bridge for cloud-deep recall fallback.",
     "Per-agent memory namespaces — shared, isolated, or hybrid deployments.",
-    "OAuth 2.1 Resource Server mode for remote MCP clients (Auth0-compatible)."
+    "OAuth 2.1 Resource Server mode for remote MCP clients (Auth0-compatible).",
+    "Developer Dump — JSONL trace of every MCP tool call through the bridge (tool, params, response, latency, ok/error). Off by default; flip on with MNEMO_DUMP=on. One file per agent per day, greppable with jq. CLI: mnemo-cortex dump list / dump tail <agent>."
   ],
 
   "exposes": {
@@ -178,6 +180,6 @@
     }
   ],
 
-  "generated_at": "2026-05-13T17:30:00Z",
+  "generated_at": "2026-05-16T15:35:00Z",
   "spec_url": "./ROBOT-INFO-SPEC.md"
 }
