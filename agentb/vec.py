@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Iterable, Optional
 
+import httpx
 import sqlite_vec
 
 log = logging.getLogger("agentb.vec")
@@ -254,6 +255,39 @@ def iter_memory_entries(memory_dir: Path) -> Iterable[tuple[str, str, Path, Opti
         yield memory_id, text, path, entry.get("created_at")
 
 
+async def embed_with_adaptive_truncation(
+    embed: Callable[[str], Awaitable[list[float]]],
+    text: str,
+    *,
+    min_chars: int = 500,
+) -> tuple[list[float], str]:
+    """Embed text. On a 400 (context-length) error, halve and retry.
+
+    Returns (vector, text_actually_embedded). The returned text is what
+    the caller should persist in vec_sources so the source row stays in
+    sync with the vector that was actually computed.
+
+    Why this exists: Ollama embedding endpoints reject inputs that exceed
+    the model's context window with HTTP 400. The character-based cap in
+    iter_memory_entries is a heuristic that breaks down on token-dense
+    content (UUIDs, hash strings, file URIs). Adaptive halving handles
+    the rest without tripping the embedder's circuit breaker.
+    """
+    current = text
+    while True:
+        try:
+            return await embed(current), current
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400 and len(current) > min_chars:
+                new_len = max(min_chars, len(current) // 2)
+                log.warning(
+                    f"Embed 400 at {len(current)} chars; retrying at {new_len}"
+                )
+                current = current[:new_len]
+                continue
+            raise
+
+
 async def backfill(
     store: VecStore,
     memory_dir: Path,
@@ -261,26 +295,39 @@ async def backfill(
     *,
     skip_existing: bool = True,
     progress_every: int = 50,
+    adaptive: bool = True,
 ) -> dict:
     """Walk memory_dir, embed entries that aren't in the vec index, upsert.
 
-    Returns a stats dict: {total, embedded, skipped, failed, elapsed_sec}.
+    `adaptive=True` (default) retries on HTTP 400 with progressively shorter
+    input — the safe path for production backfill. `adaptive=False` falls
+    back to the raw embed call, used by tests with synthetic embedders.
+
+    Returns a stats dict: {total, embedded, skipped, failed, elapsed_sec,
+    truncated}.
     """
     start = time.time()
     total = 0
     embedded = 0
     skipped = 0
     failed = 0
+    truncated = 0
     for memory_id, text, path, created_at in iter_memory_entries(memory_dir):
         total += 1
         if skip_existing and store.has(memory_id):
             skipped += 1
             continue
         try:
-            vec = await embed(text)
+            if adaptive:
+                vec, stored_text = await embed_with_adaptive_truncation(embed, text)
+                if len(stored_text) < len(text):
+                    truncated += 1
+            else:
+                vec = await embed(text)
+                stored_text = text
             store.upsert(
                 memory_id,
-                text,
+                stored_text,
                 vec,
                 source_file=path.as_posix(),
                 created_at=created_at,
@@ -292,17 +339,19 @@ async def backfill(
         if total % progress_every == 0:
             log.info(
                 f"Backfill progress: {total} seen, {embedded} embedded, "
-                f"{skipped} skipped, {failed} failed"
+                f"{skipped} skipped, {failed} failed, {truncated} adaptively truncated"
             )
     elapsed = time.time() - start
     log.info(
         f"Backfill done: {total} seen, {embedded} embedded, "
-        f"{skipped} skipped, {failed} failed, {elapsed:.1f}s"
+        f"{skipped} skipped, {failed} failed, {truncated} adaptively truncated, "
+        f"{elapsed:.1f}s"
     )
     return {
         "total": total,
         "embedded": embedded,
         "skipped": skipped,
         "failed": failed,
+        "truncated": truncated,
         "elapsed_sec": round(elapsed, 2),
     }

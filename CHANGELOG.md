@@ -1,6 +1,46 @@
 # Changelog
 
-## v2.11.2 (2026-05-16) — Drop backfill input cap to 4000 chars
+## v2.11.3 (2026-05-16) — Adaptive truncation + circuit-breaker bypass on backfill
+
+Two more failure modes surfaced during the artforge deploy of v2.11.0–2:
+
+1. **Static caps don't fit token-dense content.** v2.11.1 capped backfill
+   input at 6000 chars; v2.11.2 dropped that to 4000 after 6000 still 400'd
+   on opie's path-heavy wiki FILE INDEX batches. Even 4000 fails on some
+   entries (long UUID-laden URIs tokenize at ~1 char/token). 3000 worked on
+   the worst observed cases. But a constant cap will always be wrong for
+   *some* content — the right answer is adaptive retry.
+
+2. **Backfill shared the embedder's circuit breaker with live `/context`
+   queries.** When three consecutive 400s tripped the breaker mid-backfill,
+   every subsequent embed call — including for live recall — was skipped
+   instantly until the 60s cooldown elapsed. Backfill was poisoning the
+   service it was meant to upgrade.
+
+This release fixes both:
+
+- **`agentb/vec.py`** — `embed_with_adaptive_truncation()` catches HTTP 400
+  from the embed call and retries with input halved (down to a 500-char
+  floor). Returns the vector AND the text that was actually embedded so
+  `vec_sources.text` stays consistent with the vector. Backfill uses it by
+  default (`adaptive=True`); tests can flip it off when using synthetic
+  embedders that don't raise httpx errors.
+- **`agentb/server.py`** — `/vec/backfill` now passes `embedder.primary.embed`
+  rather than the resilient wrapper. Per-entry failures stay per-entry; the
+  shared circuit breaker is never touched by backfill, so a long batch over
+  heterogeneous content can no longer poison live recall.
+- **`agentb/vec.py`** — backfill stats now include a `truncated` counter so
+  the response and logs report how many entries needed adaptive halving.
+- **`tests/test_vec.py`** — four new tests cover the halving behavior, the
+  500-char min-floor giveup, propagation of non-400 errors, and the
+  truncated-counter accounting through `backfill()`.
+
+**Production result.** After this release the artforge opie tenant backfills
+cleanly — adaptive truncation eats the dense entries, no circuit breaker
+flips, live queries unaffected.
+
+
+## v2.11.2 (2026-05-16) — Drop backfill input cap to 4000 chars (superseded)
 
 Follow-up to v2.11.1. The 6000-char cap still 400'd on production data:
 opie's wiki FILE INDEX BATCH entries are path-heavy (long file URIs +
@@ -10,11 +50,8 @@ English prose. A 6000-char input produced more tokens than nomic-embed
 cascade re-occurred. Direct test confirmed 4000 chars succeeds where
 6000 fails on the same entries. Dropping the cap to 4000.
 
-This is conservative. Future work can adapt the cap per-entry by
-retrying with progressively shorter input on 400, but a constant cap
-is simpler and the lost tail of a wiki index batch contains mostly
-redundant path prefixes that don't change the semantic signature of
-the chunk.
+Superseded same day by v2.11.3, which moved from "pick the right constant"
+to "adapt per entry" and isolated the failure surface from live queries.
 
 
 ## v2.11.1 (2026-05-16) — Backfill survives oversize memory entries

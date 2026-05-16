@@ -8,6 +8,8 @@ from typing import Awaitable, Callable
 
 import pytest
 
+import httpx
+
 from agentb.vec import (
     EMBED_DIM,
     MAX_EMBED_INPUT_CHARS,
@@ -15,6 +17,7 @@ from agentb.vec import (
     VecStore,
     backfill,
     detect_mode,
+    embed_with_adaptive_truncation,
     iter_memory_entries,
 )
 
@@ -165,7 +168,11 @@ async def test_backfill_embeds_each_entry_once(tmp_path: Path):
 
     embed = _make_embedder(lambda t: int(t.split()[-1]))
     stats = await backfill(store, mem, embed)
-    assert stats == {"total": 3, "embedded": 3, "skipped": 0, "failed": 0, "elapsed_sec": stats["elapsed_sec"]}
+    assert stats["total"] == 3
+    assert stats["embedded"] == 3
+    assert stats["skipped"] == 0
+    assert stats["failed"] == 0
+    assert stats["truncated"] == 0
     assert store.count() == 3
 
 
@@ -201,6 +208,67 @@ async def test_backfill_continues_past_failures(tmp_path: Path):
     assert stats["embedded"] == 1
     assert stats["failed"] == 1
     assert store.count() == 1
+
+
+def _http_400() -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "http://localhost/api/embed")
+    resp = httpx.Response(400, request=req, text='{"error":"context length"}')
+    return httpx.HTTPStatusError("400", request=req, response=resp)
+
+
+@pytest.mark.asyncio
+async def test_adaptive_truncation_halves_on_400():
+    calls: list[int] = []
+
+    async def embed(text: str) -> list[float]:
+        calls.append(len(text))
+        if len(text) > 1000:
+            raise _http_400()
+        return _vec_along(0)
+
+    vec, used = await embed_with_adaptive_truncation(embed, "x" * 8000, min_chars=200)
+    assert vec == _vec_along(0)
+    assert len(used) <= 1000
+    # 8000 -> 4000 -> 2000 -> 1000 -> succeeds
+    assert calls == [8000, 4000, 2000, 1000]
+
+
+@pytest.mark.asyncio
+async def test_adaptive_truncation_gives_up_at_min_chars():
+    async def embed(text: str) -> list[float]:
+        raise _http_400()
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await embed_with_adaptive_truncation(embed, "x" * 8000, min_chars=500)
+
+
+@pytest.mark.asyncio
+async def test_adaptive_truncation_propagates_non_400(tmp_path: Path):
+    async def embed(text: str) -> list[float]:
+        raise RuntimeError("network down")
+
+    with pytest.raises(RuntimeError, match="network down"):
+        await embed_with_adaptive_truncation(embed, "hello world")
+
+
+@pytest.mark.asyncio
+async def test_backfill_counts_adaptive_truncations(tmp_path: Path):
+    store = VecStore(tmp_path / "vec.sqlite")
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    (mem / "huge.json").write_text(json.dumps({"id": "h", "summary": "x" * 2000}))
+    (mem / "fine.json").write_text(json.dumps({"id": "f", "summary": "y" * 100}))
+
+    async def embed(text: str) -> list[float]:
+        # 400 on long "x" content; succeeds on short content or "y" content.
+        if "x" in text and len(text) > 500:
+            raise _http_400()
+        return _vec_along(0)
+
+    stats = await backfill(store, mem, embed)
+    assert stats["embedded"] == 2
+    assert stats["truncated"] == 1
+    assert stats["failed"] == 0
 
 
 def test_semantic_hit_where_keywords_miss(tmp_path: Path):

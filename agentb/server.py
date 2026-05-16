@@ -765,10 +765,15 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         tenant = tenants.get(agent_id)
         vec_store: VecStore = tenant["vec"]
         memory_dir = tenant["memory_dir"]
+        # Bypass the resilient wrapper's circuit breaker — backfill is a long
+        # batch over heterogeneous content that historically trips the breaker
+        # after a few oversize entries, which would then poison live /context
+        # queries with "circuit open" until the cooldown elapses. Calling the
+        # primary embedder directly isolates per-entry failures.
         stats = await vec_backfill(
             vec_store,
             memory_dir,
-            embedder.embed,
+            embedder.primary.embed,
             skip_existing=skip_existing,
         )
         return {"agent_id": agent_id or "default", **stats}
