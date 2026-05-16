@@ -2,14 +2,13 @@
 
 ## v2.10.0 (2026-05-16) — Provenance & decay land in the open-source core
 
-The MCP bridge announced provenance & decay support back in v2.8.0, but the
-Python core that actually stores memories never received the matching code.
-For six months, Sparks-internal deployments ran a hand-maintained fork on
-artforge while the public package shipped a pre-provenance backend. Public
-users got the bridge fields, the bridge passed them through, and the
+The MCP bridge announced provenance & decay support back in v2.8.0, but
+the Python core that stores memories never received the matching code.
+Internal deployments ran a hand-maintained fork while the published
+package shipped a pre-provenance backend. Bridge sent the fields, the
 backend ignored them.
 
-This release closes that gap. The fork merges back. One source of truth.
+This release closes that gap. One source of truth.
 
 **What's new in `agentb/`.**
 
@@ -34,20 +33,20 @@ This release closes that gap. The fork merges back. One source of truth.
   chunk. `l3_scan()` does the same straight off the memory_entry record.
 - **`agentb/config.py`** — `AgentConfig` adds `mem0_user_id` and
   `mem0_fallback_only` overrides. New `resolve_mem0(cfg, agent_id)` helper
-  routes per-agent Mem0 traffic. Use case from production: `cc` and
-  `opie` both map to Mem0 user `opie`; `rocky` keeps its own `rocky-m`
-  user with `fallback_only: false`. Configure in `agentb.yaml`:
+  routes per-agent Mem0 traffic. Two common shapes — agents sharing a
+  Mem0 user namespace, or each agent owning its own — both expressible
+  in `agentb.yaml`:
 
   ```yaml
   agents:
-    rocky:
-      mem0_user_id: rocky-m
-      mem0_fallback_only: false
-    opie:
-      mem0_user_id: opie
-      mem0_fallback_only: true
-    cc:
-      mem0_user_id: opie
+    primary-agent:
+      mem0_user_id: primary
+      mem0_fallback_only: false   # always query Mem0 alongside local
+    secondary-agent:
+      mem0_user_id: shared        # writes/reads against the same Mem0 user
+      mem0_fallback_only: true    # only hit Mem0 when local misses
+    tertiary-agent:
+      mem0_user_id: shared
       mem0_fallback_only: true
   ```
 
@@ -64,12 +63,6 @@ current_state and unknown warn at 90. Relationship warns at 180.
 session_log warns at 90. Doctrine, incident, identity, decision are
 perpetual — never stale. Override via env: `MNEMO_DECAY_TOPOLOGY_WARN_DAYS`,
 `MNEMO_DECAY_RELATIONSHIP_WARN_DAYS`, etc.
-
-**Sparks-side cutover.** The artforge fork at
-`/home/guy/agentb-bridge/agentb_bridge.py` is retired by this release —
-artforge:50001 now runs from the public repo. The fork's 1275 lines were
-not lost; everything that mattered is in `agentb/`. The fork lives on at
-`/home/guy/agentb-bridge.archived-2026-05-16/` for reference.
 
 **FastAPI app version** bumps to `0.7.0` (`agentb/server.py`); package
 version (`pyproject.toml`) bumps to `2.10.0` to match.

@@ -3,10 +3,8 @@ Mnemo Cortex v3 — Provenance and decay.
 
 Runtime helpers for tagging memories with source and category at write time
 and surfacing stale_warning on aged records at read time. Lives next to the
-storage layer; called from server.py on /writeback and /context.
-
-Originally shipped 2026-05-13 in /home/guy/agentb-bridge/agentb_bridge.py.
-Merged into the public open-source core 2026-05-16. See CHANGELOG v2.10.0.
+storage layer; called from server.py on /writeback and /context. See
+CHANGELOG v2.10.0 for the design rationale and feature set.
 """
 from __future__ import annotations
 
@@ -75,8 +73,8 @@ PROVENANCE_PATTERNS: list[tuple[str, re.Pattern]] = [
     (
         "doctrine",
         re.compile(
-            r"\b(guy said|guy wants|guy prefers|doctrine|principle|"
-            r"convention|rule|policy)\b",
+            r"\b(user said|user wants|user prefers|stated preference|"
+            r"doctrine|principle|convention|rule|policy)\b",
             re.IGNORECASE,
         ),
     ),
@@ -98,15 +96,15 @@ PROVENANCE_PATTERNS: list[tuple[str, re.Pattern]] = [
     (
         "relationship",
         re.compile(
-            r"\b(hoffman|customer|client|collaborator|merchant)\b",
+            r"\b(customer|client|collaborator|merchant|partner|vendor)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "identity",
         re.compile(
-            r"\b(rocky|opie|cc|bw|bullwinkle|cliff|sparky|dave|"
-            r"is the (ai )?assistant)\b",
+            r"\b(is the (ai )?(assistant|agent|chatbot)|"
+            r"agent name|persona name|operator name)\b",
             re.IGNORECASE,
         ),
     ),

@@ -107,9 +107,9 @@ class AgentConfig:
     persona: str = "default"
     read_only: bool = False
     # Mem0 routing overrides — let one agent map to a different Mem0 user_id
-    # (e.g. cc and opie both write/read against Mem0 user "opie") or flip the
-    # fallback_only switch per agent. Empty string / None means "inherit
-    # global Mem0Config defaults."
+    # (e.g. two agent personas writing/reading against a single shared Mem0
+    # user namespace) or flip the fallback_only switch per agent. Empty
+    # string / None means "inherit global Mem0Config defaults."
     mem0_user_id: str = ""
     mem0_fallback_only: Optional[bool] = None
 
