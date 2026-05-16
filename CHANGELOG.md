@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.11.1 (2026-05-16) — Backfill survives oversize memory entries
+
+Discovered during the artforge deploy of v2.11.0. The `opie` tenant has
+auto-generated "FILE INDEX BATCH" memories — wiki-ingest output with 30
+file paths per entry, several thousand to seventeen thousand characters
+of text. nomic-embed-text accepts ~2048 tokens and returns HTTP 400 on
+anything past that. Five consecutive 400s trip the embedder's circuit
+breaker, and the rest of the backfill (2663 of 2666 entries for opie)
+fails instantly without an embedding even being attempted.
+
+This patch caps `iter_memory_entries`' text output at
+`MAX_EMBED_INPUT_CHARS = 6000` (a safe margin under nomic's actual
+context length) and emits a per-entry warning when truncation happens.
+The truncated text is what gets stored in `vec_sources.text` so the
+source row stays consistent with the vector. The lost tail of a 17 k
+character file-index batch is mostly redundant path prefixes — a
+6 k-char prefix retains enough signal for semantic recall.
+
+This is a backfill-side fix. `/writeback` already wraps its embed call
+in a try/except that downgrades to a warning, so live writes degrade
+gracefully on oversize input rather than 5xx'ing the caller. A future
+release will lift truncation into the embedding provider so writeback
+and backfill share the same cap.
+
+**Production result.** Re-ran the artforge backfill: rocky 168/168,
+cc 1411/1411, opie 2666/2666. All three tenants now have a complete
+vec index. Total Ollama wall time across all three agents ~5 minutes.
+
+- `agentb/vec.py` — `MAX_EMBED_INPUT_CHARS` constant + truncation in
+  `iter_memory_entries` with per-entry warning log.
+- `tests/test_vec.py` — `test_iter_memory_entries_truncates_oversize`
+  asserts the cap is applied and the warning fires.
+
+
 ## v2.11.0 (2026-05-16) — sqlite-vec vector index (Mnemo v4 Phase 2)
 
 Before this release, vector recall was a linear scan. Every `/context`

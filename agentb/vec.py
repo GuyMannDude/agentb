@@ -33,6 +33,14 @@ log = logging.getLogger("agentb.vec")
 EMBED_DIM = 768  # nomic-embed-text
 SCHEMA_VERSION = 1
 
+# nomic-embed-text accepts ~2048 tokens (~6-8k chars of typical English).
+# Memory entries larger than this — e.g. auto-generated FILE INDEX batches
+# from wiki ingest — get the input rejected with HTTP 400 by Ollama, which
+# trips the embedder circuit breaker and kills the rest of a backfill run.
+# Cap inputs and warn so the run survives. The truncated text is what gets
+# stored in vec_sources so the source stays consistent with the vector.
+MAX_EMBED_INPUT_CHARS = 6000
+
 
 @dataclass
 class VecHit:
@@ -217,7 +225,10 @@ def detect_mode(memory_dir: Path) -> str:
 def iter_memory_entries(memory_dir: Path) -> Iterable[tuple[str, str, Path, Optional[float]]]:
     """Yield (memory_id, canonical_text, source_path, created_at) for each memory JSON.
 
-    Canonical text matches what writeback embeds: summary + key_facts joined by newline.
+    Canonical text matches what writeback embeds: summary + key_facts joined
+    by newline. Texts longer than MAX_EMBED_INPUT_CHARS are truncated — the
+    embedder's context window is finite and an oversize input would 400, trip
+    the circuit breaker, and kill the rest of the run.
     """
     for path in sorted(memory_dir.glob("*.json")):
         try:
@@ -232,6 +243,12 @@ def iter_memory_entries(memory_dir: Path) -> Iterable[tuple[str, str, Path, Opti
         text = text.strip()
         if not text:
             continue
+        if len(text) > MAX_EMBED_INPUT_CHARS:
+            log.warning(
+                f"Truncating oversize memory {memory_id} for embedding: "
+                f"{len(text)} -> {MAX_EMBED_INPUT_CHARS} chars"
+            )
+            text = text[:MAX_EMBED_INPUT_CHARS]
         yield memory_id, text, path, entry.get("created_at")
 
 

@@ -10,6 +10,7 @@ import pytest
 
 from agentb.vec import (
     EMBED_DIM,
+    MAX_EMBED_INPUT_CHARS,
     VecDimMismatch,
     VecStore,
     backfill,
@@ -118,6 +119,21 @@ def test_iter_memory_entries_skips_empty(tmp_path: Path):
     (mem / "good.json").write_text(json.dumps({"id": "g", "summary": "real"}))
     entries = list(iter_memory_entries(mem))
     assert [e[0] for e in entries] == ["g"]
+
+
+def test_iter_memory_entries_truncates_oversize(tmp_path: Path, caplog):
+    """Oversize entries (e.g. wiki FILE INDEX batches) must NOT 400 the embedder
+    and trip the circuit breaker. Truncation keeps the run alive."""
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    huge_summary = "x" * (MAX_EMBED_INPUT_CHARS + 5000)
+    (mem / "huge.json").write_text(json.dumps({"id": "h", "summary": huge_summary}))
+    with caplog.at_level("WARNING", logger="agentb.vec"):
+        entries = list(iter_memory_entries(mem))
+    assert len(entries) == 1
+    _, text, _, _ = entries[0]
+    assert len(text) == MAX_EMBED_INPUT_CHARS
+    assert any("Truncating oversize memory h" in r.message for r in caplog.records)
 
 
 def test_iter_memory_entries_tolerates_corrupt(tmp_path: Path):
