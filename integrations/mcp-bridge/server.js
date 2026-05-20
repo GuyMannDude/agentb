@@ -236,6 +236,24 @@ let toolCallCount = 0;
 let sessionStartTime = null;
 let sessionId = null;
 
+// Session timestamps use host-local time, not UTC, so the date portion
+// matches every other timestamp the agents write (active.md, brain commit
+// messages, kickstart files). UTC `toISOString()` rolls the date over at
+// 17:00 PT, producing session IDs dated "tomorrow" while the rest of the
+// brain still says "today".
+function localTimestamp() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-` +
+         `${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+}
+
+function localDateOnly() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function nudgeCheck() {
   if (toolCallCount >= SAVE_REMINDER_THRESHOLD) {
     return `\n\n---\n⚠️ **Memory nudge:** ${toolCallCount} tool calls without a save. Call \`mnemo_save\` with a summary before this context is lost.`;
@@ -637,7 +655,7 @@ server.registerTool(
       const sid =
         session_id ||
         sessionId ||
-        `${AGENT_ID}-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}`;
+        `${AGENT_ID}-${localTimestamp()}`;
 
       const body = {
         session_id: sid,
@@ -738,7 +756,7 @@ if (BRAIN_AVAILABLE) {
 
 async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates }) {
   sessionStartTime = new Date().toISOString();
-  sessionId = `${effectiveAgentId}-${sessionStartTime.slice(0, 19).replace(/[T:]/g, "-")}`;
+  sessionId = `${effectiveAgentId}-${localTimestamp()}`;
   toolCallCount = 0;
   captureBuffer.length = 0;
   if (flushTimer) clearTimeout(flushTimer);
@@ -1095,7 +1113,7 @@ server.registerTool(
     try {
       const sid =
         sessionId ||
-        `${AGENT_ID}-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}`;
+        `${AGENT_ID}-${localTimestamp()}`;
       const data = await mnemoRequest("POST", "/writeback", {
         session_id: sid,
         summary: `[SESSION END] ${summary}`,
@@ -1126,7 +1144,7 @@ server.registerTool(
       if (gitStatus) {
         execSync("git add -A", { cwd: BRAIN_DIR });
         execSync(
-          `git commit -m "brain: ${AGENT_ID} session end — ${new Date().toISOString().slice(0, 10)}"`,
+          `git commit -m "brain: ${AGENT_ID} session end — ${localDateOnly()}"`,
           { cwd: BRAIN_DIR }
         );
         execSync("git push", { cwd: BRAIN_DIR });

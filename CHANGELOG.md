@@ -1,5 +1,35 @@
 # Changelog
 
+## v2.11.4 (2026-05-19) — Session IDs in host-local time, not UTC
+
+**Problem.** Session IDs were generated with `new Date().toISOString()` and
+the date prefix was stamped from that UTC string. Every other timestamp the
+agents write — `active.md` dates, brain commit messages, kickstart filenames
+— uses host-local time (America/Los_Angeles for IGOR + artforge). The
+session ID was the sole exception. After 17:00 PT the UTC date has already
+rolled to "tomorrow," producing IDs like `opie-2026-05-20-00-22-53` while
+the rest of the brain still says `2026-05-19`. Opie spotted the drift mid-
+session.
+
+**Fix.** `integrations/mcp-bridge/server.js` — added `localTimestamp()` and
+`localDateOnly()` helpers near the `sessionId` declaration; replaced all
+four UTC-derived call sites:
+
+- Line ~640 — `mnemo_save` session_id fallback
+- Line ~741 — session bootstrap (the primary site)
+- Line ~1098 — `session_end` session_id fallback
+- Line ~1129 — brain commit message date
+
+Format unchanged (`YYYY-MM-DD-HH-MM-SS`), so existing consumers treat new
+IDs identically to old ones. Old IDs in the Mnemo store stay as-is; this
+is a forward-only correction.
+
+**Deploy.** Every agent picks up the fix on its next restart of the bridge
+process: CC at next `claude` session start, Opie at next full Claude Desktop
+quit + relaunch, Rocky at next `hermes` launch, nurse on artforge after
+`systemctl --user restart` of its bridge unit. No artforge-side mnemo
+service changes — this is bridge-local.
+
 ## v2.11.3 (2026-05-16) — Adaptive truncation + circuit-breaker bypass on backfill
 
 Two more failure modes surfaced during the artforge deploy of v2.11.0–2:
