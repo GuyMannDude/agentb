@@ -89,16 +89,24 @@ class FactsStore:
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
+        # Re-init schema on every connect. CREATE TABLE IF NOT EXISTS is
+        # idempotent + cheap; this protects against the file being deleted
+        # out from under the server (operator error, disk issue, etc) without
+        # requiring a service restart. Caught during phase3 deploy when a
+        # test-data cleanup deleted facts.sqlite and every subsequent POST
+        # 500'd with "no such table: facts" until restart.
         conn = sqlite3.connect(str(self.path), timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.executescript(self.SCHEMA)
         return conn
 
     def _init_schema(self) -> None:
+        # Kept for explicit init call (and to surface schema errors at startup,
+        # not at first request). _connect() also re-runs it as a safety net.
         conn = self._connect()
         try:
-            conn.executescript(self.SCHEMA)
             conn.commit()
         finally:
             conn.close()

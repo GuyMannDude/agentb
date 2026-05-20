@@ -462,13 +462,41 @@ def extract_facts_for_agent(agent_id: str, agent_memories: list[dict]) -> list[d
 
     Returns parsed list of {entity, attribute, value, evidence_source} dicts.
     Empty list on extraction failure (logged, non-fatal).
+
+    Filters auto-capture entries (they are tool-call logs, not stated facts).
+    Synthesis stage still uses them — only extraction skips. This is structural,
+    not a quality knob: auto-capture summaries don't contain the entity-attribute-
+    value shape the prompt is trying to find.
     """
     if not agent_memories:
         return []
-    section = _build_agent_section(agent_id, agent_memories)
-    log.info(f"  stage 0.5 [{agent_id}]: extracting facts from {len(agent_memories)} entries, {len(section):,} chars")
+    # Filter auto-capture noise BEFORE building the section. Three flavors:
+    #   1. Bridge captureCall flush — "[AUTO-CAPTURE] N tool calls:" prefix
+    #   2. CC JSONL sync — session_id starts with "cc-jsonl-" + summary contains
+    #      "session activity (auto-sync from JSONL"
+    #   3. Generic auto pattern — session_id matches "<agent>-auto-<unixts>"
+    def _is_auto_capture(m: dict) -> bool:
+        summary = m.get("summary", "")
+        sid = m.get("session_id", "")
+        if summary[:50].startswith("[AUTO-CAPTURE]"):
+            return True
+        if "auto-sync from JSONL" in summary[:200]:
+            return True
+        if "auto_capture_flush" in (m.get("key_facts") or []):
+            return True
+        # session_id patterns: cc-auto-<ts>, opie-auto-<ts>, rocky-auto-<ts>, cc-jsonl-<uuid>
+        if "-auto-" in sid or sid.startswith(("cc-jsonl-", "opie-jsonl-", "rocky-jsonl-")):
+            return True
+        return False
+
+    extraction_memories = [m for m in agent_memories if not _is_auto_capture(m)]
+    if not extraction_memories:
+        log.info(f"  stage 0.5 [{agent_id}]: all {len(agent_memories)} memories are auto-capture noise; skipping")
+        return []
+    section = _build_agent_section(agent_id, extraction_memories)
+    log.info(f"  stage 0.5 [{agent_id}]: extracting facts from {len(extraction_memories)}/{len(agent_memories)} entries (filtered auto-capture), {len(section):,} chars")
     try:
-        raw, usage = _call_openrouter(FACT_EXTRACTION_SYSTEM_PROMPT, section, max_tokens=2048)
+        raw, usage = _call_openrouter(FACT_EXTRACTION_SYSTEM_PROMPT, section, max_tokens=4096)
     except RuntimeError as e:
         log.error(f"  stage 0.5 [{agent_id}] LLM call failed: {e}")
         return []
