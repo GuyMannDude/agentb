@@ -408,8 +408,14 @@ class GoogleEmbedding(EmbeddingProvider):
         import httpx
         base = self.config.api_base or "https://generativelanguage.googleapis.com/v1beta"
         url = f"{base}/models/{self.config.model}:embedContent?key={self.config.api_key}"
+        payload: dict = {"content": {"parts": [{"text": text}]}}
+        # Matryoshka truncation: gemini-embedding-* models output 3072 dims natively
+        # but support outputDimensionality to truncate. Set extra.output_dimensionality
+        # in config to match the consumer's vec store width (e.g. 768 for nomic compat).
+        if (od := self.config.extra.get("output_dimensionality")):
+            payload["outputDimensionality"] = int(od)
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json={"content": {"parts": [{"text": text}]}})
+            resp = await client.post(url, json=payload)
             resp.raise_for_status()
             return resp.json().get("embedding", {}).get("values", [])
 
