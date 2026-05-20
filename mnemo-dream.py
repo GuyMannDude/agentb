@@ -58,21 +58,46 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MNEMO_URL = os.getenv("MNEMO_URL", "http://localhost:50001")
 # Bus URL is optional — if unset/unreachable, contradiction notification gracefully
 # logs and skips (best-effort). Set to a Tailscale URL when running cron on a
-# remote host that needs to reach the busmaster on IGOR.
+# remote host that needs to reach the busmaster on a different machine.
 MNEMO_DREAM_BUS_URL = os.getenv("MNEMO_DREAM_BUS_URL", "")
+# Bus-from agent name — must be a registered agent on the configured bus.
+# Required if MNEMO_DREAM_BUS_URL is set. The bus dispatcher rejects
+# envelopes whose "from" isn't in its agents registry.
+MNEMO_DREAM_BUS_FROM = os.getenv("MNEMO_DREAM_BUS_FROM", "")
+# Comma-separated list of bus targets to notify on contradictions. Required
+# if MNEMO_DREAM_BUS_URL is set. Each must be a registered bus agent.
+MNEMO_DREAM_BUS_TARGETS = [
+    t.strip() for t in os.getenv("MNEMO_DREAM_BUS_TARGETS", "").split(",") if t.strip()
+]
 # Discord webhook is optional — direct human visibility for contradictions
 # without waiting for an agent to surface them.
 MNEMO_DREAM_DISCORD_WEBHOOK = os.getenv("MNEMO_DREAM_DISCORD_WEBHOOK", "")
 # Disable Stage 0.5 extraction entirely (e.g. to debug pure-synthesis runs)
 DREAM_SKIP_FACTS = os.getenv("DREAM_SKIP_FACTS", "").lower() in ("1", "true", "yes")
 
-DEFAULT_AGENTS = ["cc", "opie", "rocky"]
+def _discover_agentb_agents() -> list[str]:
+    """Discover real agents from ~/.agentb/agents/*/memory/ directories.
+
+    Excludes 'dreamer' (output lane, would eat its own dreams) and any directory
+    without a memory/ subdirectory (probe/test/empty dirs). Returns sorted list.
+    """
+    agents_root = AGENTB_DATA_DIR / "agents"
+    if not agents_root.exists():
+        return []
+    discovered = []
+    for d in agents_root.iterdir():
+        if not d.is_dir() or d.name == "dreamer":
+            continue
+        if (d / "memory").is_dir():
+            discovered.append(d.name)
+    return sorted(discovered)
+
 
 _pinned = os.getenv("MNEMO_DREAM_AGENTS", "").strip()
 AGENTB_AGENTS = (
     [a.strip() for a in _pinned.split(",") if a.strip()]
     if _pinned
-    else DEFAULT_AGENTS
+    else _discover_agentb_agents()
 )
 
 # Skip auto-capture noise — keep True to drop tool-call-flush summaries
@@ -595,34 +620,41 @@ def notify_contradictions(contradictions: list[dict], dream_date: str) -> None:
     summary_text = "\n".join(summary_lines)
 
     # Bus notification (optional, best-effort).
-    # Envelope requires mesh_version + from/to as REGISTERED agents per
-    # disco-bus dispatcher's validate_envelope_input. "Dreamer" isn't a
-    # registered agent (no listener, no inbox), so we send from CC since
-    # CC operates the dream cron. Subject and body make the actual source
-    # clear: subject "dream-contradictions-<date>" + body.source: "dreamer".
+    # Requires MNEMO_DREAM_BUS_URL + MNEMO_DREAM_BUS_FROM + MNEMO_DREAM_BUS_TARGETS.
+    # Envelope shape requires mesh_version + registered from/to per the disco-bus
+    # dispatcher's validate_envelope_input. If a bus URL is set but the agent
+    # names aren't, we log + skip — don't crash, don't silently pretend to send.
     if MNEMO_DREAM_BUS_URL:
-        for target in ("CC", "Opie", "Rocky"):
-            try:
-                envelope = {
-                    "mesh_version": "0.5",
-                    "from": "CC",
-                    "to": target,
-                    "subject": f"dream-contradictions-{dream_date}",
-                    "body": {
-                        "source": "dreamer",
-                        "summary": f"{len(contradictions)} verified-vs-extracted contradiction(s) this dream",
-                        "dream_date": dream_date,
-                        "contradictions": contradictions,
-                        "guidance": "Verified facts preserved. Review each: was the verified fact wrong (use mnemo_fact_demote or assert new verified value), or was the extraction a false-positive (no action needed, drift signal)?",
-                    },
-                }
-                r = httpx.post(f"{MNEMO_DREAM_BUS_URL}/mesh/ping", json=envelope, timeout=10.0)
-                if r.status_code in (200, 201, 202):
-                    log.info(f"  bus notification → {target}: ok")
-                else:
-                    log.warning(f"  bus notification → {target}: HTTP {r.status_code} {r.text[:200]}")
-            except httpx.HTTPError as e:
-                log.warning(f"  bus notification → {target}: {e}")
+        if not MNEMO_DREAM_BUS_FROM or not MNEMO_DREAM_BUS_TARGETS:
+            log.warning(
+                "  MNEMO_DREAM_BUS_URL is set but MNEMO_DREAM_BUS_FROM and/or "
+                "MNEMO_DREAM_BUS_TARGETS are missing — skipping bus notification. "
+                "Set both to enable (FROM must be a registered bus agent; TARGETS "
+                "is comma-separated registered agent names)."
+            )
+        else:
+            for target in MNEMO_DREAM_BUS_TARGETS:
+                try:
+                    envelope = {
+                        "mesh_version": "0.5",
+                        "from": MNEMO_DREAM_BUS_FROM,
+                        "to": target,
+                        "subject": f"dream-contradictions-{dream_date}",
+                        "body": {
+                            "source": "dreamer",
+                            "summary": f"{len(contradictions)} verified-vs-extracted contradiction(s) this dream",
+                            "dream_date": dream_date,
+                            "contradictions": contradictions,
+                            "guidance": "Verified facts preserved. Review each: was the verified fact wrong (use mnemo_fact_demote or assert new verified value), or was the extraction a false-positive (no action needed, drift signal)?",
+                        },
+                    }
+                    r = httpx.post(f"{MNEMO_DREAM_BUS_URL}/mesh/ping", json=envelope, timeout=10.0)
+                    if r.status_code in (200, 201, 202):
+                        log.info(f"  bus notification → {target}: ok")
+                    else:
+                        log.warning(f"  bus notification → {target}: HTTP {r.status_code} {r.text[:200]}")
+                except httpx.HTTPError as e:
+                    log.warning(f"  bus notification → {target}: {e}")
     else:
         log.info("  MNEMO_DREAM_BUS_URL not set — skipping bus notification (set it to enable)")
 

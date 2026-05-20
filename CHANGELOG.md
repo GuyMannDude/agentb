@@ -1,5 +1,128 @@
 # Changelog
 
+## v2.12.0 (2026-05-20) — Phase 3 Facts + Confidence, Embedding hosted fallback, Dreamer rehab
+
+Three meaningful additions in one release. Server app version bumps from
+`0.7.0` to `0.8.0`.
+
+### Phase 3 — Structured Facts Table + Three-State Confidence
+
+**The gap this closes.** Mnemo today treats every memory as text+tags
+retrieved by FTS5 or vector similarity. That's the right tool for "what
+did we decide about X" — fuzzy recall over prose. It's the wrong tool
+for "what is the agent's location?" That's a key-value lookup
+pretending to be a search. The Peter Widget name-recall failure was the
+canonical case: a structured fact lookup got routed through semantic
+search and returned wrong answers because the stored words didn't
+overlap the query.
+
+Facts also need confidence. Today a verified-from-source claim and a
+hallucinated guess look identical in storage. When recall returns hits,
+callers can't tell which are solid. Discord-architecture flip-flops
+(three contradictory claims, all stated with equal confidence) become
+invisible.
+
+**What ships.**
+
+- New SQLite store at `~/.agentb/facts.sqlite` (shared global, WAL mode).
+  Two tables: `facts` (composite PK `(entity, attribute)`, one current
+  value per pair) and `fact_history` (append-only audit log of every
+  change). Schema auto-creates on connect — `CREATE TABLE IF NOT EXISTS`
+  on every connection so the file can be deleted/recreated without a
+  service restart.
+- Three-state confidence: `verified > high_probability > false`.
+  Promotion ladder enforced — `verified` only overwritten by another
+  `verified` (with audit trail), lower confidence rejected if existing
+  is higher.
+- Six new HTTP routes: `GET /facts/{entity}/{attribute}`,
+  `GET /facts?entity=&attribute=&value_contains=&confidence=`,
+  `POST /facts`, `POST /facts/demote`,
+  `GET /facts/history/{entity}/{attribute}`, `GET /facts/contradictions`.
+- Four new MCP bridge tools: `mnemo_fact_get`, `mnemo_fact_query`,
+  `mnemo_fact_save`, `mnemo_fact_demote`. The demote tool exists because
+  the promotion ladder otherwise blocks `verified → false` transitions
+  when the correct replacement value isn't yet known.
+- Evidence source uses a prefix convention for pseudo-structure without
+  schema enforcement: `memory:<id>`, `commit:<sha>`,
+  `file:<path>:<line>`, `statement:<who>`, `bus:#<id>`, `dream:<date>`,
+  `contradicted_by:<source>`.
+
+**Dreamer Stage 0.5 — automated fact extraction.** Nightly Dreamer gains
+a stage between harvest and synthesis that calls the LLM with a strict
+conservative-only-direct-statements prompt to extract `(entity, attribute,
+value)` triples and POST them to `/facts` with
+`confidence='high_probability'`. Auto-capture entries (bridge captureCall
+flushes, JSONL sync messages) are filtered before extraction — they're
+tool-call logs, not stated facts. Conservative extraction is load-bearing
+(not a tuning knob); loosening to inferred relationships is a deliberate
+later decision driven by measured false-positive data.
+
+**Contradiction notification.** When Stage 0.5 extracts a fact that
+conflicts with an existing `verified` fact, the spec's promotion ladder
+correctly rejects the overwrite — but silent rejection means
+contradictions pile up and nobody reviews them. v2.12.0 batches all
+per-run verified-vs-extracted conflicts and posts at end of Dreamer run
+to two optional channels (both opt-in via env vars, both gracefully skip
+when unset):
+
+- Bus message via HTTP to a busmaster/dispatcher of your choice.
+  Requires `MNEMO_DREAM_BUS_URL` + `MNEMO_DREAM_BUS_FROM` (registered
+  sender agent name) + `MNEMO_DREAM_BUS_TARGETS` (comma-separated
+  registered receivers). Envelope shape matches the
+  `github.com/GuyMannDude/disco-bus` mesh spec.
+- Discord webhook via `MNEMO_DREAM_DISCORD_WEBHOOK`. Direct human
+  visibility without waiting for an agent to surface.
+
+One batched message per cron run, never per-contradiction. Quiet nights
+produce no notification.
+
+**Cost.** Stage 0.5 adds one LLM call per agent per night to the
+Dreamer pipeline. Per-night dream cost roughly doubles from $0.0013 to
+$0.003 — still rounding error.
+
+**Tests.** 23 new unit tests in `tests/test_facts_store.py` covering
+happy paths, normalization, all promotion-ladder branches, demotion
+edge cases, query filters, and persistence.
+
+### Embedding hosted fallback
+
+`agentb/providers.py:GoogleEmbedding.embed()` now reads
+`self.config.extra.output_dimensionality` and passes it through. This
+enables a fully working hosted fallback for the local Ollama embedding
+primary: Google's `gemini-embedding-001` outputs 3072 dims natively but
+supports Matryoshka truncation. Configure the fallback with
+`extra.output_dimensionality: 768` to match the locked sqlite-vec store
+width without dim-guard trips. See `agentb.yaml.example` for the full
+shape. Closes the "if Ollama dies, every Mnemo recall 500s" gap flagged
+in v2.11.5 task notes.
+
+### Dreamer pipeline rehab
+
+`mnemo-dream.py` had been silently dark since 2026-05-13 due to three
+cascading failure modes — token explosion (4000+ accumulated memories
+sent to gemini-2.5-flash as one prompt = ~6M tokens, model caps at 1M);
+env file gap during the v2.10.0 cutover; and a path mismatch where the
+script read from `~/.agentb/memory/<agent>/` (pre-cutover layout) but
+memories had moved to `~/.agentb/agents/<agent>/memory/` (current
+layout). v2.12.0 fixes all three:
+
+- Path migration: harvest walks the current `~/.agentb/agents/<agent>/memory/`
+  layout. Agent auto-discovery enumerates the directory at runtime;
+  `MNEMO_DREAM_AGENTS` env var pins a specific list for installs that
+  want explicit control.
+- Two-stage map-reduce synthesis: per-agent partial summary first
+  (cheap), then joint cross-agent rollup of summaries (also cheap).
+  Per-call token usage is bounded; the 1M-context limit is never
+  approached regardless of corpus size.
+
+### Other
+
+- `mnemo-cortex 0.8.0` server app version (was 0.7.0).
+- Agent list in `MNEMO_DREAM_AGENTS` and bus envelope `MNEMO_DREAM_BUS_FROM`/
+  `MNEMO_DREAM_BUS_TARGETS` are explicit env vars rather than hardcoded.
+
+---
+
 ## v2.11.5 (2026-05-19) — Adaptive truncation on live recall (input-too-long != provider down)
 
 **Problem.** Opie reported intermittent 503s from `mnemo_recall` / `mnemo_search`
