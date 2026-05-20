@@ -1670,6 +1670,142 @@ server.registerTool(
   }
 );
 
+// ── Phase 3: Facts tools ───────────────────────────────────────
+// Structured key-value facts with three-state confidence + audit history.
+// Facts are workspace-shared (global), not per-agent. Use for "current truth"
+// (Guy's location, Hoffman's GMC status) that should update in place rather
+// than accumulate as parallel memory chunks.
+
+server.registerTool(
+  "mnemo_fact_get",
+  {
+    description: "Look up a single fact by (entity, attribute). Instant key-value retrieval, NOT semantic search. Use for queries like 'what's Guy's location' where you want one definitive answer. Returns {found: false} if missing. By default excludes facts with confidence='false' (use include_false=true to see them for audit).",
+    inputSchema: {
+      entity: z.string().describe("Thing the fact is about (person, machine, product, store, project). Case + spacing normalized."),
+      attribute: z.string().describe("Property of the entity (location, owner, port, url, version). Snake_case normalized."),
+      include_false: z.boolean().optional().describe("Include facts that were disproven. Default false."),
+    },
+    annotations: { "title": "Get Fact", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  },
+  async ({ entity, attribute, include_false }) => {
+    captureCall("mnemo_fact_get", `${entity}/${attribute}`);
+    try {
+      const qs = include_false ? "?include_false=true" : "";
+      const data = await mnemoRequest("GET", `/facts/${encodeURIComponent(entity)}/${encodeURIComponent(attribute)}${qs}`);
+      if (!data.found) return { content: [{ type: "text", text: `No fact for (${entity}, ${attribute})` }] };
+      const lines = [
+        `${data.entity} . ${data.attribute} = ${data.value}`,
+        `  confidence: ${data.confidence}`,
+        `  evidence:   ${data.evidence_source}`,
+        `  source:     ${data.source_agent || "—"}${data.source_memory_id ? " (memory:" + data.source_memory_id + ")" : ""}`,
+        `  updated:    ${new Date(data.last_updated * 1000).toISOString()}`,
+      ];
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Fact lookup error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "mnemo_fact_query",
+  {
+    description: "List facts matching filters. All filters optional; AND-joined. Use for queries like 'all facts about Guy' or 'all unverified facts'. Default limit 20, max 100.",
+    inputSchema: {
+      entity: z.string().optional().describe("Filter to facts about this entity."),
+      attribute: z.string().optional().describe("Filter to this attribute name."),
+      value_contains: z.string().optional().describe("Substring match on the value."),
+      confidence: z.enum(["verified", "high_probability", "false"]).optional().describe("Filter by confidence level."),
+      limit: z.number().int().min(1).max(100).optional().describe("Max results. Default 20."),
+    },
+    annotations: { "title": "Query Facts", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  },
+  async ({ entity, attribute, value_contains, confidence, limit }) => {
+    captureCall("mnemo_fact_query", `${entity || "*"}/${attribute || "*"}`);
+    try {
+      const params = new URLSearchParams();
+      if (entity !== undefined) params.set("entity", entity);
+      if (attribute !== undefined) params.set("attribute", attribute);
+      if (value_contains !== undefined) params.set("value_contains", value_contains);
+      if (confidence !== undefined) params.set("confidence", confidence);
+      if (limit !== undefined) params.set("limit", String(limit));
+      const qs = params.toString();
+      const data = await mnemoRequest("GET", `/facts${qs ? "?" + qs : ""}`);
+      if (data.count === 0) return { content: [{ type: "text", text: "No facts match." }] };
+      const lines = [`Found ${data.count} fact(s):`];
+      for (const f of data.facts) {
+        lines.push(`  ${f.entity} . ${f.attribute} = ${f.value}  [${f.confidence}]  ${f.evidence_source}`);
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Fact query error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "mnemo_fact_save",
+  {
+    description: "Assert a structured fact. UPSERT semantics — same (entity, attribute) updates in place. Different value triggers contradiction handling: higher-or-equal confidence overwrites with audit log; lower confidence is REJECTED if existing is higher. Use confidence='verified' only when confirmed (source code, direct Guy statement, tool output). Use 'high_probability' for strong inference. evidence_source uses prefix convention: memory:<id>, commit:<sha>, file:<path>:<line>, statement:<who>, bus:#<id>, dream:<date>.",
+    inputSchema: {
+      entity: z.string().describe("Thing the fact is about. Normalized lowercase."),
+      attribute: z.string().describe("Property of the entity. Normalized snake_case."),
+      value: z.string().describe("Current truth value."),
+      confidence: z.enum(["verified", "high_probability", "false"]).describe("verified = confirmed from source. high_probability = strong inference. false = known wrong."),
+      evidence_source: z.string().describe("Where the confidence comes from. Use prefixes: memory:<id>, commit:<sha>, statement:<who>, etc."),
+      source_memory_id: z.string().optional().describe("Pointer to the originating memory entry, if any."),
+    },
+    annotations: { "title": "Save Fact", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true },
+  },
+  async ({ entity, attribute, value, confidence, evidence_source, source_memory_id }) => {
+    captureCall("mnemo_fact_save", `${entity}/${attribute}=${value.slice(0, 60)}`);
+    try {
+      const data = await mnemoRequest("POST", "/facts", {
+        entity, attribute, value, confidence, evidence_source,
+        source_memory_id: source_memory_id || null,
+        source_agent: AGENT_ID,
+      });
+      const lines = [
+        data.written ? `Fact saved (${data.reason})` : `Fact REJECTED (${data.reason})`,
+        `  ${entity} . ${attribute} = ${value}  [${confidence}]`,
+      ];
+      if (data.was_contradiction) {
+        lines.push(`  contradiction with previous: ${data.previous_value} [${data.previous_confidence}]`);
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }], isError: !data.written };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Fact save error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "mnemo_fact_demote",
+  {
+    description: "Force a fact to confidence='false' without supplying a new value. Use when you know something is wrong but don't yet know the correct answer. Required because the normal save path's promotion ladder blocks verified→false transitions that lack a replacement value.",
+    inputSchema: {
+      entity: z.string().describe("Thing the fact is about."),
+      attribute: z.string().describe("Property to demote."),
+      reason: z.string().describe("Why this fact is wrong. Required, logged to history."),
+    },
+    annotations: { "title": "Demote Fact", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true },
+  },
+  async ({ entity, attribute, reason }) => {
+    captureCall("mnemo_fact_demote", `${entity}/${attribute}`);
+    try {
+      const data = await mnemoRequest("POST", "/facts/demote", {
+        entity, attribute, reason, changed_by: AGENT_ID,
+      });
+      if (!data.written) return { content: [{ type: "text", text: `Demote: ${data.reason}` }] };
+      return {
+        content: [{ type: "text", text: `Demoted ${entity}.${attribute} (was ${data.previous_confidence}: ${data.previous_value}) — reason: ${reason}` }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Fact demote error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // ── Start ──────────────────────────────────────────────────────
 
 await checkHealth();
