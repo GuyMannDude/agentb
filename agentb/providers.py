@@ -7,6 +7,9 @@ import time
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional
+
+import httpx
+
 from agentb.config import ProviderConfig, ResilientProviderConfig
 
 log = logging.getLogger("agentb.providers")
@@ -153,6 +156,9 @@ class ResilientReasoning:
 class ResilientEmbedding:
     """Embedding provider with circuit-breaker fallback chain."""
 
+    # Floor for adaptive halving on input-too-long. Mirrors vec.embed_with_adaptive_truncation.
+    ADAPTIVE_MIN_CHARS = 500
+
     def __init__(self, config: ResilientProviderConfig):
         self.config = config
         self.primary = _create_embedding(config.primary)
@@ -161,10 +167,33 @@ class ResilientEmbedding:
         self.active_label = self.primary.label
         self.failed_over = False
 
+    async def _try_embed_adaptive(self, provider, text: str) -> list[float]:
+        """Embed via one provider, halving input on HTTP 400 (context-length).
+
+        An input-too-long 400 is a property of the input, not the provider —
+        retrying on a different provider with the same text will fail the same
+        way (and pollute the circuit breaker). Halve and retry the same
+        provider until success or we hit the min_chars floor, then re-raise.
+        """
+        current = text
+        while True:
+            try:
+                return await provider.embed(current)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 400 and len(current) > self.ADAPTIVE_MIN_CHARS:
+                    new_len = max(self.ADAPTIVE_MIN_CHARS, len(current) // 2)
+                    log.warning(
+                        f"Embed 400 at {len(current)} chars on {provider.label}; "
+                        f"halving to {new_len} (input too long, not a provider failure)"
+                    )
+                    current = current[:new_len]
+                    continue
+                raise
+
     async def embed(self, text: str) -> list[float]:
         if not self.breaker.should_skip():
             try:
-                result = await self.primary.embed(text)
+                result = await self._try_embed_adaptive(self.primary, text)
                 self.breaker.record_success()
                 self.active_label = self.primary.label
                 self.failed_over = False
@@ -177,7 +206,7 @@ class ResilientEmbedding:
 
         for i, fb in enumerate(self.fallbacks):
             try:
-                result = await fb.embed(text)
+                result = await self._try_embed_adaptive(fb, text)
                 self.active_label = fb.label
                 self.failed_over = True
                 log.info(f"Embedding served by fallback [{i}]: {fb.label}")
@@ -379,8 +408,14 @@ class GoogleEmbedding(EmbeddingProvider):
         import httpx
         base = self.config.api_base or "https://generativelanguage.googleapis.com/v1beta"
         url = f"{base}/models/{self.config.model}:embedContent?key={self.config.api_key}"
+        payload: dict = {"content": {"parts": [{"text": text}]}}
+        # Matryoshka truncation: gemini-embedding-* models output 3072 dims natively
+        # but support outputDimensionality to truncate. Set extra.output_dimensionality
+        # in config to match the consumer's vec store width (e.g. 768 for nomic compat).
+        if (od := self.config.extra.get("output_dimensionality")):
+            payload["outputDimensionality"] = int(od)
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json={"content": {"parts": [{"text": text}]}})
+            resp = await client.post(url, json=payload)
             resp.raise_for_status()
             return resp.json().get("embedding", {}).get("values", [])
 

@@ -1,5 +1,465 @@
 # Changelog
 
+## v2.12.0 (2026-05-20) — Phase 3 Facts + Confidence, Embedding hosted fallback, Dreamer rehab
+
+Three meaningful additions in one release. Server app version bumps from
+`0.7.0` to `0.8.0`.
+
+### Phase 3 — Structured Facts Table + Three-State Confidence
+
+**The gap this closes.** Mnemo today treats every memory as text+tags
+retrieved by FTS5 or vector similarity. That's the right tool for "what
+did we decide about X" — fuzzy recall over prose. It's the wrong tool
+for "what is the agent's location?" That's a key-value lookup
+pretending to be a search. The Peter Widget name-recall failure was the
+canonical case: a structured fact lookup got routed through semantic
+search and returned wrong answers because the stored words didn't
+overlap the query.
+
+Facts also need confidence. Today a verified-from-source claim and a
+hallucinated guess look identical in storage. When recall returns hits,
+callers can't tell which are solid. Discord-architecture flip-flops
+(three contradictory claims, all stated with equal confidence) become
+invisible.
+
+**What ships.**
+
+- New SQLite store at `~/.agentb/facts.sqlite` (shared global, WAL mode).
+  Two tables: `facts` (composite PK `(entity, attribute)`, one current
+  value per pair) and `fact_history` (append-only audit log of every
+  change). Schema auto-creates on connect — `CREATE TABLE IF NOT EXISTS`
+  on every connection so the file can be deleted/recreated without a
+  service restart.
+- Three-state confidence: `verified > high_probability > false`.
+  Promotion ladder enforced — `verified` only overwritten by another
+  `verified` (with audit trail), lower confidence rejected if existing
+  is higher.
+- Six new HTTP routes: `GET /facts/{entity}/{attribute}`,
+  `GET /facts?entity=&attribute=&value_contains=&confidence=`,
+  `POST /facts`, `POST /facts/demote`,
+  `GET /facts/history/{entity}/{attribute}`, `GET /facts/contradictions`.
+- Four new MCP bridge tools: `mnemo_fact_get`, `mnemo_fact_query`,
+  `mnemo_fact_save`, `mnemo_fact_demote`. The demote tool exists because
+  the promotion ladder otherwise blocks `verified → false` transitions
+  when the correct replacement value isn't yet known.
+- Evidence source uses a prefix convention for pseudo-structure without
+  schema enforcement: `memory:<id>`, `commit:<sha>`,
+  `file:<path>:<line>`, `statement:<who>`, `bus:#<id>`, `dream:<date>`,
+  `contradicted_by:<source>`.
+
+**Dreamer Stage 0.5 — automated fact extraction.** Nightly Dreamer gains
+a stage between harvest and synthesis that calls the LLM with a strict
+conservative-only-direct-statements prompt to extract `(entity, attribute,
+value)` triples and POST them to `/facts` with
+`confidence='high_probability'`. Auto-capture entries (bridge captureCall
+flushes, JSONL sync messages) are filtered before extraction — they're
+tool-call logs, not stated facts. Conservative extraction is load-bearing
+(not a tuning knob); loosening to inferred relationships is a deliberate
+later decision driven by measured false-positive data.
+
+**Contradiction notification.** When Stage 0.5 extracts a fact that
+conflicts with an existing `verified` fact, the spec's promotion ladder
+correctly rejects the overwrite — but silent rejection means
+contradictions pile up and nobody reviews them. v2.12.0 batches all
+per-run verified-vs-extracted conflicts and posts at end of Dreamer run
+to two optional channels (both opt-in via env vars, both gracefully skip
+when unset):
+
+- Bus message via HTTP to a busmaster/dispatcher of your choice.
+  Requires `MNEMO_DREAM_BUS_URL` + `MNEMO_DREAM_BUS_FROM` (registered
+  sender agent name) + `MNEMO_DREAM_BUS_TARGETS` (comma-separated
+  registered receivers). Envelope shape matches the
+  `github.com/GuyMannDude/disco-bus` mesh spec.
+- Discord webhook via `MNEMO_DREAM_DISCORD_WEBHOOK`. Direct human
+  visibility without waiting for an agent to surface.
+
+One batched message per cron run, never per-contradiction. Quiet nights
+produce no notification.
+
+**Cost.** Stage 0.5 adds one LLM call per agent per night to the
+Dreamer pipeline. Per-night dream cost roughly doubles from $0.0013 to
+$0.003 — still rounding error.
+
+**Tests.** 23 new unit tests in `tests/test_facts_store.py` covering
+happy paths, normalization, all promotion-ladder branches, demotion
+edge cases, query filters, and persistence.
+
+### Embedding hosted fallback
+
+`agentb/providers.py:GoogleEmbedding.embed()` now reads
+`self.config.extra.output_dimensionality` and passes it through. This
+enables a fully working hosted fallback for the local Ollama embedding
+primary: Google's `gemini-embedding-001` outputs 3072 dims natively but
+supports Matryoshka truncation. Configure the fallback with
+`extra.output_dimensionality: 768` to match the locked sqlite-vec store
+width without dim-guard trips. See `agentb.yaml.example` for the full
+shape. Closes the "if Ollama dies, every Mnemo recall 500s" gap flagged
+in v2.11.5 task notes.
+
+### Dreamer pipeline rehab
+
+`mnemo-dream.py` had been silently dark since 2026-05-13 due to three
+cascading failure modes — token explosion (4000+ accumulated memories
+sent to gemini-2.5-flash as one prompt = ~6M tokens, model caps at 1M);
+env file gap during the v2.10.0 cutover; and a path mismatch where the
+script read from `~/.agentb/memory/<agent>/` (pre-cutover layout) but
+memories had moved to `~/.agentb/agents/<agent>/memory/` (current
+layout). v2.12.0 fixes all three:
+
+- Path migration: harvest walks the current `~/.agentb/agents/<agent>/memory/`
+  layout. Agent auto-discovery enumerates the directory at runtime;
+  `MNEMO_DREAM_AGENTS` env var pins a specific list for installs that
+  want explicit control.
+- Two-stage map-reduce synthesis: per-agent partial summary first
+  (cheap), then joint cross-agent rollup of summaries (also cheap).
+  Per-call token usage is bounded; the 1M-context limit is never
+  approached regardless of corpus size.
+
+### Other
+
+- `mnemo-cortex 0.8.0` server app version (was 0.7.0).
+- Agent list in `MNEMO_DREAM_AGENTS` and bus envelope `MNEMO_DREAM_BUS_FROM`/
+  `MNEMO_DREAM_BUS_TARGETS` are explicit env vars rather than hardcoded.
+
+---
+
+## v2.11.5 (2026-05-19) — Adaptive truncation on live recall (input-too-long != provider down)
+
+**Problem.** Opie reported intermittent 503s from `mnemo_recall` / `mnemo_search`
+on cross-agent search: `Embedding unavailable: All embedding providers failed
+(primary + all fallbacks)`. Writes succeeded; only recall flapped. He
+suspected Ollama was crashing or overloaded.
+
+Diagnostics on artforge ruled that out — Ollama healthy (up 1d10h, peak 1GB,
+GPU idle), nomic-embed-text loaded and responding instantly. The smoking gun
+was in `journalctl -u ollama`: a rapid-fire burst of HTTP 400s clustered at
+Opie's exact session time, with reason `llm embedding error: the input
+length exceeds the context length`. Same class of bug v2.11.3 fixed for
+the backfill path — but the live recall path had no equivalent shield.
+
+**Root cause.** `ResilientEmbedding.embed()` (`agentb/providers.py`) treated
+a 400 (input too long) the same as a 503 (provider down):
+
+1. Primary 400s on oversized input.
+2. Wrapper records a circuit-breaker failure (wrong — provider is fine).
+3. Walks the fallback chain. Each fallback receives the same oversized
+   input and also 400s with the same length error.
+4. Final: `RuntimeError("All embedding providers failed")`, which the
+   `/context` endpoint surfaces as a 503 to the caller.
+
+The wrapper conflated input-property errors with provider-state errors.
+v2.11.3's `embed_with_adaptive_truncation` solved this for backfill at the
+call-site level; v2.11.5 lifts the same idea into the resilient wrapper so
+all 8 `embedder.embed()` call sites in `server.py` (`/context`, `/preflight`,
+`/writeback`, persona archive, etc.) get the fix for free.
+
+**Fix.** `agentb/providers.py`:
+
+- New `ResilientEmbedding._try_embed_adaptive(provider, text)`: invokes one
+  provider, halves the input on HTTP 400 down to a 500-char floor, retries
+  on the same provider. Re-raises anything that isn't a 400, or a 400 below
+  the floor.
+- `ResilientEmbedding.embed(text)` now calls `_try_embed_adaptive` for the
+  primary and for each fallback. Halving stays on a single provider (it's
+  an input issue, not a provider issue) and **does not record a circuit-
+  breaker failure** for input-too-long. Real provider failures (503, timeout,
+  connection refused, etc.) still failover and still trip the breaker.
+
+**Why it lives in the wrapper, not at each call site:** every server-side
+embed path benefits without per-site changes, and the wrapper is the
+correct place to decide "is this a property of the input or a property of
+the provider." Putting the logic at call sites would have meant patching 8
+places and remembering to patch the 9th.
+
+**Tests** (`tests/test_agentb.py::TestResilientEmbedding`):
+
+- `test_400_halves_and_succeeds_on_primary` — primary 400s once, halves,
+  succeeds. No failover.
+- `test_400_does_not_trip_circuit_breaker` — three 400-then-recover cycles
+  do not open the breaker.
+- `test_400_at_min_chars_falls_over_to_fallback` — primary 400s even at
+  the floor, fallback handles it.
+- `test_non_400_error_is_provider_failure` — a 503 on primary fails over
+  immediately (one call, no halving).
+
+All 6 ResilientEmbedding tests green; 95/96 in the full agentb suite (the
+one failure is in `tests/passport/test_validation.py`, pre-existing,
+unrelated to the embedder).
+
+**Deploy.** Pull on artforge's `mnemo-cortex-stage` (same branch); restart
+`mnemo-cortex.service`. The bridge on each agent is unaffected.
+
+## v2.11.4 (2026-05-19) — Session IDs in host-local time, not UTC
+
+**Problem.** Session IDs were generated with `new Date().toISOString()` and
+the date prefix was stamped from that UTC string. Every other timestamp the
+agents write — `active.md` dates, brain commit messages, kickstart filenames
+— uses host-local time (America/Los_Angeles for IGOR + artforge). The
+session ID was the sole exception. After 17:00 PT the UTC date has already
+rolled to "tomorrow," producing IDs like `opie-2026-05-20-00-22-53` while
+the rest of the brain still says `2026-05-19`. Opie spotted the drift mid-
+session.
+
+**Fix.** `integrations/mcp-bridge/server.js` — added `localTimestamp()` and
+`localDateOnly()` helpers near the `sessionId` declaration; replaced all
+four UTC-derived call sites:
+
+- Line ~640 — `mnemo_save` session_id fallback
+- Line ~741 — session bootstrap (the primary site)
+- Line ~1098 — `session_end` session_id fallback
+- Line ~1129 — brain commit message date
+
+Format unchanged (`YYYY-MM-DD-HH-MM-SS`), so existing consumers treat new
+IDs identically to old ones. Old IDs in the Mnemo store stay as-is; this
+is a forward-only correction.
+
+**Deploy.** Every agent picks up the fix on its next restart of the bridge
+process: CC at next `claude` session start, Opie at next full Claude Desktop
+quit + relaunch, Rocky at next `hermes` launch, nurse on artforge after
+`systemctl --user restart` of its bridge unit. No artforge-side mnemo
+service changes — this is bridge-local.
+
+## v2.11.3 (2026-05-16) — Adaptive truncation + circuit-breaker bypass on backfill
+
+Two more failure modes surfaced during the artforge deploy of v2.11.0–2:
+
+1. **Static caps don't fit token-dense content.** v2.11.1 capped backfill
+   input at 6000 chars; v2.11.2 dropped that to 4000 after 6000 still 400'd
+   on opie's path-heavy wiki FILE INDEX batches. Even 4000 fails on some
+   entries (long UUID-laden URIs tokenize at ~1 char/token). 3000 worked on
+   the worst observed cases. But a constant cap will always be wrong for
+   *some* content — the right answer is adaptive retry.
+
+2. **Backfill shared the embedder's circuit breaker with live `/context`
+   queries.** When three consecutive 400s tripped the breaker mid-backfill,
+   every subsequent embed call — including for live recall — was skipped
+   instantly until the 60s cooldown elapsed. Backfill was poisoning the
+   service it was meant to upgrade.
+
+This release fixes both:
+
+- **`agentb/vec.py`** — `embed_with_adaptive_truncation()` catches HTTP 400
+  from the embed call and retries with input halved (down to a 500-char
+  floor). Returns the vector AND the text that was actually embedded so
+  `vec_sources.text` stays consistent with the vector. Backfill uses it by
+  default (`adaptive=True`); tests can flip it off when using synthetic
+  embedders that don't raise httpx errors.
+- **`agentb/server.py`** — `/vec/backfill` now passes `embedder.primary.embed`
+  rather than the resilient wrapper. Per-entry failures stay per-entry; the
+  shared circuit breaker is never touched by backfill, so a long batch over
+  heterogeneous content can no longer poison live recall.
+- **`agentb/vec.py`** — backfill stats now include a `truncated` counter so
+  the response and logs report how many entries needed adaptive halving.
+- **`tests/test_vec.py`** — four new tests cover the halving behavior, the
+  500-char min-floor giveup, propagation of non-400 errors, and the
+  truncated-counter accounting through `backfill()`.
+
+**Production result.** After this release the artforge opie tenant backfills
+cleanly — adaptive truncation eats the dense entries, no circuit breaker
+flips, live queries unaffected.
+
+
+## v2.11.2 (2026-05-16) — Drop backfill input cap to 4000 chars (superseded)
+
+Follow-up to v2.11.1. The 6000-char cap still 400'd on production data:
+opie's wiki FILE INDEX BATCH entries are path-heavy (long file URIs +
+UUIDs + hashes), and that content tokenizes much denser than typical
+English prose. A 6000-char input produced more tokens than nomic-embed
+-text's 2048-token window could hold, so the same circuit-breaker
+cascade re-occurred. Direct test confirmed 4000 chars succeeds where
+6000 fails on the same entries. Dropping the cap to 4000.
+
+Superseded same day by v2.11.3, which moved from "pick the right constant"
+to "adapt per entry" and isolated the failure surface from live queries.
+
+
+## v2.11.1 (2026-05-16) — Backfill survives oversize memory entries
+
+Discovered during the artforge deploy of v2.11.0. The `opie` tenant has
+auto-generated "FILE INDEX BATCH" memories — wiki-ingest output with 30
+file paths per entry, several thousand to seventeen thousand characters
+of text. nomic-embed-text accepts ~2048 tokens and returns HTTP 400 on
+anything past that. Five consecutive 400s trip the embedder's circuit
+breaker, and the rest of the backfill (2663 of 2666 entries for opie)
+fails instantly without an embedding even being attempted.
+
+This patch caps `iter_memory_entries`' text output at
+`MAX_EMBED_INPUT_CHARS = 6000` (a safe margin under nomic's actual
+context length) and emits a per-entry warning when truncation happens.
+The truncated text is what gets stored in `vec_sources.text` so the
+source row stays consistent with the vector. The lost tail of a 17 k
+character file-index batch is mostly redundant path prefixes — a
+6 k-char prefix retains enough signal for semantic recall.
+
+This is a backfill-side fix. `/writeback` already wraps its embed call
+in a try/except that downgrades to a warning, so live writes degrade
+gracefully on oversize input rather than 5xx'ing the caller. A future
+release will lift truncation into the embedding provider so writeback
+and backfill share the same cap.
+
+**Production result.** Re-ran the artforge backfill: rocky 168/168,
+cc 1411/1411, opie 2666/2666. All three tenants now have a complete
+vec index. Total Ollama wall time across all three agents ~5 minutes.
+
+- `agentb/vec.py` — `MAX_EMBED_INPUT_CHARS` constant + truncation in
+  `iter_memory_entries` with per-entry warning log.
+- `tests/test_vec.py` — `test_iter_memory_entries_truncates_oversize`
+  asserts the cap is applied and the warning fires.
+
+
+## v2.11.0 (2026-05-16) — sqlite-vec vector index (Mnemo v4 Phase 2)
+
+Before this release, vector recall was a linear scan. Every `/context`
+call read every memory bundle from disk, computed cosine similarity in
+Python, and ranked the result. At 1,398 production memories the L1/L2/L3
+chain works; at 14,000 it doesn't. The index needed to live next to the
+memories, not be rebuilt from JSON on every read.
+
+This release adds an indexed sqlite-vec table per agent. The existing
+L1 (project precache) and L2/L3 (linear scans) tiers stay — the new VEC
+tier slots between them and answers semantic recall in milliseconds even
+on the full corpus.
+
+**What's new in `agentb/`.**
+
+- **`agentb/vec.py`** — new module. `VecStore` wraps a per-tenant SQLite
+  file with two tables: `vec_sources(memory_id, text, source_file, created_at)`
+  and `vec_embeddings USING vec0(memory_id, embedding FLOAT[768])`. Source
+  text and vectors are stored separately so the embedding index is
+  rebuildable without touching memory bundles (Open Brain's
+  source/vector separation principle). Dimension is locked to 768 —
+  matched to `nomic-embed-text`, the default primary embedder. A vector
+  of the wrong dimension raises `VecDimMismatch` and refuses the write
+  rather than silently dropping data; loud failure beats silent vector
+  loss (Vapor Truth doctrine).
+- **`agentb/vec.py`** — auto-detected operating modes. `detect_mode(memory_dir)`
+  returns `migration` when JSON entries already live on disk and `clean`
+  otherwise. Existing installs upgrade in place: their bundles stay as
+  the source of truth and a one-shot backfill populates the vec index.
+  Fresh installs initialize empty. The user never picks a mode.
+- **`agentb/vec.py`** — `backfill(store, memory_dir, embed)` walks the
+  memory directory, re-embeds canonical `summary + key_facts` text per
+  bundle, and upserts into the vec index. Idempotent (skips already-indexed
+  ids) and tolerant (continues past per-entry embedding failures and
+  malformed files). Returns counters for `total / embedded / skipped /
+  failed / elapsed_sec`.
+- **`agentb/server.py`** — `TenantManager` now constructs a `VecStore` at
+  `<data_dir>/vec_index.sqlite` for every agent and records the detected
+  mode. `/writeback` reuses the embedding it already computed for the L2
+  tier and upserts it into the vec index in the same transaction. The
+  `/context` pipeline gains a VEC tier between L1 and L2 — when the vec
+  index has data, the query embedding runs against vec0's k-NN, hits are
+  wrapped as `ContextChunk(cache_tier="VEC")`, and `cache_hits["VEC"]`
+  surfaces in the response. L2/L3 still run when VEC doesn't return
+  enough chunks; nothing else in the chain changed.
+- **`agentb/server.py`** — `GET /vec/status?agent_id=X` reports mode,
+  indexed count, on-disk memory count, and db path for the tenant.
+  `POST /vec/backfill?agent_id=X` runs the backfill walk on demand and
+  returns the stats dict. Use this once on upgrade for existing installs;
+  dreaming can call it nightly for ongoing maintenance.
+- **`pyproject.toml`** — adds `sqlite-vec>=0.1.6` as a runtime dependency.
+- **`tests/test_vec.py`** — new test module. Sixteen tests cover store
+  init, upsert/replace/delete, dimension-guard rejection (write and
+  query paths), mode detection across empty / json-present / missing
+  directories, `iter_memory_entries` (canonical text shape, empties
+  skipped, corrupt files tolerated), backfill (single-pass, idempotent,
+  failure-tolerant), and the spec's canonical semantic-over-keyword
+  scenario.
+
+**Verified on the production corpus.** Backfilled 1,398 cc-agent memory
+bundles in 86.5s (~62 ms/entry, Ollama-bound) and observed vec0 k-NN
+queries returning top-3 in 3–4 ms over the full set. The same query
+shape against the legacy linear-scan path touches every bundle on every
+call.
+
+**Upgrade path.** `pip install --upgrade mnemo-cortex`, restart, then
+`POST /vec/backfill?agent_id=<your-agent>` once. The vec index appears
+alongside `memory/` inside each agent data directory. Memory bundles
+stay where they are. Nothing else changes for the user.
+
+
+## v2.10.0 (2026-05-16) — Provenance & decay land in the open-source core
+
+The MCP bridge announced provenance & decay support back in v2.8.0, but
+the Python core that stores memories never received the matching code.
+Internal deployments ran a hand-maintained fork while the published
+package shipped a pre-provenance backend. Bridge sent the fields, the
+backend ignored them.
+
+This release closes that gap. One source of truth.
+
+**What's new in `agentb/`.**
+
+- **`agentb/provenance.py`** — new module. `VALID_SOURCES`,
+  `VALID_CATEGORIES`, `DECAY_THRESHOLDS`, `DEFAULT_HIDDEN_CATEGORIES`, the
+  regex `PROVENANCE_PATTERNS`, `suggest_category(text)`, and
+  `compute_stale_warning(category, created_at)`.
+- **`agentb/server.py`** — `WritebackRequest` adopts `source`, `category`,
+  `additional_tags`. `WritebackResponse` returns `category_used`,
+  `category_suggested`, `category_match_keywords`, `source_used`.
+  `ContextRequest` adopts `source`, `category`, `exclude_categories`,
+  `exclude_stale`, `max_age_days` filters. `ContextChunkResponse` surfaces
+  `provenance_source`, `category`, `additional_tags`, `age_days`,
+  `stale_warning`. Writeback runs the regex auto-suggester when no
+  category is given and persists `schema_version: 3` on every record.
+  `keep_chunk()` applies the filter set across HOT/L1/L2/L3 with 3× over-
+  fetch so post-filter trims don't leave callers short. `session_log` is
+  hidden by default — pass `exclude_categories=[]` to disable.
+- **`agentb/cache.py`** — `ContextChunk` gains optional v3 fields. `L2`
+  search reads `metadata.provenance_source` / `metadata.category` /
+  `metadata.additional_tags` and computes `age_days` + `stale_warning` per
+  chunk. `l3_scan()` does the same straight off the memory_entry record.
+- **`agentb/config.py`** — `AgentConfig` adds `mem0_user_id` and
+  `mem0_fallback_only` overrides. New `resolve_mem0(cfg, agent_id)` helper
+  routes per-agent Mem0 traffic. Two common shapes — agents sharing a
+  Mem0 user namespace, or each agent owning its own — both expressible
+  in `agentb.yaml`:
+
+  ```yaml
+  agents:
+    primary-agent:
+      mem0_user_id: primary
+      mem0_fallback_only: false   # always query Mem0 alongside local
+    secondary-agent:
+      mem0_user_id: shared        # writes/reads against the same Mem0 user
+      mem0_fallback_only: true    # only hit Mem0 when local misses
+    tertiary-agent:
+      mem0_user_id: shared
+      mem0_fallback_only: true
+  ```
+
+**Backward compatibility.** Old records (no v3 fields on disk) load
+without issue — `keep_chunk` treats unset fields as "pass" when no filter
+is active. Old callers that don't pass v3 params on writeback get
+`source: inferred` + the auto-suggested category. The on-disk field name
+`provenance_source` in L2 metadata stays as it is — no migration script
+needed. Strict source filter (`source=user`) drops pre-v3 chunks on
+purpose: they have no provenance to evaluate.
+
+**Decay thresholds (days).** Topology warns at 30, stale at 90.
+current_state and unknown warn at 90. Relationship warns at 180.
+session_log warns at 90. Doctrine, incident, identity, decision are
+perpetual — never stale. Override via env: `MNEMO_DECAY_TOPOLOGY_WARN_DAYS`,
+`MNEMO_DECAY_RELATIONSHIP_WARN_DAYS`, etc.
+
+**FastAPI app version** bumps to `0.7.0` (`agentb/server.py`); package
+version (`pyproject.toml`) bumps to `2.10.0` to match.
+
+**`mnemo_v2/` retired.** The repo previously carried a parallel
+conversation-archive product under `mnemo_v2/` — SQLite + FTS5 over
+message transcripts with leaf/condensed summary compaction. It never
+shared callers with the memory engine in `agentb/`: nothing imported
+from it, `install.sh` didn't deploy it, the MCP bridge didn't route to
+it, and `tests/test_smoke.py` was its only consumer. Two parallel
+servers under one repo confused readers about which path was "the"
+backend. Removed (`mnemo_v2/`, `tests/test_smoke.py`, the deprecated
+`integrations/claude-code/mnemo-watcher-cc.sh` shim that targeted it,
+plus the `pyproject.toml` and `scripts/wheel-smoke-test.sh` references).
+If conversation compaction is wanted in the future, building it on
+`agentb/` directly is simpler than maintaining a parallel server.
+
+---
+
 ## v2.9.0 (2026-05-15) — Developer Dump (Mnemo v4 Phase 1)
 
 First piece of the Mnemo v4 roadmap. Adds bridge-level JSONL capture of

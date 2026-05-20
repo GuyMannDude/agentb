@@ -1,5 +1,5 @@
 """
-Mnemo Cortex v0.6.0 — Drop-in Memory Superhero for AI Agents
+Mnemo Cortex v0.8.0 — Drop-in Memory Superhero for AI Agents
 =============================================================
 Every AI agent has amnesia. Mnemo Cortex is the cure.
 Five endpoints. Any LLM. Total recall.
@@ -29,10 +29,17 @@ from pydantic import BaseModel, Field
 
 from agentb.config import (
     load_config, AgentBConfig, get_agent_data_dir, get_persona, PersonaConfig, Mem0Config,
+    resolve_mem0,
 )
 from agentb.providers import create_resilient_reasoning, create_resilient_embedding
 from agentb.cache import L1Cache, L2Index, l3_scan, ContextChunk
 from agentb.sessions import SessionManager, SessionConfig
+from agentb.provenance import (
+    VALID_SOURCES, VALID_CATEGORIES, DEFAULT_HIDDEN_CATEGORIES,
+    suggest_category,
+)
+from agentb.vec import VecStore, detect_mode as vec_detect_mode, backfill as vec_backfill, VecDimMismatch
+from agentb.facts_store import FactsStore, CONFIDENCE_LEVELS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +83,36 @@ class ContextRequest(BaseModel):
     agent_id: Optional[str] = Field(None, description="Agent ID for tenant isolation")
     persona: Optional[str] = Field(None, description="Persona mode: default, strict, creative")
     max_results: int = Field(5, ge=1, le=20)
+    # v3 provenance + decay filters (all optional)
+    source: Optional[str] = Field(
+        None,
+        description=(
+            "Filter to chunks whose provenance source matches: "
+            "user|tool|inferred|brain|migrated. Strict — pre-v3 chunks "
+            "(no source on record) are dropped when this is set."
+        ),
+    )
+    category: Optional[str] = Field(
+        None,
+        description=(
+            "Filter to chunks whose category matches: topology|current_state|"
+            "doctrine|incident|identity|relationship|decision|session_log|unknown."
+        ),
+    )
+    exclude_categories: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Categories to hide. Defaults to DEFAULT_HIDDEN_CATEGORIES "
+            "(session_log). Pass an empty list to disable hiding entirely."
+        ),
+    )
+    exclude_stale: bool = Field(
+        False,
+        description="If True, drop chunks whose stale_warning.severity == 'stale'.",
+    )
+    max_age_days: Optional[int] = Field(
+        None, description="Drop chunks older than N days. None = no age cap."
+    )
 
 
 class ContextChunkResponse(BaseModel):
@@ -83,6 +120,12 @@ class ContextChunkResponse(BaseModel):
     source: str
     relevance: float
     cache_tier: str
+    # v3 fields — surfaced when the chunk carries them
+    provenance_source: Optional[str] = None
+    category: Optional[str] = None
+    additional_tags: list[str] = []
+    age_days: Optional[float] = None
+    stale_warning: Optional[dict] = None
 
 
 class ContextResponse(BaseModel):
@@ -120,6 +163,25 @@ class WritebackRequest(BaseModel):
     decisions_made: list[str] = []
     agent_id: Optional[str] = None
     timestamp: Optional[str] = None
+    # v3 provenance + decay (all optional; safe defaults applied server-side)
+    source: Optional[str] = Field(
+        None,
+        description=(
+            "Where this fact came from: user|tool|inferred|brain|migrated. "
+            "Defaults to 'inferred' if omitted or invalid."
+        ),
+    )
+    category: Optional[str] = Field(
+        None,
+        description=(
+            "Category that drives decay: topology|current_state|doctrine|incident|"
+            "identity|relationship|decision|session_log|unknown. If omitted, "
+            "the regex auto-suggester runs against summary + key_facts."
+        ),
+    )
+    additional_tags: list[str] = Field(
+        default_factory=list, description="Free-form human-readable tags."
+    )
 
 
 class WritebackResponse(BaseModel):
@@ -128,6 +190,11 @@ class WritebackResponse(BaseModel):
     agent_id: Optional[str]
     l1_bundles_updated: int
     message: str
+    # v3 — what the server actually stored + what the regex suggested
+    category_used: Optional[str] = None
+    category_suggested: Optional[str] = None
+    category_match_keywords: Optional[list[str]] = None
+    source_used: Optional[str] = None
 
 
 # ─────────────────────────────────────────────
@@ -161,12 +228,18 @@ class TenantManager:
             # Could extend AgentConfig with session settings later
             pass
 
+        vec_mode = vec_detect_mode(memory_dir)
+        vec_store = VecStore(data_dir / "vec_index.sqlite")
+        log.info(f"Tenant '{key}' vec index ({vec_mode} mode, {vec_store.count()} embedded)")
+
         tenant = {
             "data_dir": data_dir,
             "memory_dir": memory_dir,
             "l1": L1Cache(l1_dir, self.config.cache),
             "l2": L2Index(l2_dir, self.config.cache),
             "sessions": SessionManager(data_dir, session_cfg),
+            "vec": vec_store,
+            "vec_mode": vec_mode,
         }
         self._tenants[key] = tenant
         log.info(f"Tenant '{key}' initialized at {data_dir}")
@@ -224,6 +297,10 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     embedder = create_resilient_embedding(config.embedding)
     tenants = TenantManager(config)
 
+    # Phase 3: shared global facts store (one file, all agents share)
+    facts_path = Path(config.data_dir or os.path.expanduser("~/.agentb")) / "facts.sqlite"
+    facts = FactsStore(facts_path)
+
     # Initialize Mem0 bridge if configured
     mem0 = None
     if config.mem0 and config.mem0.enabled and config.mem0.api_key:
@@ -235,7 +312,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     for agent_name in config.agents:
         tenants.get(agent_name)
 
-    app = FastAPI(title="Mnemo Cortex", description="Drop-in memory superhero for AI agents", version="0.6.0")
+    app = FastAPI(title="Mnemo Cortex", description="Drop-in memory superhero for AI agents", version="0.8.0")
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -267,7 +344,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="0.6.0",
+            version="0.8.0",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
@@ -286,28 +363,58 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         l1, l2 = tenant["l1"], tenant["l2"]
         memory_dir = tenant["memory_dir"]
         sessions = tenant["sessions"]
+        vec_store: VecStore = tenant["vec"]
 
-        cache_hits = {"HOT": 0, "L1": 0, "L2": 0, "L3": 0, "MEM0": 0}
+        # v3 filter setup. exclude_categories defaults to DEFAULT_HIDDEN_CATEGORIES
+        # (session_log). Caller can opt back in by passing an explicit list — even
+        # an empty one — to disable hiding.
+        if req.exclude_categories is None:
+            effective_exclude = set(DEFAULT_HIDDEN_CATEGORIES)
+        else:
+            effective_exclude = set(req.exclude_categories)
+        # If caller asked for a specific category, never hide it.
+        if req.category:
+            effective_exclude.discard(req.category)
+
+        def keep_chunk(c: ContextChunk) -> bool:
+            if req.source:
+                # Strict: pre-v3 chunks have no source, can't satisfy a source filter.
+                if not c.provenance_source or c.provenance_source != req.source:
+                    return False
+            if req.category and c.category != req.category:
+                return False
+            if c.category and c.category in effective_exclude:
+                return False
+            if req.max_age_days is not None and c.age_days is not None and c.age_days > req.max_age_days:
+                return False
+            if req.exclude_stale and c.stale_warning and c.stale_warning.get("severity") == "stale":
+                return False
+            return True
+
+        # Over-fetch so post-filter trims don't leave us short.
+        overfetch = max(req.max_results * 3, req.max_results + 5)
+
+        cache_hits = {"HOT": 0, "L1": 0, "VEC": 0, "L2": 0, "L3": 0, "MEM0": 0}
         all_chunks: list[ContextChunk] = []
 
         # HOT: Search recent session logs first (fastest, keyword matching)
         hot_results = sessions.search_hot(req.prompt, max_results=min(3, req.max_results))
+        hot_chunks: list[ContextChunk] = []
         for hr in hot_results:
             content = f"[{hr['timestamp'][:16]}] User: {hr['prompt']}\nAgent: {hr['response']}"
-
-            # Append action summaries if present (tool calls, commands)
             if hr.get("actions"):
                 content += "\nActions: " + " | ".join(hr["actions"][:3])
             if hr.get("thinking"):
                 content += f"\nThinking: {hr['thinking']}"
-
-            all_chunks.append(ContextChunk(
+            hot_chunks.append(ContextChunk(
                 content=content,
                 source=f"hot-session:{hr['session_id']}",
-                relevance=0.95,  # hot data is highly relevant by recency
+                relevance=0.95,
                 cache_tier="HOT",
             ))
-        cache_hits["HOT"] = len(hot_results)
+        hot_kept = [c for c in hot_chunks if keep_chunk(c)][: req.max_results]
+        all_chunks.extend(hot_kept)
+        cache_hits["HOT"] = len(hot_kept)
 
         try:
             query_embedding = await embedder.embed(req.prompt)
@@ -317,33 +424,79 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # L1
         remaining = req.max_results - len(all_chunks)
         if remaining > 0:
-            l1_results = l1.search(query_embedding, top_k=remaining, persona=persona)
-            all_chunks.extend(l1_results)
-            cache_hits["L1"] = len(l1_results)
+            l1_results = [c for c in l1.search(query_embedding, top_k=overfetch, persona=persona) if keep_chunk(c)]
+            kept = l1_results[:remaining]
+            all_chunks.extend(kept)
+            cache_hits["L1"] = len(kept)
+
+        # Cross-tier dedup: a memory written via /writeback ends up in BOTH
+        # the vec index and the L2/L3 stores. Without this, the same chunk
+        # appears once per tier and burns max_results budget.
+        seen_memory_ids: set[str] = {c.memory_id for c in all_chunks if c.memory_id}
+
+        # VEC: indexed sqlite-vec lookup over written memories
+        remaining = req.max_results - len(all_chunks)
+        if remaining > 0 and vec_store.count() > 0:
+            try:
+                vec_hits = vec_store.search(query_embedding, top_k=overfetch)
+            except VecDimMismatch as e:
+                log.error(f"vec query dim mismatch: {e}")
+                vec_hits = []
+            vec_chunks: list[ContextChunk] = []
+            for hit in vec_hits:
+                if hit.memory_id in seen_memory_ids:
+                    continue
+                # vec0 distance is L2 by default; convert to similarity-ish (0..1)
+                relevance = 1.0 / (1.0 + hit.distance)
+                vec_chunks.append(ContextChunk(
+                    content=hit.text,
+                    source=f"memory:{hit.memory_id}",
+                    relevance=relevance,
+                    cache_tier="VEC",
+                    memory_id=hit.memory_id,
+                ))
+                seen_memory_ids.add(hit.memory_id)
+            kept = [c for c in vec_chunks if keep_chunk(c)][:remaining]
+            all_chunks.extend(kept)
+            cache_hits["VEC"] = len(kept)
 
         # L2
         remaining = req.max_results - len(all_chunks)
         if remaining > 0:
-            l2_results = l2.search(query_embedding, top_k=remaining, persona=persona)
-            all_chunks.extend(l2_results)
-            cache_hits["L2"] = len(l2_results)
+            l2_results = [
+                c for c in l2.search(query_embedding, top_k=overfetch, persona=persona)
+                if keep_chunk(c) and (not c.memory_id or c.memory_id not in seen_memory_ids)
+            ]
+            kept = l2_results[:remaining]
+            all_chunks.extend(kept)
+            cache_hits["L2"] = len(kept)
+            for c in kept:
+                if c.memory_id:
+                    seen_memory_ids.add(c.memory_id)
 
         # L3
         remaining = req.max_results - len(all_chunks)
         if remaining > 0:
-            l3_results = await l3_scan(memory_dir, query_embedding,
-                                        embed_fn=embedder.embed,
-                                        threshold=config.cache.l3_similarity_threshold,
-                                        top_k=remaining)
-            all_chunks.extend(l3_results)
-            cache_hits["L3"] = len(l3_results)
+            l3_results = [
+                c for c in await l3_scan(memory_dir, query_embedding,
+                                          embed_fn=embedder.embed,
+                                          threshold=config.cache.l3_similarity_threshold,
+                                          top_k=overfetch)
+                if keep_chunk(c) and (not c.memory_id or c.memory_id not in seen_memory_ids)
+            ]
+            kept = l3_results[:remaining]
+            all_chunks.extend(kept)
+            cache_hits["L3"] = len(kept)
+            for c in kept:
+                if c.memory_id:
+                    seen_memory_ids.add(c.memory_id)
 
-        # MEM0: Optional upstream fallback
+        # MEM0: Optional upstream fallback, per-agent routing
         remaining = req.max_results - len(all_chunks)
         if remaining > 0 and mem0:
-            if not config.mem0.fallback_only or len(all_chunks) == 0:
+            mem0_user, fallback_only = resolve_mem0(config, req.agent_id)
+            if not fallback_only or len(all_chunks) == 0:
                 try:
-                    mem0_user = req.agent_id or config.mem0.user_id or "default"
                     mem0_results = await mem0.search(
                         query=req.prompt,
                         user_id=mem0_user,
@@ -428,9 +581,24 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         tenant = tenants.get(req.agent_id)
         memory_dir = tenant["memory_dir"]
         l1, l2 = tenant["l1"], tenant["l2"]
+        vec_store: VecStore = tenant["vec"]
 
         ts = req.timestamp or datetime.now(timezone.utc).isoformat()
         memory_id = hashlib.sha256(f"{req.session_id}:{ts}".encode()).hexdigest()[:16]
+
+        # v3: provenance + decay tagging
+        source_used = req.source if req.source in VALID_SOURCES else "inferred"
+        suggestion_text = req.summary + "\n" + "\n".join(req.key_facts or [])
+        suggested_category, suggestion_keywords = suggest_category(suggestion_text)
+        if req.category and req.category in VALID_CATEGORIES:
+            category_used = req.category
+            category_suggested_field = None
+            category_match_keywords_field = None
+        else:
+            category_used = suggested_category
+            category_suggested_field = suggested_category
+            category_match_keywords_field = suggestion_keywords
+        additional_tags = req.additional_tags or []
 
         memory_entry = {
             "id": memory_id, "session_id": req.session_id,
@@ -439,17 +607,45 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             "projects_referenced": req.projects_referenced,
             "decisions_made": req.decisions_made,
             "timestamp": ts, "created_at": time.time(),
+            # v3 fields
+            "source": source_used,
+            "category": category_used,
+            "additional_tags": additional_tags,
+            "schema_version": 3,
         }
         (memory_dir / f"{memory_id}.json").write_text(json.dumps(memory_entry, indent=2, default=str))
-        log.info(f"Writeback: {req.session_id} → {memory_id} (agent: {req.agent_id or 'default'})")
+        log.info(f"Writeback: {req.session_id} → {memory_id} (agent: {req.agent_id or 'default'}, source={source_used}, category={category_used})")
 
         l1_updated = 0
         try:
             full_text = req.summary + "\n" + "\n".join(req.key_facts)
             embedding = await embedder.embed(full_text)
             await l2.add(full_text, f"session:{req.session_id}", embedding,
-                        metadata={"projects": req.projects_referenced,
-                                  "decisions": req.decisions_made, "agent_id": req.agent_id})
+                        metadata={
+                            "projects": req.projects_referenced,
+                            "decisions": req.decisions_made,
+                            "agent_id": req.agent_id,
+                            "memory_id": memory_id,
+                            # v3 — needed for read-time stale_warning + filter logic
+                            "provenance_source": source_used,
+                            "category": category_used,
+                            "additional_tags": additional_tags,
+                        })
+
+            try:
+                vec_store.upsert(
+                    memory_id,
+                    full_text,
+                    embedding,
+                    source_file=(memory_dir / f"{memory_id}.json").as_posix(),
+                    created_at=time.time(),
+                )
+            except VecDimMismatch as e:
+                # Dim mismatch is a configuration/contract bug, not a runtime
+                # blip. Surface to the caller — silent vector loss is the
+                # exact failure mode the dim guard was added to prevent.
+                log.error(f"vec_index dim mismatch on writeback {memory_id}: {e}")
+                raise HTTPException(500, f"vec index dim mismatch: {e}")
 
             for project in req.projects_referenced:
                 pc = f"Project: {project}\nSession: {req.session_id}\nSummary: {req.summary}\n"
@@ -459,13 +655,15 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 pe = await embedder.embed(pc)
                 await l1.add(pc, f"project:{project}", pe)
                 l1_updated += 1
+        except HTTPException:
+            raise
         except Exception as e:
             log.error(f"Writeback indexing failed: {e}")
 
-        # Mem0: optional upstream sync
+        # Mem0: optional upstream sync, per-agent user_id routing
         if mem0 and config.mem0.sync_writes:
             try:
-                mem0_user = req.agent_id or config.mem0.user_id or "default"
+                mem0_user, _ = resolve_mem0(config, req.agent_id)
                 await mem0.add(
                     messages=[{"role": "user", "content": req.summary + "\n" + "\n".join(req.key_facts)}],
                     user_id=mem0_user,
@@ -478,6 +676,10 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             status="archived", memory_id=memory_id, agent_id=req.agent_id,
             l1_bundles_updated=l1_updated,
             message=f"Session {req.session_id} archived for agent '{req.agent_id or 'default'}'. {l1_updated} L1 bundles updated.",
+            category_used=category_used,
+            category_suggested=category_suggested_field,
+            category_match_keywords=category_match_keywords_field,
+            source_used=source_used,
         )
 
     # ── Ingest (The Live Wire) ──
@@ -548,6 +750,118 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             "context": sessions.get_recent_context(n),
         }
 
+    # ── Vec index management ──
+    @app.get("/vec/status")
+    async def vec_status(agent_id: Optional[str] = None):
+        tenant = tenants.get(agent_id)
+        vec_store: VecStore = tenant["vec"]
+        memory_dir = tenant["memory_dir"]
+        on_disk = sum(1 for _ in memory_dir.glob("*.json"))
+        return {
+            "agent_id": agent_id or "default",
+            "mode": tenant["vec_mode"],
+            "indexed": vec_store.count(),
+            "memory_entries_on_disk": on_disk,
+            "db_path": vec_store.db_path.as_posix(),
+        }
+
+    @app.post("/vec/backfill")
+    async def vec_backfill_endpoint(agent_id: Optional[str] = None, skip_existing: bool = True):
+        tenant = tenants.get(agent_id)
+        vec_store: VecStore = tenant["vec"]
+        memory_dir = tenant["memory_dir"]
+        # Bypass the resilient wrapper's circuit breaker — backfill is a long
+        # batch over heterogeneous content that historically trips the breaker
+        # after a few oversize entries, which would then poison live /context
+        # queries with "circuit open" until the cooldown elapses. Calling the
+        # primary embedder directly isolates per-entry failures.
+        stats = await vec_backfill(
+            vec_store,
+            memory_dir,
+            embedder.primary.embed,
+            skip_existing=skip_existing,
+        )
+        return {"agent_id": agent_id or "default", **stats}
+
+    # ── Phase 3: Facts ──
+    class FactSaveRequest(BaseModel):
+        entity: str
+        attribute: str
+        value: str
+        confidence: str
+        evidence_source: str
+        source_memory_id: Optional[str] = None
+        source_agent: Optional[str] = None
+
+    class FactDemoteRequest(BaseModel):
+        entity: str
+        attribute: str
+        reason: str
+        changed_by: Optional[str] = None
+
+    @app.get("/facts/{entity}/{attribute}")
+    async def facts_get(entity: str, attribute: str, include_false: bool = False):
+        fact = facts.get(entity, attribute, include_false=include_false)
+        if fact is None:
+            return {"found": False}
+        return {"found": True, **fact.to_dict()}
+
+    @app.get("/facts")
+    async def facts_query(
+        entity: Optional[str] = None,
+        attribute: Optional[str] = None,
+        value_contains: Optional[str] = None,
+        confidence: Optional[str] = None,
+        changed_since: Optional[float] = None,
+        limit: int = 20,
+    ):
+        if confidence is not None and confidence not in CONFIDENCE_LEVELS:
+            raise HTTPException(400, f"confidence must be one of {CONFIDENCE_LEVELS}")
+        results = facts.query(
+            entity=entity, attribute=attribute, value_contains=value_contains,
+            confidence=confidence, changed_since=changed_since, limit=limit,
+        )
+        return {"facts": [f.to_dict() for f in results], "count": len(results)}
+
+    @app.post("/facts")
+    async def facts_save(req: FactSaveRequest):
+        try:
+            result = facts.save(
+                entity=req.entity, attribute=req.attribute, value=req.value,
+                confidence=req.confidence, evidence_source=req.evidence_source,
+                source_memory_id=req.source_memory_id, source_agent=req.source_agent,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {
+            "written": result.written,
+            "was_contradiction": result.was_contradiction,
+            "previous_value": result.previous_value,
+            "previous_confidence": result.previous_confidence,
+            "reason": result.reason,
+        }
+
+    @app.post("/facts/demote")
+    async def facts_demote(req: FactDemoteRequest):
+        try:
+            result = facts.demote(req.entity, req.attribute, req.reason, changed_by=req.changed_by)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {
+            "written": result.written,
+            "previous_value": result.previous_value,
+            "previous_confidence": result.previous_confidence,
+            "reason": result.reason,
+        }
+
+    @app.get("/facts/history/{entity}/{attribute}")
+    async def facts_history(entity: str, attribute: str, limit: int = 50):
+        return {"history": facts.history(entity, attribute, limit=limit)}
+
+    @app.get("/facts/contradictions")
+    async def facts_contradictions(since: Optional[float] = None, limit: int = 100):
+        return {"contradictions": facts.contradictions(since=since, limit=limit)}
+
     # ── Background: precache + session archival ──
     async def maintenance_loop():
         while True:
@@ -603,7 +917,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
-        log.info(f"⚡ Mnemo Cortex v0.6.0 — I remember everything so your agent doesn't have to.")
+        log.info(f"⚡ Mnemo Cortex v0.8.0 — I remember everything so your agent doesn't have to.")
         log.info(f"  Reasoning: {reasoner.status}")
         log.info(f"  Embedding: {embedder.status}")
         log.info(f"  Data dir:  {config.data_dir}")

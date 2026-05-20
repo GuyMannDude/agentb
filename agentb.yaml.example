@@ -1,47 +1,83 @@
 # ─────────────────────────────────────────────
-# Mnemo Cortex v0.3.0 Configuration
+# Mnemo Cortex v0.8.0 Configuration
 # "I remember everything so your agent doesn't have to."
 # https://github.com/GuyMannDude/mnemo-cortex
 # ─────────────────────────────────────────────
+# What's new in v0.8.0:
+#   - Phase 3 Facts table — structured (entity, attribute, value) lookups
+#     with three-state confidence (verified > high_probability > false)
+#     and audit history. New MCP tools: mnemo_fact_get / query / save /
+#     demote. Storage auto-creates at ~/.agentb/facts.sqlite (no config
+#     needed).
+#   - Dreamer Stage 0.5 — nightly cron auto-extracts facts from new
+#     memories with a conservative-only-direct-statements prompt and
+#     posts contradictions to bus + Discord (both opt-in via env vars).
+#   - sqlite-vec primary index (Phase 2) — hybrid FTS5+vector recall.
+#   - Adaptive truncation on input-too-long (v2.11.x) — no more 503
+#     flapping on oversized recall queries.
+#   - Embedding hosted fallback — Google gemini-embedding-001 with
+#     Matryoshka truncation to match the local 768-dim store (example
+#     below).
 
 data_dir: ~/.agentb
 log_level: info
 
 # ── Reasoning Provider (with fallback chain) ──
-# Used for preflight checks. If primary fails, falls through to fallbacks.
+# Used for preflight checks, summarization, and Dreamer synthesis.
+# If primary fails, falls through to fallbacks. Sparks default ships
+# OpenRouter primary because gemini-2.5-flash gives sharper Dreamer
+# briefs at near-zero cost; local Ollama is a no-cost fallback.
 reasoning:
-  provider: ollama
-  model: qwen2.5:32b-instruct
-  api_base: http://localhost:11434
+  provider: openrouter
+  model: google/gemini-2.5-flash
+  api_key: ${OPENROUTER_API_KEY}
+  api_base: https://openrouter.ai/api/v1
   timeout: 30
 
   # Circuit breaker: skip primary after N failures, retry after cooldown
   circuit_breaker_threshold: 3
   circuit_breaker_cooldown: 60
 
-  # Fallback chain (tried in order if primary fails)
   fallbacks:
-    - provider: openai
-      model: gpt-4o-mini
-      api_key: ${OPENAI_API_KEY}
-      timeout: 15
-    # - provider: openrouter
-    #   model: nousresearch/hermes-3-llama-3.1-405b:free
-    #   api_key: ${OPENROUTER_API_KEY}
+    - provider: ollama
+      model: qwen2.5:32b-instruct
+      api_base: http://localhost:11434
+    # - provider: openai
+    #   model: gpt-4o-mini
+    #   api_key: ${OPENAI_API_KEY}
+    #   timeout: 15
 
 # ── Embedding Provider (with fallback chain) ──
+# Embedding powers all recall (semantic similarity). Local Ollama is
+# cheap, fast, and the right default. Hosted fallback covers the
+# "Ollama is down" case — without it, every recall 500s during outages.
+#
+# Dimension lock: sqlite-vec store is 768 dims (nomic-embed-text native).
+# If your fallback provider's native dim doesn't match 768, use the
+# `extra.output_dimensionality` parameter (supported by Google's
+# gemini-embedding-* family via Matryoshka truncation) to coerce.
 embedding:
   provider: ollama
   model: nomic-embed-text
   api_base: http://localhost:11434
 
   fallbacks:
-    - provider: openai
-      model: text-embedding-3-small
-      api_key: ${OPENAI_API_KEY}
-    # - provider: google
-    #   model: gemini-embedding-001          # NOT text-embedding-004 (dead Jan 2026)
-    #   api_key: ${GEMINI_API_KEY}
+    # Recommended hosted fallback: Google's gemini-embedding-001 with
+    # Matryoshka truncation to 768 dims. Free tier (1500 embeds/day) covers
+    # any plausible Ollama-outage window.
+    - provider: google
+      model: gemini-embedding-001
+      api_key: ${GOOGLE_API_KEY}
+      timeout: 15
+      extra:
+        output_dimensionality: 768  # truncates 3072 native → 768 to match store
+
+    # Alternative: OpenAI text-embedding-3-small (note: needs a provider
+    # patch to pass the dimensions parameter — see GoogleEmbedding for
+    # reference. Defaults to 1536 dims which WILL trip the vec dim guard).
+    # - provider: openai
+    #   model: text-embedding-3-small
+    #   api_key: ${OPENAI_API_KEY}
 
 # ── Cache Settings ──
 cache:
@@ -59,8 +95,7 @@ server:
   # auth_token: my-secret-token   # require X-API-KEY header
 
 # ── Persona Modes ──
-# Built-in: default, strict, creative
-# Add custom personas here:
+# Built-in: default, strict, creative. Custom personas overlay these:
 personas:
   # Example: ultra-strict for financial/legal work
   # financial:
@@ -80,26 +115,26 @@ personas:
   #   allow_speculative: true
   #   l1_similarity_override: 0.5
   #   l2_similarity_override: 0.3
-  #   custom_system_prompt: >
-  #     Maximum creativity. Surface unexpected connections.
-  #     ENRICH with wild associations. Never WARN on ideas.
 
 # ── Multi-Agent Isolation ──
-# Each agent gets its own memory namespace. No data leakage.
+# Each agent gets its own memory namespace at ~/.agentb/agents/<id>/memory/.
+# Mnemo auto-creates the directory tree on first save. The example below
+# pre-registers two agents at startup; agents created via runtime saves
+# work without explicit declaration.
 agents:
-  rocky:
-    data_dir: ~/.agentb/agents/rocky
-    persona: creative
-  bw:
-    data_dir: ~/.agentb/agents/bw
-    persona: strict
-  # shared:
-  #   data_dir: ~/.agentb/shared
-  #   read_only: true    # agents can read, writeback blocked
+  # main:
+  #   persona: default
+  # researcher:
+  #   persona: strict
+
+# ── Phase 3 Facts (NEW in v0.8.0) ──
+# No config needed. The shared global facts store auto-creates at
+# ~/.agentb/facts.sqlite on first POST to /facts. Three new HTTP routes
+# (/facts, /facts/{e}/{a}, /facts/demote, /facts/history, /facts/contradictions)
+# and four MCP tools (mnemo_fact_get/query/save/demote) wire up automatically.
 
 # ── Session Capture (The Live Wire) ──
-# Sessions are captured automatically via /ingest.
-# These settings control the lifecycle:
+# Sessions captured automatically via /ingest. Settings control lifecycle:
 # sessions:
 #   hot_days: 3              # days in hot storage (instant search)
 #   warm_days: 30            # days in warm storage (summarized, indexed)
@@ -108,17 +143,34 @@ agents:
 #   max_hot_entries: 500     # safety cap per session file
 
 # ── Mem0 Upstream Bridge (Optional) ──
-# Two-tier memory: local-first, cloud-deep.
-# When local search misses, Mnemo falls through to Mem0's
-# semantic vector search. Results are cached locally.
-# Sign up at https://app.mem0.ai for a free API key.
+# Two-tier memory: local-first, cloud-deep. When local search misses,
+# Mnemo falls through to Mem0's semantic vector search.
 # mem0:
 #   enabled: true
 #   api_key: ${MEM0_API_KEY}
 #   api_base: https://api.mem0.ai/v1
-#   user_id: my-agent             # Mem0 user namespace
-#   fallback_only: true           # only hit Mem0 when local misses
-#   sync_writes: false            # push writebacks to Mem0 (default: off)
-#   min_relevance: 0.3            # ignore Mem0 results below this score
-#   max_results: 3                # max Mem0 results per query
-#   timeout: 5.0                  # seconds before giving up on Mem0
+#   user_id: my-agent
+#   fallback_only: true
+#   sync_writes: false
+#   min_relevance: 0.3
+#   max_results: 3
+#   timeout: 5.0
+
+# ── Dreamer (mnemo-dream.py) — Environment variables ──
+# The Dreamer script runs as a nightly cron, not from this YAML. It reads
+# environment variables for its config. Set these in your cron's env file:
+#
+#   OPENROUTER_API_KEY    — for synthesis + fact extraction LLM calls
+#   MNEMO_URL             — Mnemo HTTP base (default http://localhost:50001)
+#   MNEMO_DREAM_MODEL     — synthesis model (default google/gemini-2.5-flash)
+#   MNEMO_DREAM_AGENTS    — comma-separated agent allowlist; omit to
+#                           auto-discover from ~/.agentb/agents/*/memory/
+#   DREAM_SKIP_FACTS      — set to 1 to disable Stage 0.5 fact extraction
+#
+# Contradiction notification (opt-in, all three needed together):
+#   MNEMO_DREAM_BUS_URL       — base URL of your bus/dispatcher
+#   MNEMO_DREAM_BUS_FROM      — registered sender agent name
+#   MNEMO_DREAM_BUS_TARGETS   — comma-separated registered receiver agents
+#
+# Direct human visibility (opt-in, independent of bus):
+#   MNEMO_DREAM_DISCORD_WEBHOOK — Discord webhook URL

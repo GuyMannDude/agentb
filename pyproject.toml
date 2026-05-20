@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemo-cortex"
-version = "2.9.0"
+version = "2.12.0"
 description = "Don't Fear the /new! Memory coprocessor for AI agents. SQLite-backed total recall."
 readme = "README.md"
 license = {text = "MIT"}
@@ -33,6 +33,7 @@ dependencies = [
     "rich>=13.0",
     "httpx>=0.25",
     "numpy>=1.24",
+    "sqlite-vec>=0.1.6",
 ]
 
 [project.optional-dependencies]
@@ -57,8 +58,7 @@ mnemo-cortex = "agentb.cli:main"
 mnemo = "agentb.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["agentb*", "mnemo_v2*", "passport*", "sparks_bus*"]
+include = ["agentb*", "passport*", "sparks_bus*"]
 
 [tool.setuptools.package-data]
-mnemo_v2 = ["db/schema.sql"]
 sparks_bus = ["schema.sql"]
