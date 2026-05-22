@@ -35,6 +35,7 @@
 | 📬 **Sparks Bus** | Agent-to-agent messaging with delivery confirmation. A2A-compatible. |
 | 🪪 **Developer's Passport** | Safe behavioral-claim ingestion layer. Review queue + 32 detectors + provenance buckets. Dev-targeted beta. |
 | 🔗 **Mem0 Bridge** | "And Mem0, not instead of Mem0." Use both. |
+| 🔩 **Structured Facts** | Key-value store with confidence tracking. When semantic search is the wrong tool — names, settings, entity attributes — facts give you sub-millisecond exact lookup with a three-state confidence ladder. |
 
 ### 🚀 Get Started
 
@@ -68,11 +69,19 @@ The protocol pairs with this product the way a recipe pairs with ingredients: Mn
 
 ---
 
-### Dreaming Mnemo — Cross-Agent Overnight Synthesis
+### 🌙 Dreaming Mnemo — Cross-Agent Overnight Synthesis
 
-Every night, Mnemo reads every connected agent's memories and synthesizes them into a single brief. Each agent wakes up knowing what the others did. No manual relay. No copy-paste. It just happens.
+Every agent accumulates raw conversation memory. Dreaming runs a nightly map-reduce pass: each agent's recent memories are compacted into themes, then a cross-agent merge produces shared context so every agent wakes up knowing what the others did. After a May 16 rehab, the pipeline uses disciplined chunking and token budgets that keep Ollama compaction costs predictable — no more runaway synthesis jobs. The result is reliable overnight context sharing that actually runs every night.
 
 **This is the only AI memory system that does cross-agent synthesis.** Mem0, Zep, and Letta store memory per agent. Mnemo dreams across all of them.
+
+### 🔩 Structured Facts — When Search Is the Wrong Tool
+
+Semantic recall is great until your agent needs to remember a visitor's name. Peter Widget asked "what's my name?" and got a paragraph about naming conventions. That's a key-value lookup, not a search problem.
+
+Facts store `(entity, attribute, value)` triples in a local SQLite table with a three-state confidence ladder: `verified` → `high_probability` → `false`. New evidence promotes or demotes automatically. When a fact contradicts an existing one, Mnemo fires a notification over the bus and Discord webhook so the owning agent can adjudicate.
+
+Four MCP tools ship with it: `mnemo_fact_save` to assert, `mnemo_fact_get` for single lookup, `mnemo_fact_query` for filtered lists, `mnemo_fact_demote` to mark something wrong without supplying a replacement. Reads are sub-millisecond. The confidence ladder means your agent's knowledge sharpens over time instead of accumulating stale guesses.
 
 ### Works with Mem0
 
@@ -200,7 +209,7 @@ LM Studio added native MCP support in v0.3.17. Edit `mcp.json` and restart.
 }
 ```
 
-Restart LM Studio. Open a chat with a tool-capable model (Qwen3, Llama 3.2, Mistral). Click the **MCP** tab in the chat panel — `mnemo-cortex` should be listed with **9 tools** (4 memory + 5 Passport). Ask "save a note that I prefer concise replies" — the model calls `mnemo_save`. New chat: "what do you remember about my preferences?" — the model calls `mnemo_recall`.
+Restart LM Studio. Open a chat with a tool-capable model (Qwen3, Llama 3.2, Mistral). Click the **MCP** tab in the chat panel — `mnemo-cortex` should be listed with **13 tools** (4 memory + 4 facts + 5 Passport). Ask "save a note that I prefer concise replies" — the model calls `mnemo_save`. New chat: "what do you remember about my preferences?" — the model calls `mnemo_recall`.
 
 ---
 
@@ -354,11 +363,12 @@ Restart Jan. Tools appear in the assistant configuration.
 
 ### What you get
 
-By default, **9 tools** that work for any user:
+By default, **13 tools** that work for any user:
 
 | Group | Tools |
 |---|---|
 | Memory | `mnemo_recall`, `mnemo_search`, `mnemo_save`, `mnemo_share` |
+| Facts | `mnemo_fact_get`, `mnemo_fact_query`, `mnemo_fact_save`, `mnemo_fact_demote` |
 | [Developer's Passport](passport/) | `passport_get_user_context`, `passport_observe_behavior`, `passport_list_pending_observations`, `passport_promote_observation`, `passport_forget_or_override` |
 
 The bridge also detects two optional dirs and registers more tools when present:
@@ -366,7 +376,7 @@ The bridge also detects two optional dirs and registers more tools when present:
 - Set `BRAIN_DIR` to a brain-file checkout (use the [mnemo-plan template](https://github.com/GuyMannDude/mnemo-plan) for a clean starting point) → adds `opie_startup`, `read_brain_file`, `list_brain_files`, `write_brain_file`, `session_end`.
 - Set `WIKI_DIR` to a wiki dir → adds `wiki_search`, `wiki_read`, `wiki_index`.
 
-If the directory doesn't exist, those tools simply don't register — the model never sees them. Most users stay on the 9-tool default and that's the right call.
+If the directory doesn't exist, those tools simply don't register — the model never sees them. Most users stay on the 13-tool default and that's the right call.
 
 | Setup | Tools |
 |---|---|
@@ -400,6 +410,8 @@ For host-by-host pass/fail, model tool-calling test results, browser automation 
 | **Brain files** | Live working memory. Current state, identity, active context per agent. | The sticky notes on your desk |
 
 **When they disagree, Mnemo wins.** WikAI is always regenerable from Mnemo. Brain files are ephemeral. This split is what lets the system scale: facts go where they're addressable (Mnemo), synthesis goes where it's browsable (WikAI), and active state stays where it can change at the speed of work (brain files).
+
+**Embedding fallback.** Embeddings default to local Ollama (`nomic-embed-text`) for zero-cost, zero-latency operation. If Ollama is unreachable, Mnemo falls back to hosted Google Gemini embeddings (Matryoshka-truncated to match the 768-dim store width). The free tier covers any plausible outage window, giving you graceful degradation at effectively zero cost.
 
 ---
 
