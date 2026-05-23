@@ -1,5 +1,29 @@
 # Changelog
 
+## v3.1.0 (2026-05-23) — Mem0 bridge retired
+
+The optional Mem0 cloud-deep fallback path has been removed. Mnemo Cortex
+is now local-first only — no cloud memory fallback. This was an opt-in
+feature off by default since the bridge shipped; no deployment had it
+enabled in production. Removed code paths are preserved in git history
+and the bridge module is retained at `agentb/mem0_bridge.py.retired-20260523`
+per the archive-don't-delete doctrine.
+
+**Why:** Mnemo's local performance (sub-100ms recall, 80% compaction
+ratio, cross-agent dreaming) made the comparison race unnecessary. The
+"and Mem0, not instead of Mem0" framing no longer matches the project's
+direction.
+
+**What changed:**
+- `agentb/server.py`: removed conditional `from agentb.mem0_bridge import Mem0Bridge` block and the two MEM0 retrieval/write blocks in `/context` and `/writeback` endpoints. `cache_hits["MEM0"]` no longer appears in `/context` responses.
+- `agentb/config.py`: removed `Mem0Config` dataclass, `AgentConfig.mem0_user_id` + `.mem0_fallback_only` fields, `AgentBConfig.mem0` field, `resolve_mem0()` function, and the corresponding load-time mappings. Any `mem0:` block in `~/.agentb/config.json` is now silently ignored.
+- `agentb/mem0_bridge.py`: renamed to `agentb/mem0_bridge.py.retired-20260523`.
+- `mnemo-dream.py`: log message updated from "L2 + Mem0" to "L2" to reflect single-target writeback.
+- `README.md`, `llms.txt`: removed "Works with Mem0" section, Mem0 Bridge feature row, and `└── Mem0 Bridge` line from architecture diagram. Inspirations section keeps the Mem0 acknowledgment as historical credit. Competitor-comparison statements (Mem0/Zep/Letta) stay.
+
+No HTTP API or MCP tool signatures changed. Existing clients see identical
+request/response shapes minus the optional `cache_hits["MEM0"]` key.
+
 ## v3.0.0 (2026-05-21) — Version rebrand: v2.12.0 → v3.0.0
 
 No code changes. This release re-tags what shipped as `v2.12.0` (Phase 3

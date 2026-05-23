@@ -106,26 +106,7 @@ class AgentConfig:
     data_dir: str = ""
     persona: str = "default"
     read_only: bool = False
-    # Mem0 routing overrides — let one agent map to a different Mem0 user_id
-    # (e.g. two agent personas writing/reading against a single shared Mem0
-    # user namespace) or flip the fallback_only switch per agent. Empty
-    # string / None means "inherit global Mem0Config defaults."
-    mem0_user_id: str = ""
-    mem0_fallback_only: Optional[bool] = None
 
-
-
-@dataclass
-class Mem0Config:
-    enabled: bool = False
-    api_key: str = ""
-    api_base: str = "https://api.mem0.ai/v1"
-    user_id: str = ""
-    fallback_only: bool = True
-    sync_writes: bool = False
-    min_relevance: float = 0.3
-    max_results: int = 3
-    timeout: float = 5.0
 
 @dataclass
 class AgentBConfig:
@@ -138,7 +119,6 @@ class AgentBConfig:
     log_level: str = "info"
     agents: dict[str, AgentConfig] = field(default_factory=dict)
     personas: dict[str, PersonaConfig] = field(default_factory=dict)
-    mem0: Mem0Config = field(default_factory=Mem0Config)
 
 
 def _resolve_env(value) -> str:
@@ -249,22 +229,7 @@ def _parse_config(raw: dict) -> AgentBConfig:
                     data_dir=_resolve_env(adata.get("data_dir", "")),
                     persona=adata.get("persona", "default"),
                     read_only=adata.get("read_only", False),
-                    mem0_user_id=_resolve_env(adata.get("mem0_user_id", "")),
-                    mem0_fallback_only=adata.get("mem0_fallback_only"),
                 )
-    if "mem0" in raw and raw["mem0"]:
-        m = raw["mem0"]
-        cfg.mem0 = Mem0Config(
-            enabled=m.get("enabled", False),
-            api_key=_resolve_env(m.get("api_key", "")),
-            api_base=_resolve_env(m.get("api_base", "https://api.mem0.ai/v1")),
-            user_id=_resolve_env(m.get("user_id", "")),
-            fallback_only=m.get("fallback_only", True),
-            sync_writes=m.get("sync_writes", False),
-            min_relevance=m.get("min_relevance", 0.3),
-            max_results=m.get("max_results", 3),
-            timeout=m.get("timeout", 5.0),
-        )
     return _apply_defaults(cfg)
 
 
@@ -311,22 +276,3 @@ def get_persona(cfg: AgentBConfig, persona_name: Optional[str] = None,
     return cfg.personas.get("default", DEFAULT_PERSONAS["default"])
 
 
-def resolve_mem0(
-    cfg: AgentBConfig, agent_id: Optional[str] = None
-) -> tuple[str, bool]:
-    """Resolve (mem0_user_id, fallback_only) for an agent. Per-agent
-    AgentConfig overrides win; otherwise falls back to global Mem0Config
-    defaults; finally to the literal agent_id as the user_id."""
-    user_id = ""
-    fallback_only: Optional[bool] = None
-    if agent_id and agent_id in cfg.agents:
-        ac = cfg.agents[agent_id]
-        if ac.mem0_user_id:
-            user_id = ac.mem0_user_id
-        if ac.mem0_fallback_only is not None:
-            fallback_only = ac.mem0_fallback_only
-    if not user_id:
-        user_id = cfg.mem0.user_id or agent_id or "default"
-    if fallback_only is None:
-        fallback_only = cfg.mem0.fallback_only
-    return user_id, fallback_only

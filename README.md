@@ -34,7 +34,6 @@
 | 📚 **WikAI** | Auto-compiled knowledge base. The wiki is regenerated nightly from Mnemo. Never goes stale. |
 | 📬 **Sparks Bus** | Agent-to-agent messaging with delivery confirmation. A2A-compatible. |
 | 🪪 **Developer's Passport** | Safe behavioral-claim ingestion layer. Review queue + 32 detectors + provenance buckets. Dev-targeted beta. |
-| 🔗 **Mem0 Bridge** | "And Mem0, not instead of Mem0." Use both. |
 | 🔩 **Structured Facts** | Key-value store with confidence tracking. When semantic search is the wrong tool — names, settings, entity attributes — facts give you sub-millisecond exact lookup with a three-state confidence ladder. |
 
 ### 🚀 Get Started
@@ -83,19 +82,13 @@ Facts store `(entity, attribute, value)` triples in a local SQLite table with a 
 
 Four MCP tools ship with it: `mnemo_fact_save` to assert, `mnemo_fact_get` for single lookup, `mnemo_fact_query` for filtered lists, `mnemo_fact_demote` to mark something wrong without supplying a replacement. Reads are sub-millisecond. The confidence ladder means your agent's knowledge sharpens over time instead of accumulating stale guesses.
 
-### Works with Mem0
-
-Already using Mem0? Keep it. Mnemo runs as a fast local working-memory layer in front of your existing Mem0 deployment. When Mnemo has what you need: sub-100ms local recall. When local results are thin: automatic fallback to Mem0 for depth. Writes sync both ways.
-
-**"And Mem0" — not "instead of Mem0."**
-
 ### Deploy Your Way
 
 - **Shared** — One Mnemo for all agents. Cross-agent search and dreaming. Full team awareness.
 - **Isolated** — Separate Mnemo per agent or per customer. Zero bleed between tenants.
 - **Hybrid** — Shared for internal agents + isolated for customer-facing bots. This is what we run.
 
-Mem0 makes you choose one shared store. Mnemo lets you architect for your actual privacy and separation needs.
+Cloud memory services make you choose one shared store. Mnemo lets you architect for your actual privacy and separation needs.
 
 ---
 
@@ -422,7 +415,7 @@ We did not invent this. We adopted the best ideas in the air, credited them open
 - **[Andrej Karpathy's LLM Wiki](https://gist.github.com/karpathy)** (April 2026, 41,000+ bookmarks) — the pattern of compiling AI understanding into navigable artifacts instead of rederiving from raw data on every query. WikAI is our implementation of this pattern. Also the "idea file as publishing format" approach we use in `SETUP-PROMPT.md`.
 - **Nate B Jones — [OpenBrain](https://github.com/NateBJones-Projects/OB1) and [the analysis video](https://youtu.be/dxq7WtWxi44)** ([Substack](https://natesnewsletter.substack.com/), [YouTube](https://www.youtube.com/@NateBJones)) — the write-time vs query-time fork, and the hybrid architecture: structured data as source of truth, compiled wiki as the browsable layer over the top. Our three-layer architecture maps directly to Nate's hybrid model.
 - **[Google A2A Protocol](https://github.com/google/A2A)** — agent-to-agent standard. Sparks Bus speaks A2A's data shapes today; transport is the v2 roadmap.
-- **[Mem0](https://mem0.ai)** — the first to make portable AI memory feel real. Our Mem0 Bridge is "and Mem0, not instead of Mem0."
+- **[Mem0](https://mem0.ai)** — the first to make portable AI memory feel real. Inspired our early thinking about cross-session persistence.
 
 ---
 
@@ -455,9 +448,7 @@ The full v2.10 stack:
     │                              │  Compiler      │
     │                              └────────────────┘
     │
-    ├── passport_* ──────────────────────▶ Passport (user prefs)
-    │
-    └── Mem0 Bridge ─────────────────────▶ Mem0 (fallback depth layer)
+    └── passport_* ──────────────────────▶ Passport (user prefs)
 ```
 
 ## Health Monitoring
@@ -683,9 +674,8 @@ all human-readable progress goes to stderr.
 On failure, `ok` is `false`, exit code is `1`, and `error` describes which step blew up.
 
 The manifest covers service port + bind, reasoning + embedding provider,
-the v3 provenance/decay thresholds, an optional Mem0 bridge, systemd
-unit name, and a smoke test that exercises `/health` plus a save →
-recall round-trip. API keys are read from the install-time environment
+the v3 provenance/decay thresholds, systemd unit name, and a smoke test
+that exercises `/health` plus a save → recall round-trip. API keys are read from the install-time environment
 (named in the manifest via `api_key_env`), copied into a 0600-permission
 env file alongside the config, and loaded by the systemd unit.
 

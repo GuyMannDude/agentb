@@ -435,7 +435,7 @@ _Sources: {', '.join(f'{a} ({c} entries)' for a, c in sorted(agent_counts.items(
 
     log.info(f"Dream written: {json_path} + {md_path}")
 
-    # Also POST through /writeback so the dream hits L2 index + Mem0
+    # Also POST through /writeback so the dream hits L2 index
     bridge_url = os.getenv("MNEMO_URL", "http://localhost:50001")
     try:
         wb_response = httpx.post(
@@ -452,7 +452,7 @@ _Sources: {', '.join(f'{a} ({c} entries)' for a, c in sorted(agent_counts.items(
         )
         if wb_response.status_code == 200:
             wb_data = wb_response.json()
-            log.info(f"Dream synced to bridge (L2 + Mem0): memory_id={wb_data.get('memory_id', '?')}")
+            log.info(f"Dream synced to bridge (L2): memory_id={wb_data.get('memory_id', '?')}")
         else:
             log.warning(f"Bridge writeback returned {wb_response.status_code}")
     except Exception as e:

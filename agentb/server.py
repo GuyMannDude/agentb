@@ -28,8 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from agentb.config import (
-    load_config, AgentBConfig, get_agent_data_dir, get_persona, PersonaConfig, Mem0Config,
-    resolve_mem0,
+    load_config, AgentBConfig, get_agent_data_dir, get_persona, PersonaConfig,
 )
 from agentb.providers import create_resilient_reasoning, create_resilient_embedding
 from agentb.cache import L1Cache, L2Index, l3_scan, ContextChunk
@@ -301,18 +300,11 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     facts_path = Path(config.data_dir or os.path.expanduser("~/.agentb")) / "facts.sqlite"
     facts = FactsStore(facts_path)
 
-    # Initialize Mem0 bridge if configured
-    mem0 = None
-    if config.mem0 and config.mem0.enabled and config.mem0.api_key:
-        from agentb.mem0_bridge import Mem0Bridge
-        mem0 = Mem0Bridge(config.mem0)
-        log.info("Mem0 upstream bridge enabled")
-
     # Pre-initialize configured agents
     for agent_name in config.agents:
         tenants.get(agent_name)
 
-    app = FastAPI(title="Mnemo Cortex", description="Drop-in memory superhero for AI agents", version="3.0.0")
+    app = FastAPI(title="Mnemo Cortex", description="Drop-in memory superhero for AI agents", version="3.1.0")
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -344,12 +336,11 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="3.0.0",
+            version="3.1.0",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
             agents_configured=list(config.agents.keys()) + tenants.active_tenants,
-            # mem0_enabled is surfaced via the agents_configured list for now
             default_persona="default",
             sessions=total_sessions,
         )
@@ -490,22 +481,6 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             for c in kept:
                 if c.memory_id:
                     seen_memory_ids.add(c.memory_id)
-
-        # MEM0: Optional upstream fallback, per-agent routing
-        remaining = req.max_results - len(all_chunks)
-        if remaining > 0 and mem0:
-            mem0_user, fallback_only = resolve_mem0(config, req.agent_id)
-            if not fallback_only or len(all_chunks) == 0:
-                try:
-                    mem0_results = await mem0.search(
-                        query=req.prompt,
-                        user_id=mem0_user,
-                        top_k=min(remaining, config.mem0.max_results),
-                    )
-                    all_chunks.extend(mem0_results)
-                    cache_hits["MEM0"] = len(mem0_results)
-                except Exception as e:
-                    log.warning(f"Mem0 fallback failed: {e}")
 
         latency = (time.time() - start) * 1000
         return ContextResponse(
@@ -659,18 +634,6 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             raise
         except Exception as e:
             log.error(f"Writeback indexing failed: {e}")
-
-        # Mem0: optional upstream sync, per-agent user_id routing
-        if mem0 and config.mem0.sync_writes:
-            try:
-                mem0_user, _ = resolve_mem0(config, req.agent_id)
-                await mem0.add(
-                    messages=[{"role": "user", "content": req.summary + "\n" + "\n".join(req.key_facts)}],
-                    user_id=mem0_user,
-                    metadata={"session_id": req.session_id, "source": "mnemo-writeback"},
-                )
-            except Exception as e:
-                log.warning(f"Mem0 sync write failed: {e}")
 
         return WritebackResponse(
             status="archived", memory_id=memory_id, agent_id=req.agent_id,
