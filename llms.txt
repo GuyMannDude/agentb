@@ -6,6 +6,8 @@ Mnemo Cortex is a memory coprocessor that gives AI agents persistent recall acro
 
 v3 (Bridge 2.8.0, May 2026) added provenance + decay: every memory record carries `source` (user / tool / inferred / brain / migrated) and `category` (topology / current_state / doctrine / incident / identity / relationship / decision / session_log / unknown). Topology facts decay fast (warn at 30d, stale at 90d) so agents don't trust a stale IP from three months ago. Doctrine, incident, identity, and decision are perpetual. Recall returns a structured `stale_warning` field that programmatic agents branch on before acting.
 
+v3.0 (Phase 3, late May 2026) added Structured Facts — `(entity, attribute, value)` triples in a local SQLite store with a three-state confidence ladder (`verified > high_probability > false`), sub-millisecond reads, append-only audit history, and contradiction notifications over the bus + Discord. Four MCP tools: `mnemo_fact_save`, `mnemo_fact_get`, `mnemo_fact_query`, `mnemo_fact_demote`. Dreamer Stage 0.5 extracts conservative facts from the day's memories every night. v3.1 (May 23, 2026) retired the optional Mem0 cloud-deep fallback — local performance made the comparison race unnecessary.
+
 MIT licensed, $0 to run with Ollama, cloud providers (OpenRouter, OpenAI, Google, Anthropic) are optional fallbacks.
 
 ## Docs
@@ -21,7 +23,7 @@ MIT licensed, $0 to run with Ollama, cloud providers (OpenRouter, OpenAI, Google
 
 - [Claude Code](https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/claude-code): 60-second install for the Claude Code CLI.
 - [Claude Desktop](https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/claude-desktop): Drag-and-drop `.mcpb` bundle. Windows, macOS, Linux.
-- [MCP Bridge](https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/mcp-bridge): The generic MCP bridge — the same Node.js code every Mnemo Cortex integration spawns on stdio. v2.8.1.
+- [MCP Bridge](https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/mcp-bridge): The generic MCP bridge — the same Node.js code every Mnemo Cortex integration spawns on stdio. v2.9.0.
 - [LM Studio](https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/lmstudio): Native MCP, GUI configuration.
 - [AnythingLLM](https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/anythingllm): Desktop GUI, multi-workspace.
 - [Agent Zero](https://github.com/GuyMannDude/mnemo-cortex/tree/master/integrations/agent-zero): Autonomous Docker agents, in-container MCP.

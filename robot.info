@@ -11,9 +11,9 @@
 
   "name": "Mnemo Cortex",
   "tagline": "Persistent semantic memory for AI agents — local-first, decay-aware, cross-agent dreaming.",
-  "summary": "Memory coprocessor that gives AI agents persistent recall across sessions. Local SQLite + FTS5 working memory in front of an optional Mem0 cloud-deep fallback. Every memory record carries provenance (source + category) and decays on a category-aware schedule — topology facts age fast, doctrine stays perpetual, and recall returns a structured stale_warning when a fact is past its threshold so the agent verifies before acting. Cross-agent dreaming synthesizes every connected agent's memories into a shared nightly brief.",
+  "summary": "Memory coprocessor that gives AI agents persistent recall across sessions. Local SQLite + FTS5 working memory plus a structured Facts table (entity/attribute/value triples with a three-state confidence ladder) for the lookups semantic search gets wrong. Every memory record carries provenance (source + category) and decays on a category-aware schedule — topology facts age fast, doctrine stays perpetual, and recall returns a structured stale_warning when a fact is past its threshold so the agent verifies before acting. Cross-agent dreaming synthesizes every connected agent's memories into a shared nightly brief.",
   "backstory": "Guy Hutchins started exploring AI memory with ChatGPT 3.5 using basic text files. When OpenClaw launched and needed better memory, he gave Opie (Claude) a simple prompt: \"If you were a ClawdBot and your user wanted you to have the best memory you could build yourself, what would it look like?\" Opie was on extended thinking and just built it — no clarifying questions, no spec, just shipped a working memory system. Guy gave the same prompt to AL (ChatGPT), who built his own version independently. AL saw Opie's and said it was more in depth. Opie saw AL's and said it had ideas worth blending. The two versions merged. When it came time to name it, the first two suggestions were \"Mnemo\" and \"Cortex.\" Guy picked both. Mnemo Cortex.",
-  "version": "2.11.3",
+  "version": "3.1.0",
   "license": "MIT",
   "homepage": "https://projectsparks.ai/mnemo-cortex",
   "source": "https://github.com/GuyMannDude/mnemo-cortex",
@@ -28,9 +28,11 @@
     "Structured stale_warning field on recall — programmatic enforcement, not advisory prose.",
     "Regex-based category auto-suggester at write time — zero-cost, deterministic, returns matched keywords so the agent learns the conventions.",
     "Filterable recall — by source, category, age, and stale-severity.",
+    "Structured Facts (v3.0 / Phase 3) — (entity, attribute, value) triples in a local SQLite store with a three-state confidence ladder (verified > high_probability > false). Sub-millisecond exact lookup for the cases semantic search gets wrong (names, settings, entity attributes). Append-only audit history per fact; contradictions emit a notification over the bus + Discord webhook.",
+    "Dreamer Stage 0.5 — nightly automated fact extraction from the day's memories using a conservative direct-statements-only prompt; new facts post at confidence='high_probability', conflicts with existing 'verified' facts get rejected and batched into an end-of-run notification.",
     "Cross-agent dreaming — nightly synthesis of every connected agent's memories into a shared brief.",
     "WikAI — auto-compiled knowledge base regenerated nightly from Mnemo data.",
-    "Optional Mem0 bridge for cloud-deep recall fallback.",
+    "Embedding hosted fallback — embeddings default to local Ollama (nomic-embed-text). If Ollama is unreachable, falls back to hosted Google Gemini embeddings (Matryoshka-truncated to match the 768-dim store width). Graceful degradation at effectively zero cost.",
     "Per-agent memory namespaces — shared, isolated, or hybrid deployments.",
     "OAuth 2.1 Resource Server mode for remote MCP clients (Auth0-compatible).",
     "Developer Dump — JSONL trace of every MCP tool call through the bridge (tool, params, response, latency, ok/error). Off by default; flip on with MNEMO_DUMP=on. One file per agent per day, greppable with jq. CLI: mnemo-cortex dump list / dump tail <agent>."
@@ -45,6 +47,12 @@
         {"path": "/context", "method": "POST", "purpose": "Semantic recall with v3 filters (source, category, exclude_stale, max_age_days). Returns chunks with structured stale_warning when applicable."},
         {"path": "/writeback", "method": "POST", "purpose": "Save a memory with optional source/category/additional_tags. Returns category_used + category_suggested + match_keywords."},
         {"path": "/preflight", "method": "POST", "purpose": "Score an agent's draft response against memory context — PASS / ENRICH / WARN / BLOCK verdict."},
+        {"path": "/facts/{entity}/{attribute}", "method": "GET", "purpose": "Look up a single structured fact by (entity, attribute). Sub-millisecond exact lookup."},
+        {"path": "/facts", "method": "GET", "purpose": "Filtered fact list — by entity, attribute, value_contains, confidence."},
+        {"path": "/facts", "method": "POST", "purpose": "Assert a fact. Promotion ladder enforced: verified > high_probability > false; lower confidence rejected if existing is higher."},
+        {"path": "/facts/demote", "method": "POST", "purpose": "Mark a fact false without supplying a replacement value (escape hatch when the correct value isn't known yet)."},
+        {"path": "/facts/history/{entity}/{attribute}", "method": "GET", "purpose": "Read the append-only audit log of every change to a fact pair."},
+        {"path": "/facts/contradictions", "method": "GET", "purpose": "List per-run conflicts where Stage 0.5 extracted a fact that disagreed with an existing verified fact."},
         {"path": "/mcp", "method": "POST", "purpose": "MCP Streamable HTTP facade (OAuth 2.1 Resource Server mode for remote clients)."}
       ]
     },
@@ -53,14 +61,24 @@
       {"name": "mnemo_save", "purpose": "Save a memory with optional v3 provenance fields. Bridge auto-suggests category from content if omitted, returning the suggestion + matched keywords so the agent learns."},
       {"name": "mnemo_search", "purpose": "Cross-agent semantic search (gated by share mode). Same filter surface as mnemo_recall."},
       {"name": "mnemo_share", "purpose": "Toggle cross-agent sharing for the current session."},
-      {"name": "agent_startup", "purpose": "Neutral session-boot tool — loads the calling agent's lane file + cross-agent docs + recent memories + last dream brief."},
+      {"name": "mnemo_fact_get", "purpose": "Look up a single structured fact by (entity, attribute). Sub-millisecond exact lookup with confidence + evidence source."},
+      {"name": "mnemo_fact_query", "purpose": "Filtered fact list by entity / attribute / value_contains / confidence."},
+      {"name": "mnemo_fact_save", "purpose": "Assert a fact triple. Promotion ladder enforced (verified > high_probability > false); contradictions with an existing verified fact emit a bus + Discord notification."},
+      {"name": "mnemo_fact_demote", "purpose": "Mark a fact false without supplying a replacement — the escape hatch for the verified → false transition when the correct value isn't yet known."},
+      {"name": "agent_startup", "purpose": "Neutral session-boot tool (BRAIN_DIR gated) — loads the calling agent's lane file + cross-agent docs + recent memories + last dream brief."},
+      {"name": "opie_startup", "purpose": "Legacy alias of agent_startup pinned to Opie's lane. Behaves identically except for the identity-header text and the lane filename it loads."},
       {"name": "session_end", "purpose": "Drains auto-capture, saves a summary, commits the agent's brain lane. Tags as source=user, category=current_state."},
-      {"name": "wiki_search", "purpose": "Search the WikAI compiled knowledge base."},
-      {"name": "wiki_read", "purpose": "Read a specific WikAI page by path."},
       {"name": "read_brain_file", "purpose": "Read a file from the agent's brain repo (when BRAIN_DIR is configured)."},
       {"name": "write_brain_file", "purpose": "Write/update a file in the agent's brain repo."},
+      {"name": "list_brain_files", "purpose": "List files in the agent's brain repo, optionally filtered by subdirectory."},
+      {"name": "wiki_search", "purpose": "Search the WikAI compiled knowledge base (WIKI_DIR gated)."},
+      {"name": "wiki_read", "purpose": "Read a specific WikAI page by path."},
+      {"name": "wiki_index", "purpose": "List the top-level structure of the wiki (projects / entities / concepts / sources)."},
       {"name": "passport_observe_behavior", "purpose": "Submit a behavioral observation about an agent through the Passport pipeline (32 detectors + review queue)."},
-      {"name": "passport_get_user_context", "purpose": "Read the current agent's promoted Passport observations."}
+      {"name": "passport_get_user_context", "purpose": "Read the current agent's promoted Passport observations."},
+      {"name": "passport_list_pending_observations", "purpose": "List Passport observations awaiting review with detector verdicts."},
+      {"name": "passport_promote_observation", "purpose": "Promote a pending Passport observation into the agent's stable context."},
+      {"name": "passport_forget_or_override", "purpose": "Remove a Passport claim from the agent's context, or override it with a corrected version."}
     ],
     "cli": [
       {"command": "mnemo-cortex init", "purpose": "Interactive setup wizard — provider, models, agents."},
@@ -105,8 +123,8 @@
     "auth": "Loopback-only by default (127.0.0.1). Optional X-API-Key for non-localhost binds (legacy sk-mnemo-* tokens). OAuth 2.1 Resource Server mode for remote MCP clients (Auth0-compatible).",
     "outbound_calls": [
       "Reasoning provider for preflight + compaction (configurable; default OpenRouter; only fires on /preflight calls and during compaction passes).",
-      "Embedding provider for semantic indexing (default Ollama localhost; optional OpenAI / Google fallback).",
-      "Mem0 cloud — only when explicitly enabled in config. Disabled by default."
+      "Embedding provider for semantic indexing (default Ollama localhost; hosted Google Gemini embeddings as automatic fallback when Ollama is unreachable, Matryoshka-truncated to the 768-dim store width).",
+      "Bus + Discord webhook for fact-contradiction notifications when Dreamer Stage 0.5 finds a conflict with an existing verified fact (only fires on conflict; no per-message chatter)."
     ]
   },
 
@@ -128,12 +146,8 @@
       "a": "Yes — MIT open source, runs entirely on local hardware. If you use Ollama for reasoning + embedding it costs $0. Cloud providers (OpenRouter, OpenAI, Google) are optional fallbacks."
     },
     {
-      "q": "How is it different from Mem0?",
-      "a": "Mnemo is local-first working memory — sub-100ms recall, no API calls, runs on your machine. Mem0 is cloud-deep, slower but trained for long-term retention. They compose: Mnemo runs in front for speed, Mem0 fills depth when local results are thin. The bridge is built in."
-    },
-    {
-      "q": "How is it different from Zep / Letta?",
-      "a": "Mnemo runs entirely local with no required cloud component, supports multiple agents sharing memory natively (cross-agent dreaming), and ships a v3 provenance/decay system that explicitly distinguishes user-stated facts from agent-inferred ones. Zep and Letta are excellent but cloud-first and per-agent."
+      "q": "How is it different from Mem0, Zep, or Letta?",
+      "a": "Mnemo runs entirely local with no required cloud component, supports multiple agents sharing memory natively (cross-agent dreaming — the only AI memory system that does this), ships a v3 provenance/decay system that explicitly distinguishes user-stated facts from agent-inferred ones, and pairs semantic recall with a structured Facts table for the lookups search gets wrong. Mem0, Zep, and Letta are excellent but store memory per-agent, are cloud-first or cloud-only, and don't synthesize across agents."
     },
     {
       "q": "Does it work with Claude Code?",
@@ -150,6 +164,10 @@
     {
       "q": "What does the v3 decay system do?",
       "a": "Every memory record now carries provenance (source: user|tool|inferred|brain|migrated) and category (topology, doctrine, incident, identity, relationship, decision, current_state, session_log, unknown). Topology decays fast — warn at 30 days, stale at 90 — because IPs and ports change. Doctrine, incident, identity, and decision are perpetual. Recall returns a structured stale_warning field when a record exceeds its category's threshold, so an agent code-paths around it instead of trusting a 3-month-old fact."
+    },
+    {
+      "q": "What are Structured Facts (the v3.0 / Phase 3 addition)?",
+      "a": "Semantic search is great until your agent needs to remember a visitor's name — that's a key-value lookup, not a fuzzy match. Facts store (entity, attribute, value) triples in a local SQLite table with a three-state confidence ladder (verified > high_probability > false). Sub-millisecond reads, four MCP tools (mnemo_fact_save / mnemo_fact_get / mnemo_fact_query / mnemo_fact_demote), and an append-only audit history per fact. When a new fact contradicts an existing verified one, Mnemo fires a bus + Discord notification so the owning agent can adjudicate. Dreamer Stage 0.5 runs nightly to extract conservative direct-statement facts from the day's memories automatically."
     },
     {
       "q": "What does the regex auto-suggester do?",
@@ -169,7 +187,7 @@
     },
     {
       "q": "Does it phone home?",
-      "a": "No telemetry. Outbound calls only happen to providers you configure — reasoning + embedding (configurable, defaults to local Ollama), and Mem0 cloud only when explicitly enabled."
+      "a": "No telemetry. Outbound calls only happen to providers you configure — reasoning + embedding (configurable, defaults to local Ollama; hosted Google Gemini embeddings auto-fall-back only if Ollama is unreachable). One conditional outbound: Discord webhook for fact-contradiction notifications, off unless you wire a webhook URL."
     },
     {
       "q": "What's THE-LANE-PROTOCOL.md and do I need to read it?",
@@ -181,6 +199,6 @@
     }
   ],
 
-  "generated_at": "2026-05-16T15:35:00Z",
+  "generated_at": "2026-05-23T20:30:00Z",
   "spec_url": "./ROBOT-INFO-SPEC.md"
 }
