@@ -49,16 +49,6 @@
     "session_log_warn_days": 90
   },
 
-  // Mem0 upstream bridge — disabled by default. Flip enabled=true
-  // and set api_key_env to use Mem0 as the deep-recall fallback.
-  "mem0": {
-    "enabled": false,
-    "api_key_env": "MEM0_API_KEY",
-    "user_id": "default-agent",
-    "fallback_only": true,
-    "sync_writes": false
-  },
-
   // systemd user-unit name. Set enabled=false to skip the systemd
   // step (for environments without systemd, e.g. macOS or containers).
   "systemd": {

@@ -126,13 +126,6 @@ print(f"DECAY_CURRENT_WARN={int(decay.get('current_state_warn_days', 90))}")
 print(f"DECAY_REL_WARN={int(decay.get('relationship_warn_days', 180))}")
 print(f"DECAY_SLOG_WARN={int(decay.get('session_log_warn_days', 90))}")
 
-m0 = data.get("mem0") or {}
-print(f"MEM0_ENABLED={'1' if m0.get('enabled') else '0'}")
-print(f"MEM0_API_KEY_ENV={shquote(m0.get('api_key_env', 'MEM0_API_KEY'))}")
-print(f"MEM0_USER_ID={shquote(m0.get('user_id', 'default-agent'))}")
-print(f"MEM0_FALLBACK={'1' if m0.get('fallback_only', True) else '0'}")
-print(f"MEM0_SYNC={'1' if m0.get('sync_writes') else '0'}")
-
 sd = data.get("systemd") or {}
 print(f"SYSTEMD_ENABLED={'1' if sd.get('enabled', True) else '0'}")
 svc_name = sd.get("service_name", "mnemo-cortex")
@@ -279,16 +272,6 @@ PY
     echo "MNEMO_DECAY_SESSION_LOG_WARN_DAYS=$DECAY_SLOG_WARN"
     if [ -n "$REASON_API_KEY" ]; then
       echo "${REASON_API_KEY_ENV}=$REASON_API_KEY"
-    fi
-    if [ "$MEM0_ENABLED" = "1" ]; then
-      MEM0_KEY="${!MEM0_API_KEY_ENV:-}"
-      echo "MEM0_ENABLED=true"
-      echo "MEM0_USER_ID=$MEM0_USER_ID"
-      echo "MEM0_FALLBACK_ONLY=$([ "$MEM0_FALLBACK" = "1" ] && echo true || echo false)"
-      echo "MEM0_SYNC_WRITES=$([ "$MEM0_SYNC" = "1" ] && echo true || echo false)"
-      if [ -n "$MEM0_KEY" ]; then
-        echo "${MEM0_API_KEY_ENV}=$MEM0_KEY"
-      fi
     fi
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
