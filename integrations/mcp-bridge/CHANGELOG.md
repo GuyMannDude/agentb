@@ -4,7 +4,7 @@
 > `mnemo-cortex` package version step-for-step. That coupling loosened
 > once the main package added features the bridge didn't need to
 > change for — Phase 3 Facts wired through as a thin passthrough,
-> the Mem0 retirement was server-side only. Bridge currently at 2.9.0;
+> the Mem0 retirement was server-side only. Bridge currently at 2.10.0;
 > main package at 3.1.0. Versions between 2.0.1 and 2.6.4 shipped
 > server-side and tooling changes (Dreaming, WikAI, Sparks Bus,
 > Developer's Passport, new host integrations) that didn't materially
@@ -12,12 +12,14 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
-## Unreleased — pending 2.10.0
+## 2.10.0 — 2026-05-23 — Phase 3 Facts tools + host-local session IDs
 
-These bridge changes shipped under `version: "2.9.0"` in `package.json`
-without a further version bump. Drafting them here so they're not
-silent; recommend the next bridge release bumps to 2.10.0 and lifts
-this section into a dated entry.
+Two changes that had piled up under `version: "2.9.0"` in `package.json`
+without a further bump, now lifted into a proper release. No new code
+in this commit — just `package.json` 2.9.0 → 2.10.0 and the matching
+`McpServer` version constant in `server.js`. The features themselves
+landed on 2026-05-19 (host-local session IDs) and 2026-05-20 (Phase 3
+Facts bridge tools); the version bump just catches up.
 
 ### Phase 3 — four Facts tools wired through the bridge (2026-05-20)
 
