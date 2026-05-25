@@ -19,6 +19,7 @@ import time
 import hashlib
 import logging
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
@@ -304,7 +305,24 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     for agent_name in config.agents:
         tenants.get(agent_name)
 
-    app = FastAPI(title="Mnemo Cortex", description="Drop-in memory superhero for AI agents", version="3.1.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        log.info(f"⚡ Mnemo Cortex v3.1.1 — I remember everything so your agent doesn't have to.")
+        log.info(f"  Reasoning: {reasoner.status}")
+        log.info(f"  Embedding: {embedder.status}")
+        log.info(f"  Data dir:  {config.data_dir}")
+        log.info(f"  Agents:    {list(config.agents.keys()) or ['default']}")
+        log.info(f"  Personas:  {list(config.personas.keys())}")
+        log.info(f"  Live Wire: /ingest endpoint active — every exchange captured")
+        asyncio.create_task(maintenance_loop())
+        yield
+
+    app = FastAPI(
+        title="Mnemo Cortex",
+        description="Drop-in memory superhero for AI agents",
+        version="3.1.1",
+        lifespan=lifespan,
+    )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -877,17 +895,6 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                         log.info(f"Cold-archived {len(moved)} sessions for '{tenant_key}'")
                 except Exception as e:
                     log.warning(f"Cold archival error for '{tenant_key}': {e}")
-
-    @app.on_event("startup")
-    async def startup():
-        log.info(f"⚡ Mnemo Cortex v3.0.0 — I remember everything so your agent doesn't have to.")
-        log.info(f"  Reasoning: {reasoner.status}")
-        log.info(f"  Embedding: {embedder.status}")
-        log.info(f"  Data dir:  {config.data_dir}")
-        log.info(f"  Agents:    {list(config.agents.keys()) or ['default']}")
-        log.info(f"  Personas:  {list(config.personas.keys())}")
-        log.info(f"  Live Wire: /ingest endpoint active — every exchange captured")
-        asyncio.create_task(maintenance_loop())
 
     # ── Passport Lane (Phase 1) ──
     # Five MCP-facing routes under /passport/*. Self-contained: no shared state

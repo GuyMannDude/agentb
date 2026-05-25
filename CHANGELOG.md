@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.1.1 (2026-05-25) — Starlette 1.0 refactor + PYSEC-2026-161 pin
+
+**The problem.** PYSEC-2026-161 (Host-header bypass in Starlette < 1.0.1)
+shipped with no 0.x backport — the only fix is moving to the 1.x line.
+Until now Starlette was a transitive dep through FastAPI with no floor
+constraint, so the server could resolve to a vulnerable version. Real-world
+exposure is bounded (both deploys are Tailscale-private or localhost), but
+the deprecated lifecycle APIs that Starlette 1.x flags would eventually
+break us anyway.
+
+**What changed:**
+- `pyproject.toml`: added explicit `starlette>=1.0.1` dependency. Closes
+  the resolver gap where the security pin could be bypassed by anything
+  installed alongside.
+- `agentb/server.py`: migrated `@app.on_event("startup")` (deprecated in
+  Starlette 1.x, removed in a future release) to the FastAPI lifespan
+  asynccontextmanager pattern. The startup banner and the
+  `maintenance_loop()` task launcher moved into the new `lifespan()`
+  closure inside `create_app()`. The conditional `@app.middleware("http")`
+  auth decorator was left untouched — it still works under Starlette 1.1.0
+  without warnings. CORS middleware likewise stays on `app.add_middleware`.
+
+**Verified before deploy.** Throwaway venv with `starlette==1.1.0`,
+`fastapi==0.135.1`: `create_app()` returns clean under
+`-W error::DeprecationWarning`, lifespan fires the banner on TestClient
+startup, `/health` returns 200, and all 106 existing tests pass.
+
+No HTTP API or MCP tool signatures changed. The `/health` endpoint now
+reports `"version": "3.1.1"`.
+
 ## v3.1.0 (2026-05-23) — Mem0 bridge retired
 
 The optional Mem0 cloud-deep fallback path has been removed. Mnemo Cortex
