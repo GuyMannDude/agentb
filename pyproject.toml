@@ -25,7 +25,11 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastapi>=0.115",
+    # 0.136.3 is MAL-2026-4750 — tampered pyproject silently pulls 'fastar'
+    # typosquat via [standard] extra. We don't use [standard], so no payload
+    # got pulled, but pin away from the malicious release as defense-in-depth.
+    # Drop the != exclusion once PyPI yanks 0.136.3 or fastapi ships 0.136.4 clean.
+    "fastapi>=0.115,!=0.136.3",
     "starlette>=1.0.1",
     "uvicorn>=0.30",
     "pydantic>=2.8",
