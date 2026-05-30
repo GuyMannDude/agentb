@@ -91,6 +91,14 @@ MNEMO_DREAM_DISCORD_WEBHOOK = os.getenv("MNEMO_DREAM_DISCORD_WEBHOOK", "")
 # Disable Stage 0.5 extraction entirely (e.g. to debug pure-synthesis runs)
 DREAM_SKIP_FACTS = os.getenv("DREAM_SKIP_FACTS", "").lower() in ("1", "true", "yes")
 
+# Git-sync wedge (opt-in). When enabled, the Dreamer reports whether its watched
+# git checkouts have uncommitted changes, unpushed commits, or are behind their
+# remote — catching the "edited a repo, forgot to push, next machine pulls stale"
+# drift the recall-side facts seeder can't see. Independent of the (unbuilt) full
+# Dreaming-Brain reconciliation stage. Each clone only sees its OWN local state,
+# so for full coverage of a multi-machine setup run the check on each editing host.
+MNEMO_DREAM_GIT_SYNC_CHECK = os.getenv("MNEMO_DREAM_GIT_SYNC_CHECK", "").lower() in ("1", "true", "yes")
+
 def _discover_agentb_agents() -> list[str]:
     """Discover real agents from ~/.agentb/agents/*/memory/ directories.
 
@@ -692,6 +700,132 @@ def notify_contradictions(contradictions: list[dict], dream_date: str) -> None:
         log.info("  MNEMO_DREAM_DISCORD_WEBHOOK not set — skipping discord (set it to enable)")
 
 
+def _git_sync_repos() -> list[Path]:
+    """Repos the git-sync wedge watches. Default: the Dreamer's own checkout
+    (catches 'running stale/divergent dreamer code' — the exact drift that bit
+    the artforge checkout) plus the brain repo when BRAIN_DIR is set (Opie's
+    portable-brain sync spec). MNEMO_DREAM_GIT_SYNC_REPOS (comma-separated paths)
+    overrides the defaults."""
+    override = os.getenv("MNEMO_DREAM_GIT_SYNC_REPOS", "").strip()
+    if override:
+        return [Path(p.strip()).expanduser() for p in override.split(",") if p.strip()]
+    repos = [Path(__file__).resolve().parent]
+    brain = os.getenv("BRAIN_DIR", "").strip()
+    if brain:
+        repos.append(Path(brain).expanduser())
+    return repos
+
+
+def check_git_sync() -> str | None:
+    """Git-sync status of each watched repo. Returns a markdown block, or None
+    when disabled. Best-effort: any git failure becomes a ⚠️ line, never raises.
+    Reports per repo: dirty working tree, unpushed commits, behind upstream.
+    Upstream is resolved via @{u} so it works whether the branch tracks
+    origin/main or origin/master."""
+    if not MNEMO_DREAM_GIT_SYNC_CHECK:
+        return None
+
+    import subprocess
+
+    def _git(repo: Path, *args: str) -> tuple[int, str]:
+        try:
+            p = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True, text=True, timeout=30,
+            )
+            # rstrip (not strip): porcelain status uses a leading-space column
+            # on the first line that strip() would eat, shifting the path parse.
+            return p.returncode, (p.stdout or p.stderr).rstrip()
+        except (OSError, subprocess.SubprocessError) as e:
+            return 1, str(e)
+
+    blocks: list[str] = []
+    for repo in _git_sync_repos():
+        label = repo.name
+        if not (repo / ".git").exists():
+            blocks.append(f"**{label}** (`{repo}`)\n- ⚠️ not a git repo — skipped")
+            continue
+
+        lines = [f"**{label}** (`{repo}`)"]
+
+        rc, out = _git(repo, "status", "--porcelain")
+        if rc != 0:
+            lines.append(f"- ⚠️ could not read working tree: {out[:160]}")
+        elif out:
+            changed = [ln[3:] for ln in out.splitlines()]
+            shown = ", ".join(changed[:8]) + (f" (+{len(changed) - 8} more)" if len(changed) > 8 else "")
+            lines.append(f"- ⚠️ {len(changed)} uncommitted change(s): {shown}")
+        else:
+            lines.append("- ✅ working tree clean")
+
+        rc, upstream = _git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+        if rc != 0:
+            lines.append("- ⚠️ no upstream tracking branch — skipping ahead/behind")
+            blocks.append("\n".join(lines))
+            continue
+
+        _git(repo, "fetch", "--quiet")
+
+        rc, out = _git(repo, "log", "--oneline", f"{upstream}..HEAD")
+        if rc == 0 and out:
+            lines.append(f"- ⚠️ {len(out.splitlines())} unpushed commit(s); newest: {out.splitlines()[0]}")
+        elif rc == 0:
+            lines.append("- ✅ no unpushed commits")
+
+        rc, out = _git(repo, "log", "--oneline", f"HEAD..{upstream}")
+        if rc == 0 and out:
+            lines.append(f"- ⚠️ {len(out.splitlines())} behind {upstream} — another machine pushed; pull to refresh")
+        elif rc == 0:
+            lines.append(f"- ✅ up to date with {upstream}")
+
+        blocks.append("\n".join(lines))
+
+    return "### git sync status\n" + "\n\n".join(blocks)
+
+
+def notify_git_sync(sync_block: str, dream_date: str) -> None:
+    """Push the git-sync block to bus + Discord. Best-effort, same optional/
+    log-don't-raise contract as notify_contradictions. Called only when there's
+    actionable drift (a ⚠️) so clean nights stay quiet."""
+    if MNEMO_DREAM_BUS_URL:
+        if MNEMO_DREAM_BUS_FROM and MNEMO_DREAM_BUS_TARGETS:
+            for target in MNEMO_DREAM_BUS_TARGETS:
+                try:
+                    envelope = {
+                        "mesh_version": "0.5",
+                        "from": MNEMO_DREAM_BUS_FROM,
+                        "to": target,
+                        "subject": f"dream-git-sync-drift-{dream_date}",
+                        "body": {
+                            "source": "dreamer",
+                            "kind": "git_sync",
+                            "dream_date": dream_date,
+                            "status": sync_block,
+                            "guidance": "A watched git repo has drift. Commit/push on the editing host, or pull on this host, to reconcile before the next session reads stale state.",
+                        },
+                    }
+                    r = httpx.post(f"{MNEMO_DREAM_BUS_URL}/mesh/ping", json=envelope, timeout=10.0)
+                    if r.status_code in (200, 201, 202):
+                        log.info(f"  git-sync bus notification → {target}: ok")
+                    else:
+                        log.warning(f"  git-sync bus notification → {target}: HTTP {r.status_code} {r.text[:200]}")
+                except httpx.HTTPError as e:
+                    log.warning(f"  git-sync bus notification → {target}: {e}")
+        else:
+            log.warning("  MNEMO_DREAM_BUS_URL set but FROM/TARGETS missing — skipping git-sync bus notification")
+
+    if MNEMO_DREAM_DISCORD_WEBHOOK:
+        try:
+            content = f"🧠 Brain/repo git-sync drift (dream {dream_date}):\n{sync_block}"
+            r = httpx.post(MNEMO_DREAM_DISCORD_WEBHOOK, json={"content": content[:1900]}, timeout=10.0)
+            if r.status_code in (200, 204):
+                log.info("  git-sync discord webhook posted")
+            else:
+                log.warning(f"  git-sync discord webhook returned {r.status_code}")
+        except httpx.HTTPError as e:
+            log.warning(f"  git-sync discord webhook failed: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -783,10 +917,21 @@ def main():
     dream_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     notify_contradictions(contradictions, dream_date)
 
+    # Git-sync wedge: surface repo drift (uncommitted / unpushed / behind remote).
+    # Always logged + printed for cron.log visibility; pushed to bus + Discord only
+    # when there's actionable drift, so clean nights stay quiet.
+    sync_block = check_git_sync()
+    if sync_block:
+        log.info("Git-sync check:\n" + sync_block)
+        if "⚠️" in sync_block:
+            notify_git_sync(sync_block, dream_date)
+
     print(f"\n{'='*60}")
     print(f"DREAM COMPLETE — {dream_date}")
     print(f"{'='*60}")
     print(dream_text)
+    if sync_block:
+        print(f"\n{sync_block}")
 
 
 if __name__ == "__main__":

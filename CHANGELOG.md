@@ -1,5 +1,36 @@
 # Changelog
 
+## v3.2.0 (2026-05-29) — dreamer: opt-in git-sync wedge
+
+**The problem.** The nightly Dreamer runs `mnemo-dream.py` from a checkout on
+the host machine. Two drift modes are invisible to it: (1) the Dreamer's own
+checkout going stale or divergent from the repo (this actually happened — a
+checkout drifted 35 commits behind with uncommitted local edits, so the live
+Dreamer silently lacked features that had shipped), and (2) a brain/plan repo
+edited on one machine but never pushed, so the next machine pulls stale state.
+The facts seeder closes recall-side drift but can't see git state.
+
+**What changed (additive, opt-in, default-off):**
+- New `check_git_sync()` in `mnemo-dream.py` reports, per watched repo, whether
+  the working tree is dirty, has unpushed commits, or is behind its upstream.
+  Upstream is resolved via `@{u}` so it works whether the branch tracks
+  `origin/main` or `origin/master`.
+- Watched repos default to the Dreamer's own checkout plus the brain repo when
+  `BRAIN_DIR` is set; `MNEMO_DREAM_GIT_SYNC_REPOS` (comma-separated paths)
+  overrides.
+- Results are always logged and appended to the printed dream report; drift
+  (any `⚠️`) is also pushed to the bus + Discord webhook via `notify_git_sync()`,
+  mirroring the existing `notify_contradictions` best-effort contract. Clean
+  nights stay quiet.
+- Gated behind `MNEMO_DREAM_GIT_SYNC_CHECK` (`1`/`true`/`yes`). Fully
+  best-effort: every git call is timeout-bounded and exception-guarded, so the
+  check can never crash the dream run.
+
+**Scope note.** Each checkout only sees its *own* local git state. An
+artforge-side check catches "behind remote" and that host's own dirty/unpushed
+state; catching another machine's *uncommitted* edits requires running the
+check on that machine too. No server/API change — Dreamer script only.
+
 ## v3.1.3 (2026-05-28) — auth: clients authenticate with `MNEMO_AUTH_TOKEN`
 
 Defense-in-depth on top of network controls (firewall / loopback bind). The
