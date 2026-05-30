@@ -1,0 +1,62 @@
+# Mnemo Cortex — facts seed (example)
+#
+# Hand-curated canonical truth claims. The loader (seed-facts.py) turns each
+# entry into a verified Fact in the Phase 3 Facts table. A fact at
+# confidence=verified outranks any contradicting fuzzy session-log recall, which
+# closes the stale-recall failure mode: an agent "remembering" an old value
+# simply because nothing canonical contradicted it.
+#
+# Copy this file to seed-facts.yaml and replace the rows with your own truths.
+#
+# Field rules
+#   entity:          lowercase; hyphen or underscore for multi-word
+#   attribute:       snake_case
+#   value:           human-readable; a full sentence is fine. Add disambiguators
+#                    ("NOT x, NOT y") for things that have drifted before.
+#   confidence:      optional; defaults to "verified". Ladder: verified >
+#                    high_probability > false.
+#   evidence_source: where the truth comes from (file:line, URL, ticket, doc).
+#
+# These rows use generic role names on purpose — swap in your real entities.
+
+facts:
+
+  # ── Agents ──────────────────────────────────────────────────────
+  - entity: agent-a
+    attribute: model
+    value: "claude-opus-4-8"
+    evidence_source: "docs/agents.md:12"
+
+  - entity: agent-a
+    attribute: host_machine
+    value: "workstation"
+    evidence_source: "docs/agents.md:13"
+
+  - entity: agent-b
+    attribute: role
+    value: "Architecture and planning. Works through conversation, NOT on-machine."
+    evidence_source: "docs/agents.md:30"
+
+  # A retired entity — seed its status so old recalls get superseded instead of
+  # resurfacing as if it were still live. This is the highest-value pattern here.
+  - entity: agent-legacy
+    attribute: status
+    value: "RETIRED 2026-01-15. Replaced by agent-a. No active process."
+    evidence_source: "docs/agents.md:44"
+
+  # ── Machines ────────────────────────────────────────────────────
+  - entity: workstation
+    attribute: ip
+    value: "10.0.0.4 (LAN, static; NOT the old DHCP 10.0.0.22)"
+    evidence_source: "docs/network.md:8"
+
+  - entity: server
+    attribute: role
+    value: "Mnemo Cortex production host. Reach it by hostname, never localhost."
+    evidence_source: "docs/network.md:20"
+
+  # ── Services ────────────────────────────────────────────────────
+  - entity: mnemo-cortex
+    attribute: port
+    value: "50001"
+    evidence_source: "docs/stack.md:5"

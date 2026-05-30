@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.3.0 (2026-05-30) — public Facts seeder + install wiring
+
+**The problem.** An empty Phase 3 Facts table is a trap. Recall (fuzzy) and
+Facts (exact) answer different questions, but when no canonical Fact exists, a
+stale session-log memory wins a lookup it should lose — an agent "remembers" an
+old model name or a retired port because nothing contradicted it. Every operator
+hits this; the fix (seed the truths you already know at `confidence=verified`)
+existed only as private Project Sparks tooling.
+
+**What changed (additive — new `tools/`, no service-code behavior change):**
+- `tools/seed-facts.py` — generalized loader. Reads a YAML of
+  `(entity, attribute, value)` claims and asserts each as a Fact. Idempotent:
+  re-runs skip matches, report contradictions, and write nothing in `--dry-run`.
+  Runs on the bundled `httpx` + `pyyaml` (no new deps). Local-first
+  (`MNEMO_URL` default `http://127.0.0.1:50001`); optional `MNEMO_AUTH_TOKEN`
+  sent as `X-API-KEY` for auth-enforcing (non-loopback) deployments.
+- `tools/seed-facts.example.yaml` — worked example with generic role names,
+  including the high-value "retired entity" supersession pattern.
+- `tools/seed-facts-post-commit.sh` + `tools/seed-facts-nightly.sh` — opt-in git
+  post-commit hook and nightly cron that re-seed when the YAML changes.
+  Self-contained, env-configurable, no scheduler assumptions.
+- `tools/README.md` — quick start, env reference, idempotency/conflict notes.
+- `robot.install` gains a `facts_seed` block (disabled by default). When
+  enabled, `robot-install.sh` runs the seeder after the smoke test and can
+  install the post-commit hook and/or nightly cron. Best-effort: a seeding
+  hiccup is reported in its own `facts_seed` step but never fails the install.
+- `robot.info` / `llms.txt` refreshed: version bumped to match the package
+  (the manifest had drifted to 3.1.0), `facts_seed` documented in the install
+  block, a new common-question on seeding, `pyyaml` added to the dependency list.
+
 ## v3.2.0 (2026-05-29) — dreamer: opt-in git-sync wedge
 
 **The problem.** The nightly Dreamer runs `mnemo-dream.py` from a checkout on

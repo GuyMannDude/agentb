@@ -17,7 +17,8 @@
 #       "pip":        {"ok": true},
 #       "config":     {"ok": true, "config_path": "...", "data_dir": "..."},
 #       "systemd":    {"ok": true, "service": "mnemo-cortex", "port": 50001},
-#       "smoke_test": {"ok": true, "health": "ok", "memory_id": "...", "recall_hits": 1}
+#       "smoke_test": {"ok": true, "health": "ok", "memory_id": "...", "recall_hits": 1},
+#       "facts_seed": {"ok": true, "skipped": true}   // unless enabled in the manifest
 #     },
 #     "error": "<reason>"        // only present when ok=false
 #   }
@@ -69,6 +70,93 @@ if not ok and err:
 print(json.dumps(out, indent=2))
 PY
   [ "$ok" = "true" ] && exit 0 || exit 1
+}
+
+# Optional post-step: seed the Phase 3 Facts table from the manifest's YAML, and
+# (opt-in) install the post-commit hook + nightly cron that keep it in sync.
+# Best-effort — a seeding failure is reported in its own step but never fails the
+# overall install, since the service itself is already up by the time this runs.
+do_facts_seed() {
+  if [ "$FACTS_ENABLED" != "1" ] || [ "$DRY_RUN" = "1" ]; then
+    log "facts seed — skipped"
+    set_step facts_seed '{"ok": true, "skipped": true}'
+    return 0
+  fi
+
+  # Resolve a relative YAML path against the repo dir.
+  local yaml="$FACTS_YAML"
+  case "$yaml" in
+    /*) : ;;
+    *) yaml="$REPO_DIR/$yaml" ;;
+  esac
+
+  if [ ! -f "$yaml" ]; then
+    log "facts seed — yaml not found: $yaml"
+    set_step facts_seed "$(facts_step_json false "$yaml" false false "yaml not found: $yaml")"
+    return 1
+  fi
+
+  log "facts seed — $yaml"
+  local py="$VENV_DIR/bin/python"
+  [ -x "$py" ] || py="python3"
+
+  local out
+  if ! out=$(MNEMO_URL="http://$SVC_HOST:$SVC_PORT" "$py" "$REPO_DIR/tools/seed-facts.py" --yaml "$yaml" 2>&1); then
+    echo "$out" >&2
+    set_step facts_seed "$(facts_step_json false "$yaml" false false "seeder failed (see stderr)")"
+    return 1
+  fi
+  echo "$out" >&2
+
+  # Opt-in watchers — best-effort, reported but never fatal. Both operate on the
+  # repo that holds the YAML (FACTS_HOOK_REPO), so both require it to be set.
+  local hook_done=false cron_done=false
+  if [ "$FACTS_HOOK" = "1" ] && [ -n "$FACTS_HOOK_REPO" ] && [ -d "$FACTS_HOOK_REPO/.git" ]; then
+    if ln -sf "$REPO_DIR/tools/seed-facts-post-commit.sh" "$FACTS_HOOK_REPO/.git/hooks/post-commit" 2>/dev/null; then
+      hook_done=true
+      log "facts seed — post-commit hook installed in $FACTS_HOOK_REPO"
+    fi
+  fi
+  if [ "$FACTS_CRON" = "1" ] && command -v crontab >/dev/null 2>&1; then
+    if [ -z "$FACTS_HOOK_REPO" ]; then
+      log "facts seed — nightly_cron requested but watcher.hook_repo is empty; skipping cron"
+    elif crontab -l 2>/dev/null | grep -qF "seed-facts-nightly.sh"; then
+      cron_done=true
+    else
+      local line="$FACTS_CRON_MIN $FACTS_CRON_HOUR * * * SEED_FACTS_REPO=$FACTS_HOOK_REPO MNEMO_URL=http://$SVC_HOST:$SVC_PORT $REPO_DIR/tools/seed-facts-nightly.sh"
+      if { crontab -l 2>/dev/null; echo "$line"; } | crontab - 2>/dev/null; then
+        cron_done=true
+        log "facts seed — nightly cron installed ($FACTS_CRON_MIN $FACTS_CRON_HOUR * * *)"
+      fi
+    fi
+  fi
+
+  set_step facts_seed "$(facts_step_json true "$yaml" "$hook_done" "$cron_done" "")"
+  return 0
+}
+
+# Build the facts_seed step object as valid JSON regardless of what characters
+# the YAML path contains (it flows in from the manifest / repo dir). Hand-built
+# f-string JSON would break json.loads in set_step on a path with a quote.
+facts_step_json() {
+  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json, sys
+ok, yaml_path, hook, cron, err = sys.argv[1:6]
+out = {"ok": ok == "true"}
+if out["ok"]:
+    out.update({"yaml": yaml_path,
+                "post_commit_hook": hook == "true",
+                "nightly_cron": cron == "true"})
+else:
+    out["error"] = err
+print(json.dumps(out))
+PY
+}
+
+# Run the optional facts-seed step, then emit the final success object.
+finish() {
+  do_facts_seed || true
+  emit true
 }
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -137,6 +225,16 @@ print(f"SYSTEMD_SVC={shquote(svc_name)}")
 st = data.get("smoke_test") or {}
 print(f"SMOKE_ENABLED={'1' if st.get('enabled', True) else '0'}")
 print(f"SMOKE_AGENT={shquote(st.get('agent_id', 'robot-install-smoke'))}")
+
+fs = data.get("facts_seed") or {}
+print(f"FACTS_ENABLED={'1' if fs.get('enabled', False) else '0'}")
+print(f"FACTS_YAML={shquote(fs.get('yaml', './tools/seed-facts.example.yaml'))}")
+fw = fs.get("watcher") or {}
+print(f"FACTS_HOOK={'1' if fw.get('post_commit_hook', False) else '0'}")
+print(f"FACTS_HOOK_REPO={shquote(expand(fw.get('hook_repo', '')))}")
+print(f"FACTS_CRON={'1' if fw.get('nightly_cron', False) else '0'}")
+print(f"FACTS_CRON_HOUR={int(fw.get('cron_hour', 3))}")
+print(f"FACTS_CRON_MIN={int(fw.get('cron_minute', 10))}")
 PY
 )
 
@@ -325,7 +423,7 @@ fi
 if [ "$SMOKE_ENABLED" != "1" ] || [ "$DRY_RUN" = "1" ]; then
   log "step 5/5 — smoke test (skipped)"
   set_step smoke_test '{"ok": true, "skipped": true}'
-  emit true
+  finish
 fi
 
 log "step 5/5 — smoke test"
@@ -368,7 +466,7 @@ hits=$(echo "$recall" | python3 -c 'import sys,json;d=json.load(sys.stdin);print
 
 if [ "${hits:-0}" -ge 1 ]; then
   set_step smoke_test "{\"ok\": true, \"health\": \"ok\", \"memory_id\": \"$memory_id\", \"recall_hits\": $hits, \"marker\": \"$MARKER\"}"
-  emit true
+  finish
 else
   set_step smoke_test "{\"ok\": false, \"health\": \"ok\", \"memory_id\": \"$memory_id\", \"recall_hits\": $hits, \"marker\": \"$MARKER\"}"
   emit false "smoke test: marker $MARKER saved as $memory_id but did not return on recall"

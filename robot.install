@@ -60,5 +60,22 @@
   "smoke_test": {
     "enabled": true,
     "agent_id": "robot-install-smoke"
+  },
+
+  // Optional: seed the Phase 3 Facts table from a YAML of canonical truths so
+  // exact lookups don't lose to stale fuzzy recall. Disabled by default. Point
+  // "yaml" at your own file (see tools/seed-facts.example.yaml for the schema).
+  // The watcher block can install a git post-commit hook and/or a nightly cron
+  // that re-seed when the YAML changes — both off by default.
+  "facts_seed": {
+    "enabled": false,
+    "yaml": "./tools/seed-facts.example.yaml",
+    "watcher": {
+      "post_commit_hook": false,
+      "hook_repo": "",
+      "nightly_cron": false,
+      "cron_hour": 3,
+      "cron_minute": 10
+    }
   }
 }

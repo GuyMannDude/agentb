@@ -13,7 +13,7 @@
   "tagline": "Persistent semantic memory for AI agents — local-first, decay-aware, cross-agent dreaming.",
   "summary": "Memory coprocessor that gives AI agents persistent recall across sessions. Local SQLite + FTS5 working memory plus a structured Facts table (entity/attribute/value triples with a three-state confidence ladder) for the lookups semantic search gets wrong. Every memory record carries provenance (source + category) and decays on a category-aware schedule — topology facts age fast, doctrine stays perpetual, and recall returns a structured stale_warning when a fact is past its threshold so the agent verifies before acting. Cross-agent dreaming synthesizes every connected agent's memories into a shared nightly brief.",
   "backstory": "Guy Hutchins started exploring AI memory with ChatGPT 3.5 using basic text files. When OpenClaw launched and needed better memory, he gave Opie (Claude) a simple prompt: \"If you were a ClawdBot and your user wanted you to have the best memory you could build yourself, what would it look like?\" Opie was on extended thinking and just built it — no clarifying questions, no spec, just shipped a working memory system. Guy gave the same prompt to AL (ChatGPT), who built his own version independently. AL saw Opie's and said it was more in depth. Opie saw AL's and said it had ideas worth blending. The two versions merged. When it came time to name it, the first two suggestions were \"Mnemo\" and \"Cortex.\" Guy picked both. Mnemo Cortex.",
-  "version": "3.1.0",
+  "version": "3.3.0",
   "license": "MIT",
   "homepage": "https://projectsparks.ai/mnemo-cortex",
   "source": "https://github.com/GuyMannDude/mnemo-cortex",
@@ -95,7 +95,13 @@
     "manual_docs": "https://github.com/GuyMannDude/mnemo-cortex#install-guide",
     "platforms": ["linux", "macos", "windows-wsl2"],
     "runtime": "python>=3.11",
-    "dependencies": ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2.8", "numpy>=1.24", "httpx>=0.25"]
+    "dependencies": ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2.8", "numpy>=1.24", "httpx>=0.25", "pyyaml>=6.0"],
+    "facts_seed": {
+      "tool": "./tools/seed-facts.py",
+      "example": "./tools/seed-facts.example.yaml",
+      "docs": "./tools/README.md",
+      "purpose": "Seed the Phase 3 Facts table from a YAML of canonical truths so exact lookups don't lose to stale fuzzy recall. Opt-in via the robot.install facts_seed block (disabled by default); also installable as a git post-commit hook and/or nightly cron to stay in sync."
+    }
   },
 
   "compatibility": {
@@ -170,6 +176,10 @@
       "a": "Semantic search is great until your agent needs to remember a visitor's name — that's a key-value lookup, not a fuzzy match. Facts store (entity, attribute, value) triples in a local SQLite table with a three-state confidence ladder (verified > high_probability > false). Sub-millisecond reads, four MCP tools (mnemo_fact_save / mnemo_fact_get / mnemo_fact_query / mnemo_fact_demote), and an append-only audit history per fact. When a new fact contradicts an existing verified one, Mnemo fires a bus + Discord notification so the owning agent can adjudicate. Dreamer Stage 0.5 runs nightly to extract conservative direct-statement facts from the day's memories automatically."
     },
     {
+      "q": "How do I seed the Facts table so recall stops drifting?",
+      "a": "An empty Facts table is the trap: a fuzzy session-log memory wins a lookup it should lose, so an agent 'remembers' a stale value because nothing canonical contradicted it. Seed the truths you already know. Copy tools/seed-facts.example.yaml to seed-facts.yaml, fill in your (entity, attribute, value) rows, and run tools/seed-facts.py — each becomes a verified Fact that outranks contradicting recall. It's idempotent (re-runs skip matches, flag conflicts). Enable the robot.install facts_seed block to seed at install, and optionally wire the post-commit hook + nightly cron (tools/) so the table re-seeds whenever your YAML changes. See tools/README.md."
+    },
+    {
       "q": "What does the regex auto-suggester do?",
       "a": "When you save a memory without specifying a category, a regex over the summary + key_facts picks one and returns it in the save response with the matched keywords. Deterministic, zero cost, zero latency. The agent sees what was picked and can override on the next save if it was wrong."
     },
@@ -199,6 +209,6 @@
     }
   ],
 
-  "generated_at": "2026-05-23T20:30:00Z",
+  "generated_at": "2026-05-30T15:00:00Z",
   "spec_url": "./ROBOT-INFO-SPEC.md"
 }
