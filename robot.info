@@ -7,7 +7,7 @@
   // Single JSON object, UTF-8. JavaScript-style // line comments are
   // stripped before parsing — manifests stay annotatable.
 
-  "robot_info_version": "0.1",
+  "robot_info_version": "0.2",
 
   "name": "Mnemo Cortex",
   "tagline": "Persistent semantic memory for AI agents — local-first, decay-aware, cross-agent dreaming.",
@@ -209,6 +209,66 @@
     }
   ],
 
-  "generated_at": "2026-05-30T15:00:00Z",
+  // ─── v0.2 user-facing layer ──────────────────────────────────────────
+  // Plain-language sections an AI reads to explain Mnemo to a non-developer
+  // user. Written for the human on the other side of the AI, not for a dev.
+
+  // Read when a user asks "what is this?" / "why would I use it?"
+  "why": "Your AI forgets everything between conversations. Every new session starts from zero — no memory of what you discussed, what you decided, what you built together. Mnemo Cortex fixes that: it gives your AI persistent memory that survives across sessions. Save the context that matters, recall it later, and let your agents consolidate what they learned overnight while you sleep. It runs on your own machine, your data stays in a file you own, and it's free with a local model.",
+
+  // Read when a user asks "how do I install this?" Written for someone who
+  // has never opened a terminal. The easiest real path is the Claude Desktop
+  // one-click bundle (no clone, no Node, no JSON editing).
+  "install_steps": [
+    {"step": 1, "instruction": "Decide where Mnemo runs. The simplest setup runs it right on your own computer — no server, no cloud account."},
+    {"step": 2, "instruction": "If you use Claude Desktop: download the one-click '.mcpb' bundle from integrations/claude-desktop/ and drag it onto Claude Desktop's Settings → Extensions. No cloning, no Node, no config files to edit. Works on Windows, macOS, and Linux."},
+    {"step": 3, "instruction": "If you use Claude Code (the terminal tool): follow the 60-second guide in integrations/claude-code/ — one command wires Mnemo in as a memory tool."},
+    {"step": 4, "instruction": "For anything scripted or hands-off (CI, an AI agent installing it for you): run ./robot-install.sh. It reads the robot.install manifest, sets everything up with zero prompts, and prints a JSON result. Exit 0 means it worked."},
+    {"step": 5, "instruction": "To run it free with no cloud calls, install Ollama first (ollama.com) — Mnemo uses it for the local AI work. Cloud providers (OpenRouter, OpenAI, Google) are optional fallbacks if you'd rather not run a local model."}
+  ],
+
+  // Read when a user asks "does this work with X?" Name + how to connect.
+  "works_with": [
+    {"name": "Claude Desktop", "how": "One-click .mcpb bundle — integrations/claude-desktop/. No clone, no JSON editing."},
+    {"name": "Claude Code", "how": "60-second install — integrations/claude-code/. Gives CC memory that persists across sessions."},
+    {"name": "LM Studio", "how": "Native MCP, configured in the GUI — integrations/lmstudio/."},
+    {"name": "AnythingLLM", "how": "Add as an MCP server; chat mode fires the tools automatically — integrations/anythingllm/."},
+    {"name": "Hermes Agent", "how": "First-class MCP (Hermes v0.12.0+) — integrations/hermes/."},
+    {"name": "Agent Zero", "how": "In-container MCP for autonomous Docker agents — integrations/agent-zero/."},
+    {"name": "Ollama / Open WebUI / llama.cpp / LobeChat / Jan", "how": "Any MCP-capable host connects through the same Node bridge. See the README integrations section."},
+    {"name": "FrankenClaw", "how": "Sibling product (not coupled): FrankenClaw gives agents hands (search, vision, browser); Mnemo gives them memory. Pair them for a fully-equipped agent."},
+    {"name": "Disco-Bus", "how": "Sibling product (not coupled): Disco-Bus is agent-to-agent messaging. Pair with Mnemo when agents need both shared memory and direct comms."}
+  ],
+
+  // Read when a user asks "how do I customize / extend this?"
+  "extensibility": "Mnemo is an MCP server, so any AI platform that speaks MCP can connect to it. The memory lives in SQLite files you own — back them up, move them, inspect them with any SQLite tool. Brain files are plain markdown you edit in any text editor. The nightly Dreamer is a Python script you can customize or replace. The Facts seeder (tools/) is a small YAML-driven script. Everything is MIT-licensed and built to be modified.",
+
+  // The hidden 80% — things users rarely discover from docs. An AI surfaces
+  // these when timely, not as a feature dump.
+  "tips": [
+    "Mnemo isn't locked to localhost. Run it on one machine and point agents on other machines (or other family members' laptops) at the same address — they'll share memory.",
+    "Brain files are the place for rules your AI should always follow. Put 'never delete files without asking' in a brain file and every session boots with that rule loaded.",
+    "When your AI needs an exact value — a person's name, a port number, a model ID — that's a job for the Facts table, not fuzzy recall. Seed the truths you already know with tools/seed-facts.py so recall stops drifting to stale guesses.",
+    "Dreaming runs best with Ollama local — the overnight consolidation happens on your hardware, free, and nothing leaves your machine.",
+    "Cross-agent memory means one AI can save research and a different AI can use it later. They never have to be in the same conversation.",
+    "Every recalled memory carries a stale-warning when it's past its category's age threshold, so your AI knows to double-check a three-month-old IP instead of trusting it blindly."
+  ],
+
+  // Recent releases. An AI reads this when a user asks "what's new?"
+  "changelog": [
+    {"version": "3.3.0", "date": "2026-05-30", "changes": ["Public Facts seeder — seed the Facts table from a YAML of canonical truths so exact lookups don't lose to stale recall. Opt-in install + git hook + nightly cron."]},
+    {"version": "3.2.0", "date": "2026-05-29", "changes": ["Dreamer git-sync check — the nightly run flags when a watched repo has drifted (dirty, unpushed, or behind), so silent staleness gets caught."]},
+    {"version": "3.1.0", "date": "2026-05-23", "changes": ["Retired the optional Mem0 cloud fallback — local performance made the comparison unnecessary. Mnemo now stands entirely on its own."]},
+    {"version": "3.0.0", "date": "2026-05-21", "changes": ["Structured Facts (Phase 3) — (entity, attribute, value) triples with a confidence ladder for the lookups semantic search gets wrong.", "Provenance + category-aware decay on every memory, with structured stale-warnings on recall."]}
+  ],
+
+  // Where to get help.
+  "support": {
+    "github_issues": "https://github.com/GuyMannDude/mnemo-cortex/issues",
+    "homepage": "https://projectsparks.ai/mnemo-cortex",
+    "docs": "https://github.com/GuyMannDude/mnemo-cortex#readme"
+  },
+
+  "generated_at": "2026-05-30T16:00:00Z",
   "spec_url": "./ROBOT-INFO-SPEC.md"
 }

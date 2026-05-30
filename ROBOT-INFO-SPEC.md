@@ -1,9 +1,16 @@
-# `robot.info` — v0.1
+# `robot.info` — v0.2
 
 > A single structured file at a well-known location that gives an AI
 > agent a full, authoritative report on a product — so the agent can
 > answer a user's questions about it without scraping the website or
 > guessing from the README.
+
+> **v0.2 (2026-05-30)** adds an optional **user-facing layer** — plain-language
+> sections (`why`, `install_steps`, `works_with`, `extensibility`, `tips`,
+> `changelog`, `support`) an AI reads to explain a product to a *non-developer*
+> user. v0.1's developer-facing fields (`capabilities`, `exposes`, …) are
+> unchanged; the new sections are **purely additive**, so a v0.1 file is a valid
+> v0.2 file with the user-facing layer simply absent. See "User-facing layer."
 
 **Companion conventions:** `robot.install` (non-interactive setup),
 `llms.txt` ([llmstxt.org](https://llmstxt.org/), LLM-friendly docs
@@ -50,7 +57,7 @@ Everything else is optional but recommended.
 
 ### Identity
 
-- **`robot_info_version`** *(string)* — spec version this file targets, e.g. `"0.1"`.
+- **`robot_info_version`** *(string)* — spec version this file targets, e.g. `"0.2"`.
 - **`name`** *(string)* — human-readable product name.
 - **`tagline`** *(string)* — one-line pitch (≤ 140 chars).
 - `summary` *(string)* — 2-4 sentence description for an agent to paraphrase to a user.
@@ -103,6 +110,36 @@ Everything else is optional but recommended.
 - `common_questions` *(array of objects)* — `[{q, a}, …]`. Real questions a user is likely to ask
   the agent about this product. Keep answers tight (1-3 sentences). These are the highest-value
   field of the whole manifest — they're what lets the agent answer without scraping.
+
+### User-facing layer (v0.2)
+
+The v0.1 fields above are written for an agent reasoning about a product. These
+sections are written for the **human the agent is helping** — plain language, no
+jargon, each one answering a question a real user would ask. All optional; use
+the ones that add value and don't merely restate a v0.1 field. A user who
+doesn't know what a terminal is should be able to follow along when an AI reads
+these aloud.
+
+- `why` *(string)* — plain-language pitch. Read when a user asks *"what is this?"*
+  or *"why would I use it?"* No jargon — "saves things your AI should remember,"
+  not "FTS5-indexed memory coprocessor."
+- `install_steps` *(array of objects)* — `[{step, instruction}, …]`. Numbered,
+  written for someone who has never opened a terminal. Describe the *easiest real*
+  path, not the most powerful one. Never invent a path that doesn't exist (no
+  placeholder `pip install foo` if the package isn't published).
+- `works_with` *(array of objects)* — `[{name, how}, …]`. The "how" is the
+  value: a one-line "here's how to connect it" per host/platform. Complements
+  v0.1 `compatibility` (which lists names without the how).
+- `extensibility` *(string)* — read when a user asks *"how do I customize / extend
+  this?"* For extensible products; omit when not applicable.
+- `tips` *(array of strings)* — the hidden 80%. Things users rarely discover from
+  docs. An AI surfaces these *when timely*, not as a feature dump. Keep them
+  current — a stale tip ("search is keyword-only") is worse than none.
+- `changelog` *(array of objects)* — `[{version, date, changes:[…]}, …]`. The
+  most recent few releases in plain language. Read when a user asks *"what's
+  new?"* Keeps the agent current without a stale-training-data problem.
+- `support` *(object)* — where to get help: `github_issues`, `homepage`, `docs`,
+  etc.
 
 ### Provenance
 
@@ -167,10 +204,12 @@ is opinionated about exactly the shape an agent needs.
 Future revisions may add a small JSON-LD adapter so the same data
 renders in schema.org form when convenient.
 
-## Where v0.1 is in use
+## Where it's in use
 
-- [Mnemo Cortex](https://github.com/GuyMannDude/mnemo-cortex) — testbed.
+- [Mnemo Cortex](https://github.com/GuyMannDude/mnemo-cortex) — testbed; first to v0.2.
+- [FrankenClaw](https://github.com/GuyMannDude/frankenclaw) — v0.2.
+- [Disco-Bus](https://github.com/GuyMannDude/disco-bus) — v0.2.
+- [sparks-widget](https://github.com/GuyMannDude/sparks-widget) (Peter Widget) — v0.2.
 
-Rolling out across the rest of the Project Sparks public products
-(FrankenClaw, Disco-Bus, CronAlarm, Peter Widget, etc.) as each one
-gets touched.
+Rolling out across the rest of the Project Sparks public products as each
+one gets touched.
