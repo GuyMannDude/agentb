@@ -302,7 +302,10 @@ let flushTimer = null;
 const TOOL_CAPTURE = {
   mnemo_recall: "summary",
   mnemo_search: "summary",
-  mnemo_save: "full",
+  // A manual mnemo_save already persists the memory via its own handler.
+  // Capturing it here re-wrote the same fact as a duplicate [AUTO-CAPTURE]
+  // chunk, diluting recall (~5% of CC's store was these echoes). Skip it.
+  mnemo_save: "skip",
   mnemo_share: "skip",
   agent_startup: "skip",
   opie_startup: "skip",
@@ -409,7 +412,7 @@ process.stdin.on("end", () => {
 
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.10.0",
+  version: "2.10.1",
 });
 
 // ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────

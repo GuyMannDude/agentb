@@ -12,6 +12,28 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.10.1 — 2026-06-07 — Stop auto-capture from duplicating manual saves
+
+**Problem:** `mnemo_save` was set to `"full"` in the `TOOL_CAPTURE` policy
+map, so every deliberate save was *also* echoed into the auto-capture ring
+buffer and flushed back as a separate `[AUTO-CAPTURE]` chunk. The same fact
+ended up stored twice — once clean, once wrapped in tool-call narration —
+and the duplicate competed for the same top-k slots on recall. A composition
+audit of CC's store (2,475 chunks, 2026-06-07) found ~5% (133 chunks) were
+these `[AUTO-CAPTURE]` echoes of manual saves, plus 30 empty
+`auto_capture_flush` blanks — pure recall dilution.
+
+**Fix:** `mnemo_save: "full"` → `"skip"` in `TOOL_CAPTURE`. The save still
+persists via its own handler; only the redundant auto-capture echo is
+dropped. `captureCall("mnemo_save", …)` at the top of the handler is left in
+place — it still runs `trackCall()` (memory-nudge accounting) and now returns
+early at the policy gate, so nudge behavior is unchanged. Reads
+(`mnemo_recall`/`mnemo_search`) and `write_brain_file` keep their capture
+policies — those are legitimate activity-trail entries, not self-duplication.
+
+Pre-existing duplicate `[AUTO-CAPTURE]` chunks are not retroactively purged
+by this change; a separate dedup sweep can handle the backlog.
+
 ## 2.10.0 — 2026-05-23 — Phase 3 Facts tools + host-local session IDs
 
 Two changes that had piled up under `version: "2.9.0"` in `package.json`
