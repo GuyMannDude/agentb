@@ -38,7 +38,9 @@ from agentb.provenance import (
     VALID_SOURCES, VALID_CATEGORIES, DEFAULT_HIDDEN_CATEGORIES,
     suggest_category, compute_stale_warning,
 )
-from agentb.classify import classify_category, reclassify_memory_dir
+from agentb.classify import classify_category, reclassify_memory_dir, is_routine_log
+from agentb.redact import redact_text, redact_obj
+from agentb.capture_gate import CaptureGate
 from agentb.vec import VecStore, detect_mode as vec_detect_mode, backfill as vec_backfill, VecDimMismatch
 from agentb.facts_store import FactsStore, CONFIDENCE_LEVELS
 
@@ -63,6 +65,8 @@ class HealthResponse(BaseModel):
     agents_configured: list[str]
     default_persona: str
     sessions: dict
+    # v4.1 — capture pause gate state ({"paused": false} when capturing)
+    capture: dict = Field(default_factory=dict)
 
 
 class IngestRequest(BaseModel):
@@ -77,6 +81,8 @@ class IngestResponse(BaseModel):
     session_id: str
     entry_number: int
     agent_id: Optional[str]
+    # v4.1 — how many secrets were redacted before storage (0 = clean)
+    redactions: int = 0
 
 
 class ContextRequest(BaseModel):
@@ -204,6 +210,8 @@ class WritebackResponse(BaseModel):
     category_suggested: Optional[str] = None
     category_match_keywords: Optional[list[str]] = None
     source_used: Optional[str] = None
+    # v4.1 — how many secrets were redacted before storage (0 = clean)
+    redactions: int = 0
 
 
 # ─────────────────────────────────────────────
@@ -307,8 +315,12 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     tenants = TenantManager(config)
 
     # Phase 3: shared global facts store (one file, all agents share)
-    facts_path = Path(config.data_dir or os.path.expanduser("~/.agentb")) / "facts.sqlite"
+    data_root = Path(config.data_dir or os.path.expanduser("~/.agentb"))
+    facts_path = data_root / "facts.sqlite"
     facts = FactsStore(facts_path)
+
+    # v4.1: capture pause gate — server-wide, file-backed, auto-resuming.
+    gate = CaptureGate(data_root)
 
     # Pre-initialize configured agents
     for agent_name in config.agents:
@@ -389,6 +401,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             agents_configured=list(config.agents.keys()) + tenants.active_tenants,
             default_persona="default",
             sessions=total_sessions,
+            capture=gate.status(),
         )
 
     # ── Context ──
@@ -641,9 +654,44 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             if config.agents[req.agent_id].read_only:
                 raise HTTPException(403, f"Agent '{req.agent_id}' is read-only")
 
+        # v4.1 capture gate: while paused, ambient/auto-capture-shaped writes
+        # are DISCARDED — the sensitive window must not be persisted anywhere.
+        # Deliberate manual saves (user/inferred, real summary) still land:
+        # saving the *why* of a sensitive operation while ambient capture is
+        # off is the intended workflow.
+        if (req.category == "session_log" or req.source == "tool"
+                or is_routine_log(req.summary, req.key_facts)) and gate.is_paused():
+            log.warning(f"Writeback discarded (capture paused): {req.session_id}")
+            return WritebackResponse(
+                status="paused", memory_id="", agent_id=req.agent_id,
+                l1_bundles_updated=0,
+                message="Capture is paused — ambient writeback discarded (auto-resumes).",
+            )
+
+        # v4.1 secret redaction — the single choke point for everything that
+        # enters the store. Runs BEFORE classification so a leaked key never
+        # rides a classify call out to a remote LLM either.
+        red_counts: dict[str, int] = {}
+
+        def _r(text: str) -> str:
+            clean, counts = redact_text(text or "")
+            for k, v in counts.items():
+                red_counts[k] = red_counts.get(k, 0) + v
+            return clean
+
+        summary = _r(req.summary)
+        key_facts = [_r(f) for f in (req.key_facts or [])]
+        decisions_made = [_r(d) for d in (req.decisions_made or [])]
+        additional_tags = [_r(t) for t in (req.additional_tags or [])]
+        if red_counts:
+            log.warning(
+                f"🔒 Redacted {sum(red_counts.values())} secret(s) in writeback "
+                f"{req.session_id}: " + ", ".join(f"{k}×{v}" for k, v in red_counts.items())
+            )
+
         tenant = tenants.get(req.agent_id)
         memory_dir = tenant["memory_dir"]
-        l1, l2 = tenant["l1"], tenant["l2"]
+        l1 = tenant["l1"]
         vec_store: VecStore = tenant["vec"]
 
         ts = req.timestamp or datetime.now(timezone.utc).isoformat()
@@ -664,7 +712,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             category_match_keywords_field = None
         elif config.classification.enabled:
             category_used, classified_by = await classify_category(
-                reasoner, req.summary, req.key_facts,
+                reasoner, summary, key_facts,
                 use_breaker=not req.batch,
                 max_input_chars=config.classification.max_input_chars,
             )
@@ -672,19 +720,18 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             category_suggested_field = category_used
             category_match_keywords_field = None
         else:
-            suggestion_text = req.summary + "\n" + "\n".join(req.key_facts or [])
+            suggestion_text = summary + "\n" + "\n".join(key_facts)
             category_used, suggestion_keywords = suggest_category(suggestion_text)
             classified_by = "regex"
             category_suggested_field = category_used
             category_match_keywords_field = suggestion_keywords
-        additional_tags = req.additional_tags or []
 
         memory_entry = {
             "id": memory_id, "session_id": req.session_id,
-            "agent_id": req.agent_id, "summary": req.summary,
-            "key_facts": req.key_facts,
+            "agent_id": req.agent_id, "summary": summary,
+            "key_facts": key_facts,
             "projects_referenced": req.projects_referenced,
-            "decisions_made": req.decisions_made,
+            "decisions_made": decisions_made,
             "timestamp": ts, "created_at": time.time(),
             # v3 fields
             "source": source_used,
@@ -703,19 +750,13 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         l1_updated = 0
         try:
-            full_text = req.summary + "\n" + "\n".join(req.key_facts)
+            full_text = summary + "\n" + "\n".join(key_facts)
             embedding = await embedder.embed(full_text, use_breaker=not req.batch)
-            await l2.add(full_text, f"session:{req.session_id}", embedding,
-                        metadata={
-                            "projects": req.projects_referenced,
-                            "decisions": req.decisions_made,
-                            "agent_id": req.agent_id,
-                            "memory_id": memory_id,
-                            # v3 — needed for read-time stale_warning + filter logic
-                            "provenance_source": source_used,
-                            "category": category_used,
-                            "additional_tags": additional_tags,
-                        })
+            # v4.1: new memories index into VEC only. The legacy L2 tier kept a
+            # full copy of every embedding in one index.json rewritten on every
+            # save (cc's had grown to 43 MB → ~43 MB of disk writes per minute
+            # under the 60s auto-sync) and resurrected deleted memories. L2
+            # remains read-only for pre-v4.1 entries until a backfill retires it.
 
             try:
                 vec_store.upsert(
@@ -733,10 +774,10 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 raise HTTPException(500, f"vec index dim mismatch: {e}")
 
             for project in req.projects_referenced:
-                pc = f"Project: {project}\nSession: {req.session_id}\nSummary: {req.summary}\n"
-                facts = [f for f in req.key_facts if project.lower() in f.lower()]
-                if facts:
-                    pc += "Facts:\n" + "\n".join(f"- {f}" for f in facts)
+                pc = f"Project: {project}\nSession: {req.session_id}\nSummary: {summary}\n"
+                pfacts = [f for f in key_facts if project.lower() in f.lower()]
+                if pfacts:
+                    pc += "Facts:\n" + "\n".join(f"- {f}" for f in pfacts)
                 pe = await embedder.embed(pc, use_breaker=not req.batch)
                 await l1.add(pc, f"project:{project}", pe)
                 l1_updated += 1
@@ -753,6 +794,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             category_suggested=category_suggested_field,
             category_match_keywords=category_match_keywords_field,
             source_used=source_used,
+            redactions=sum(red_counts.values()),
         )
 
     # ── Ingest (The Live Wire) ──
@@ -768,13 +810,30 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             if config.agents[req.agent_id].read_only:
                 raise HTTPException(403, f"Agent '{req.agent_id}' is read-only")
 
+        # v4.1 capture gate: /ingest is pure ambient capture — while paused,
+        # every exchange in the window is discarded by design.
+        if gate.is_paused():
+            return IngestResponse(
+                status="paused", session_id="", entry_number=0,
+                agent_id=req.agent_id,
+            )
+
+        # v4.1 secret redaction at the live-wire choke point.
+        prompt, p_counts = redact_text(req.prompt)
+        response, r_counts = redact_text(req.response)
+        metadata, m_counts = redact_obj(req.metadata) if req.metadata else (None, {})
+        total_redactions = sum(p_counts.values()) + sum(r_counts.values()) + sum(m_counts.values())
+        if total_redactions:
+            log.warning(f"🔒 Redacted {total_redactions} secret(s) in /ingest "
+                        f"(agent: {req.agent_id or 'default'})")
+
         tenant = tenants.get(req.agent_id)
         sessions = tenant["sessions"]
 
         result = sessions.ingest(
-            prompt=req.prompt,
-            response=req.response,
-            metadata=req.metadata,
+            prompt=prompt,
+            response=response,
+            metadata=metadata,
         )
 
         return IngestResponse(
@@ -782,7 +841,27 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             session_id=result["session_id"],
             entry_number=result["entry_number"],
             agent_id=req.agent_id,
+            redactions=total_redactions,
         )
+
+    # ── Capture pause gate (v4.1) ──
+    class CapturePauseRequest(BaseModel):
+        minutes: Optional[int] = Field(
+            None, ge=1, description="Pause duration; default 15, hard cap 240."
+        )
+        reason: str = Field("", description="Why capture is paused (shown in status).")
+
+    @app.post("/capture/pause")
+    async def capture_pause(req: CapturePauseRequest):
+        return gate.pause(req.minutes, req.reason)
+
+    @app.post("/capture/resume")
+    async def capture_resume():
+        return gate.resume()
+
+    @app.get("/capture/status")
+    async def capture_status():
+        return gate.status()
 
     # ── Session Info ──
     @app.get("/sessions")
