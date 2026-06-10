@@ -1,5 +1,31 @@
 # Changelog
 
+## v4.0.1 (2026-06-09) — fix: the VEC tier bypassed the category filter (two-tier recall now works)
+
+**The problem.** v4.0 reclassified the stores correctly, but a recall re-probe still
+returned `session_log` noise in the top results. Root cause was older and deeper than
+categorization: in `/context`, the **VEC (sqlite-vec) tier built its result chunks
+without a `category`** (`ContextChunk(... )` with no `category=`/`provenance_source=`).
+The metadata filter treats a `None` category as "don't exclude" (`if category and
+category in effective_exclude`), so **every vector hit sailed past the `session_log`
+exclusion — and past the source/stale filters too.** The L3 disk-walk got the
+metadata prefilter in v3.3.1; the VEC path never did. This is what the memory-quality
+audit's low recall score was actually measuring: the session-log firehose arriving via
+VEC regardless of how anything was tagged.
+
+**The fix.**
+- In the `/context` VEC loop, load each hit's `category` + `source` from its memory
+  JSON (the `VecHit` already carries `source_file` + `created_at`), compute `age_days`
+  and `stale_warning` (`compute_stale_warning`), and pass them to `ContextChunk` — so
+  `keep_chunk`/`passes_metadata` filters VEC hits exactly like every other tier. Cheap:
+  only the over-fetched hits get a small metadata read, no extra embeds.
+- Net: default recall (`exclude_categories=['session_log']`) finally hides Tier-2 logs;
+  reclassified Tier-1 facts surface instead of being crowded out.
+- Also fixed a stray hardcoded `version="3.3.1"` in the `/health` response (missed in
+  the v4.0.0 drift sweep); all version strings now read 4.0.1.
+- Test: `test_context_vec_filter.py` proves a `session_log` vec hit is excluded by
+  default and returned when `exclude_categories=[]`.
+
 ## v4.0.0 (2026-06-09) — LLM-powered Smart Ingestion + reclassification migration
 
 **The problem.** A memory-quality audit across four agent stores proved ambient recall is

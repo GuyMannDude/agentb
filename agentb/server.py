@@ -36,7 +36,7 @@ from agentb.cache import L1Cache, L2Index, l3_scan, ContextChunk
 from agentb.sessions import SessionManager, SessionConfig
 from agentb.provenance import (
     VALID_SOURCES, VALID_CATEGORIES, DEFAULT_HIDDEN_CATEGORIES,
-    suggest_category,
+    suggest_category, compute_stale_warning,
 )
 from agentb.classify import classify_category, reclassify_memory_dir
 from agentb.vec import VecStore, detect_mode as vec_detect_mode, backfill as vec_backfill, VecDimMismatch
@@ -316,7 +316,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        log.info(f"⚡ Mnemo Cortex v4.0.0 — I remember everything so your agent doesn't have to.")
+        log.info(f"⚡ Mnemo Cortex v4.0.1 — I remember everything so your agent doesn't have to.")
         log.info(f"  Reasoning: {reasoner.status}")
         log.info(f"  Embedding: {embedder.status}")
         log.info(f"  Data dir:  {config.data_dir}")
@@ -329,7 +329,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     app = FastAPI(
         title="Mnemo Cortex",
         description="Drop-in memory superhero for AI agents",
-        version="4.0.0",
+        version="4.0.1",
         lifespan=lifespan,
     )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
@@ -382,7 +382,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="3.3.1",
+            version="4.0.1",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
@@ -497,12 +497,33 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                     continue
                 # vec0 distance is L2 by default; convert to similarity-ish (0..1)
                 relevance = 1.0 / (1.0 + hit.distance)
+                # v4.0.1: load category/source from the memory's JSON so the
+                # metadata filter (session_log exclusion, stale, source) applies
+                # to VEC hits too. Without this the VEC tier silently bypassed
+                # every category filter — session_log noise crowded recall.
+                category = provenance_source = None
+                age_days = stale = None
+                if hit.source_file and os.path.exists(hit.source_file):
+                    try:
+                        mj = json.loads(Path(hit.source_file).read_text())
+                        category = mj.get("category")
+                        provenance_source = mj.get("source")
+                    except Exception:
+                        pass
+                if hit.created_at:
+                    age_days = (time.time() - hit.created_at) / 86400.0
+                    if category:
+                        stale = compute_stale_warning(category, hit.created_at)
                 vec_chunks.append(ContextChunk(
                     content=hit.text,
                     source=f"memory:{hit.memory_id}",
                     relevance=relevance,
                     cache_tier="VEC",
                     memory_id=hit.memory_id,
+                    provenance_source=provenance_source,
+                    category=category,
+                    age_days=age_days,
+                    stale_warning=stale,
                 ))
                 seen_memory_ids.add(hit.memory_id)
             kept = [c for c in vec_chunks if keep_chunk(c)][:remaining]
