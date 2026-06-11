@@ -894,3 +894,37 @@ class TestL3FilterPushdown:
 
         assert embed.await_count == 3
         assert len(results) == 3
+
+    @pytest.mark.asyncio
+    async def test_max_candidates_caps_embeds(self, tmp_path):
+        # v4.1.1: L3 embeds the disk-walk's expensive op (ollama). On a large
+        # store it must embed at most max_candidates files so it can't blow the
+        # bridge timeout — the cc-recall-20s fix.
+        mdir = tmp_path / "memory"
+        self._write_mems(mdir, ["topology"] * 10)
+        embed = AsyncMock(return_value=[1.0, 0.0])
+
+        results = await l3_scan(mdir, [1.0, 0.0], embed_fn=embed, threshold=0.4,
+                                top_k=5, max_candidates=3)
+
+        assert embed.await_count == 3      # capped at 3, not 10
+        assert len(results) <= 3
+
+    @pytest.mark.asyncio
+    async def test_max_candidates_prefers_recent(self, tmp_path):
+        # The bounded sample must keep the NEWEST candidates, not an arbitrary
+        # filename-hash slice — recency is the cheap proxy for relevance.
+        import os
+        mdir = tmp_path / "memory"
+        self._write_mems(mdir, ["topology"] * 5)   # m0..m4
+        base = time.time()
+        for i in range(5):                          # m4 newest, m0 oldest
+            ts = base - (5 - i) * 100
+            os.utime(mdir / f"m{i}.json", (ts, ts))
+        embed = AsyncMock(return_value=[1.0, 0.0])
+
+        results = await l3_scan(mdir, [1.0, 0.0], embed_fn=embed, threshold=0.4,
+                                top_k=5, max_candidates=2)
+
+        assert embed.await_count == 2
+        assert {r.memory_id for r in results} == {"m3", "m4"}   # the two newest

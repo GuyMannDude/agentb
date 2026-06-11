@@ -258,13 +258,25 @@ async def l3_scan(
     threshold: float = 0.4,
     top_k: int = 3,
     prefilter: Optional[Callable[..., bool]] = None,
+    max_candidates: Optional[int] = None,
 ) -> list[ContextChunk]:
     from agentb.provenance import compute_stale_warning
 
     memory_dir.mkdir(parents=True, exist_ok=True)
     now = time.time()
     results = []
-    for mem_file in sorted(memory_dir.glob("*.json")):
+    # v4.1.1: walk newest-first and cap the number of EMBEDS (max_candidates).
+    # L3 embeds every prefilter-passing file — O(store size) ollama calls — which
+    # blows the bridge timeout on a large session_log-dominated store. Recency
+    # order means the bounded sample keeps the most-recent (usually most-relevant)
+    # candidates instead of an arbitrary filename-hash slice. None = uncapped
+    # (legacy callers / small stores). Cheap reads (json.loads, prefilter) are NOT
+    # capped — only the expensive embed is.
+    files = sorted(memory_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    embedded = 0
+    for mem_file in files:
+        if max_candidates is not None and embedded >= max_candidates:
+            break
         try:
             mem = json.loads(mem_file.read_text())
             content = mem.get("summary", "") + "\n" + "\n".join(mem.get("key_facts", []))
@@ -285,6 +297,7 @@ async def l3_scan(
             ):
                 continue
             content_embedding = await embed_fn(content)
+            embedded += 1
             sim = cosine_similarity(query_embedding, content_embedding)
             if sim > threshold:
                 results.append(ContextChunk(

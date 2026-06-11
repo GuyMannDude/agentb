@@ -91,6 +91,13 @@ class CacheConfig:
     l1_similarity_threshold: float = 0.75
     l2_similarity_threshold: float = 0.5
     l3_similarity_threshold: float = 0.4
+    # v4.1.1: L3 is the disk-walk escape hatch that EMBEDS every prefilter-passing
+    # file — O(store size) ollama calls. Harmless when L3 rarely runs, but a
+    # session_log-dominated store (cc) whose VEC top-k is all hidden falls through
+    # to L3 on every query → 20s, past the bridge timeout. Cap the embeds (recency
+    # first) so L3 stays bounded. Interim until vec category-pushdown (#468) keeps
+    # session_log out of VEC's top-k so L3 isn't reached at all.
+    l3_max_candidates: int = 150
 
 
 @dataclass

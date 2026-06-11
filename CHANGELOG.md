@@ -1,5 +1,32 @@
 # Changelog
 
+## v4.1.1 (2026-06-10) — bound the L3 disk-walk (cc recall latency) + warm-summary redaction
+
+**The problem (found in the v4.1.0 deploy smoke test).** cc's `/context` took **20s**
+— past the 10s MCP-bridge timeout — while opie/rocky/dave were 245–1776ms. Root cause:
+L3 (`l3_scan`) is the disk-walk escape hatch, and it **embeds every prefilter-passing
+file** in the store (O(store size) ollama calls). It only runs when the cheap tiers
+underfill the pool. cc's store is **session_log-dominated**, so its VEC top-k is all
+hidden-by-default → VEC contributes 0 → the pool underfills → L3 walks cc's 2,529-file
+store and embeds hundreds of candidates. (Confirmed: `exclude_categories=[]` lets VEC
+fill and cc drops to 269ms.) v4.1.0 didn't cause this — it *exposed* it by correctly
+dropping the ~1,238 orphaned/deleted L2 entries that used to mask it.
+
+**The fix (interim, until #468).**
+- `l3_scan` now walks **newest-first** and caps the number of EMBEDS at
+  `cache.l3_max_candidates` (default **150**). Recency order means the bounded sample
+  keeps the most-recent (usually most-relevant) candidates, not an arbitrary
+  filename-hash slice. Cheap reads/prefilter are not capped — only the expensive embed.
+  `None` = uncapped (legacy callers / small stores). Wired through `/context`.
+- The *real* fix is **vec category-pushdown (#468)** — filter session_log at the kNN
+  level so cc's VEC returns the non-log gold directly and L3 is never reached. Promoted
+  to next-up.
+- Also folds in the v4.1 review remediation: the reasoner-generated **warm-session
+  summary** now passes the redaction choke point before persist.
+
+**Tests.** `test_agentb.py` L3 cap: `max_candidates` bounds `embed_fn` call count and
+prefers recent files; uncapped default unchanged.
+
 ## v4.1.0 (2026-06-10) — the Fable pass: secrets, ranking, the Analyst, tier hygiene
 
 A full-codebase review-and-improve pass. Five workstreams, each fixing a
