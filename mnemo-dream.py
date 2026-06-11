@@ -96,9 +96,10 @@ DREAM_SKIP_FACTS = os.getenv("DREAM_SKIP_FACTS", "").lower() in ("1", "true", "y
 # window and 400s the whole run — the per-agent map-reduce split isn't enough
 # when a SINGLE agent overflows. Recency-first: a "since last dream" synthesis
 # cares most about the newest entries, so the oldest are dropped first. Env-
-# overridable. ~2.5M chars ≈ 600K tokens, comfortably under 1M with room for the
-# system prompt + output; the adaptive-halving retry covers token-density spikes.
-MAX_AGENT_SECTION_CHARS = int(os.getenv("MNEMO_DREAM_MAX_AGENT_SECTION_CHARS", "2500000"))
+# overridable. 1M chars (cc's ~1.06M section synthesized fine; opie's 2.5M got a
+# provider-side 400 wrapped in a 200) keeps the call reliably inside the provider's
+# real limit, with the adaptive-halving retry as the token-density backstop.
+MAX_AGENT_SECTION_CHARS = int(os.getenv("MNEMO_DREAM_MAX_AGENT_SECTION_CHARS", "1000000"))
 
 # Git-sync wedge (opt-in). When enabled, the Dreamer reports whether its watched
 # git checkouts have uncommitted changes, unpushed commits, or are behind their
@@ -338,6 +339,13 @@ def _call_openrouter(system_prompt: str, user_content: str, max_tokens: int = 40
     if response.status_code != 200:
         raise RuntimeError(f"OpenRouter {response.status_code}: {response.text[:500]}")
     result = response.json()
+    # OpenRouter can return HTTP 200 with an error/empty body (provider error,
+    # moderation, output-too-long, transient upstream). Validate before indexing
+    # so this surfaces as a catchable RuntimeError — not a raw KeyError that
+    # escapes the per-stage handlers and crashes the whole run.
+    if not isinstance(result.get("choices"), list) or not result["choices"]:
+        err = result.get("error", result)
+        raise RuntimeError(f"OpenRouter 200 but no choices: {json.dumps(err)[:500]}")
     return result["choices"][0]["message"]["content"], result.get("usage", {})
 
 
@@ -358,8 +366,15 @@ def _call_openrouter_adaptive(
             return _call_openrouter(system_prompt, content, max_tokens=max_tokens)
         except RuntimeError as e:
             msg = str(e).lower()
-            is_ctx = "context length" in msg or "maximum context" in msg or "context_length" in msg
-            if is_ctx and len(content) > min_chars:
+            # Size-related failures worth retrying smaller: explicit context-length
+            # errors, plus the provider-side 400 that OpenRouter wraps in a 200
+            # ("no choices" / "provider returned error", code 400) — a large opie
+            # section hits the latter before the former.
+            is_oversize = (
+                "context length" in msg or "maximum context" in msg or "context_length" in msg
+                or "no choices" in msg or "provider returned error" in msg
+            )
+            if is_oversize and len(content) > min_chars:
                 new_len = max(min_chars, len(content) // 2)
                 log.warning(
                     f"  context-length 400 at {len(content):,} chars; retrying at "

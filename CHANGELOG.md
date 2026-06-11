@@ -17,15 +17,23 @@ dream was June 8. Two faults, compounding:
 
 **Fix.**
 - `_build_agent_section` is now capped at `MNEMO_DREAM_MAX_AGENT_SECTION_CHARS` (default
-  2.5M chars ≈ 600K tokens), **recency-first** — oldest entries dropped to fit, and the drop
-  is announced in the section header and logged (never silent).
-- New `_call_openrouter_adaptive` halves the input and retries on a context-length 400
-  (belt-and-suspenders for token-density spikes; keeps the most-recent tail). Used by stage
-  0.5, stage 1, and the rollup.
+  **1M chars** — cc's ~1.06M section synthesized fine; opie's 2.5M got a provider-side 400),
+  **recency-first** — oldest entries dropped to fit, announced in the section header and
+  logged (never silent).
+- `_call_openrouter` now validates the 200 response has `choices` and raises a catchable
+  `RuntimeError` if not. OpenRouter wraps some provider errors ("Provider returned error",
+  code 400) in an HTTP 200 with no `choices`; the old code did `result["choices"][0]` → a
+  raw **`KeyError` that escaped every per-stage handler and crashed the run** (the second
+  fault, exposed once the cap got opie past the hard context limit).
+- New `_call_openrouter_adaptive` halves the input and retries on size-related failures
+  (context-length 400 **and** the provider-400/no-choices case), keeping the most-recent
+  tail. Used by stage 0.5, stage 1, and the rollup.
 - Stage 1 now **skips** a failed agent (`continue`) instead of `sys.exit(1)`; only aborts if
   *every* agent fails. One agent's failure can no longer suppress the others' notification.
 
-Note: this is the cron script only — no server/API change, `/health` stays 4.2.0.
+Verified live on artforge: a manual run completes, advances state past the June-8 backlog,
+and posts the git-sync Discord beep (HTTP 204) + bus notifications. This is the cron script
+only — no server/API change, `/health` stays 4.2.0.
 
 ## v4.2.0 (2026-06-10) — VEC category pushdown (#468): the real fix for the L3 fall-through
 
