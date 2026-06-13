@@ -150,3 +150,80 @@ def test_adaptive_gives_up_at_min_chars(monkeypatch):
     with pytest.raises(RuntimeError, match="maximum context"):
         dream._call_openrouter_adaptive("sys", "x" * 10_000, min_chars=20_000)
     assert calls["n"] == 1, "content below min_chars must not be halved again"
+
+
+# ── Stage 0.5 fact extraction: chunking (the 2026-06-13 fix) ──
+#
+# The bug: one big batch (cc's 165-entry / 64K-char day) was sent in a single
+# call capped at max_tokens=4096 output. The fact array overran the output cap,
+# truncated mid-string, json.loads failed, and the WHOLE agent's facts were lost.
+# Fix: chunk by input chars so each call's output fits, and isolate a parse
+# failure to one chunk instead of the whole agent.
+
+def test_chunk_splits_over_budget():
+    """Input above the chunk budget is split into >1 chunk; nothing is dropped."""
+    mems = [_mem(i, "z" * 1_000) for i in range(10)]
+    chunks = dream._chunk_memories_by_chars(mems, budget=3_000)
+    assert len(chunks) > 1, "oversized input must be chunked"
+    assert sum(len(c) for c in chunks) == 10, "chunking must not drop entries"
+
+
+def test_chunk_single_when_under_budget():
+    mems = [_mem(i, "small") for i in range(5)]
+    chunks = dream._chunk_memories_by_chars(mems, budget=1_000_000)
+    assert len(chunks) == 1 and len(chunks[0]) == 5
+
+
+def test_chunk_oversized_single_memory_becomes_own_chunk():
+    """A lone memory bigger than the budget is its own chunk — never silently dropped."""
+    mems = [_mem(0, "z" * 50_000)]
+    chunks = dream._chunk_memories_by_chars(mems, budget=10_000)
+    assert len(chunks) == 1 and len(chunks[0]) == 1
+
+
+def test_chunk_preserves_chronological_order():
+    mems = [_mem(i, f"<<E{i}>>" + "z" * 1_000) for i in range(6)]
+    chunks = dream._chunk_memories_by_chars(mems, budget=2_500)
+    flat = [m for c in chunks for m in c]
+    ts = [m["timestamp"] for m in flat]
+    assert ts == sorted(ts), "chronological order must survive chunking"
+
+
+def test_extract_chunks_big_input(monkeypatch):
+    """Big input → multiple extraction calls (the fix). Mutation: disable chunking
+    (huge budget) and this drops to 1 call, failing the assertion — a real guard."""
+    monkeypatch.setattr(dream, "FACT_EXTRACTION_CHUNK_CHARS", 3_000)
+    calls: list[str] = []
+
+    def fake(agent_id, section, label=""):
+        calls.append(label)
+        return [{"entity": "e", "attribute": "a", "value": "v", "evidence_source": "t"}]
+
+    monkeypatch.setattr(dream, "_extract_facts_from_section", fake)
+    mems = [_mem(i, "z" * 1_000) for i in range(10)]
+
+    facts = dream.extract_facts_for_agent("cc", mems)
+
+    assert len(calls) > 1, "a large day must be split into multiple LLM calls"
+    assert len(facts) == len(calls), "one fact per successful chunk, accumulated"
+
+
+def test_extract_one_bad_chunk_does_not_drop_agent(monkeypatch):
+    """A parse failure in one chunk keeps every other chunk's facts — the exact
+    regression from 2026-06-13 where one truncation lost all of cc's facts."""
+    monkeypatch.setattr(dream, "FACT_EXTRACTION_CHUNK_CHARS", 3_000)
+    seen: list[str] = []
+
+    def fake(agent_id, section, label=""):
+        seen.append(label)
+        if len(seen) == 2:  # second chunk fails to parse
+            return None
+        return [{"entity": "e", "attribute": "a", "value": "v", "evidence_source": "t"}]
+
+    monkeypatch.setattr(dream, "_extract_facts_from_section", fake)
+    mems = [_mem(i, "z" * 1_000) for i in range(10)]
+
+    facts = dream.extract_facts_for_agent("cc", mems)
+
+    assert len(seen) >= 3, "expected several chunks"
+    assert len(facts) == len(seen) - 1, "one bad chunk must not zero out the agent"

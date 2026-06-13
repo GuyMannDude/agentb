@@ -100,6 +100,12 @@ DREAM_SKIP_FACTS = os.getenv("DREAM_SKIP_FACTS", "").lower() in ("1", "true", "y
 # provider-side 400 wrapped in a 200) keeps the call reliably inside the provider's
 # real limit, with the adaptive-halving retry as the token-density backstop.
 MAX_AGENT_SECTION_CHARS = int(os.getenv("MNEMO_DREAM_MAX_AGENT_SECTION_CHARS", "1000000"))
+# Stage 0.5 fact extraction is chunked so each LLM call's OUTPUT (a JSON fact
+# array) stays within max_tokens. One big batch (e.g. cc's 165-entry / 64K-char
+# day on 2026-06-13) overruns the 4096-token output cap, truncates mid-string,
+# and fails json.loads for the WHOLE agent. Chunking by input chars bounds the
+# output array per call. Env-overridable.
+FACT_EXTRACTION_CHUNK_CHARS = int(os.getenv("MNEMO_DREAM_FACT_CHUNK_CHARS", "20000"))
 
 # Git-sync wedge (opt-in). When enabled, the Dreamer reports whether its watched
 # git checkouts have uncommitted changes, unpushed commits, or are behind their
@@ -619,6 +625,72 @@ Format: [{"entity": "...", "attribute": "...", "value": "...", "evidence_source"
 Output ONLY the JSON list, no preamble, no explanation."""
 
 
+def _chunk_memories_by_chars(memories: list[dict], budget: int) -> list[list[dict]]:
+    """Split chronologically-ordered memories into chunks whose rendered size
+    stays within `budget` chars, so each fact-extraction call's OUTPUT array fits
+    inside max_tokens. A single oversized memory becomes its own chunk (the
+    per-call adaptive halving handles a giant one); never a silent drop here.
+    """
+    ordered = sorted(memories, key=lambda x: x.get("timestamp", ""))
+    chunks: list[list[dict]] = []
+    cur: list[dict] = []
+    cur_chars = 0
+    for m in ordered:
+        r = len(_render_memory(m))
+        if cur and cur_chars + r > budget:
+            chunks.append(cur)
+            cur, cur_chars = [], 0
+        cur.append(m)
+        cur_chars += r
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _extract_facts_from_section(agent_id: str, section: str, label: str = "") -> list[dict] | None:
+    """One fact-extraction LLM call for a single section. Returns the validated
+    fact list, or None if the call or JSON parse failed. Pulled out of
+    extract_facts_for_agent so a parse failure costs ONE chunk, not the whole
+    agent's facts (the bug that lost all 585 cc entries' facts on 2026-06-13).
+    """
+    try:
+        raw, _ = _call_openrouter_adaptive(FACT_EXTRACTION_SYSTEM_PROMPT, section, max_tokens=4096)
+    except RuntimeError as e:
+        log.error(f"  stage 0.5 [{agent_id}]{label} LLM call failed: {e}")
+        return None
+
+    # Strip common LLM artifacts (markdown fences)
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned.rsplit("```", 1)[0]
+    cleaned = cleaned.strip()
+
+    try:
+        facts = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        log.warning(f"  stage 0.5 [{agent_id}]{label} JSON parse failed: {e}; first 200 chars: {cleaned[:200]}")
+        return None
+    if not isinstance(facts, list):
+        log.warning(f"  stage 0.5 [{agent_id}]{label} expected list, got {type(facts).__name__}")
+        return None
+
+    valid = []
+    for f in facts:
+        if not isinstance(f, dict):
+            continue
+        if not all(k in f and f[k] for k in ("entity", "attribute", "value")):
+            continue
+        valid.append({
+            "entity": str(f["entity"]),
+            "attribute": str(f["attribute"]),
+            "value": str(f["value"]),
+            "evidence_source": str(f.get("evidence_source", f"dream:{datetime.now(timezone.utc).strftime('%Y-%m-%d')} extraction")),
+        })
+    return valid
+
+
 def extract_facts_for_agent(agent_id: str, agent_memories: list[dict]) -> list[dict]:
     """Stage 0.5: ask LLM to extract structured facts from one agent's memories.
 
@@ -655,45 +727,40 @@ def extract_facts_for_agent(agent_id: str, agent_memories: list[dict]) -> list[d
     if not extraction_memories:
         log.info(f"  stage 0.5 [{agent_id}]: all {len(agent_memories)} memories are auto-capture noise; skipping")
         return []
-    section = _build_agent_section(agent_id, extraction_memories)
-    log.info(f"  stage 0.5 [{agent_id}]: extracting facts from {len(extraction_memories)}/{len(agent_memories)} entries (filtered auto-capture), {len(section):,} chars")
-    try:
-        raw, usage = _call_openrouter_adaptive(FACT_EXTRACTION_SYSTEM_PROMPT, section, max_tokens=4096)
-    except RuntimeError as e:
-        log.error(f"  stage 0.5 [{agent_id}] LLM call failed: {e}")
-        return []
+    chunks = _chunk_memories_by_chars(extraction_memories, FACT_EXTRACTION_CHUNK_CHARS)
+    total_chars = sum(len(_render_memory(m)) for m in extraction_memories)
+    log.info(
+        f"  stage 0.5 [{agent_id}]: extracting facts from {len(extraction_memories)}/{len(agent_memories)} "
+        f"entries (filtered auto-capture), {total_chars:,} chars in {len(chunks)} chunk(s)"
+    )
 
-    # Strip common LLM artifacts (markdown fences)
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned.rsplit("```", 1)[0]
-    cleaned = cleaned.strip()
-
-    try:
-        facts = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        log.warning(f"  stage 0.5 [{agent_id}] JSON parse failed: {e}; first 200 chars: {cleaned[:200]}")
-        return []
-    if not isinstance(facts, list):
-        log.warning(f"  stage 0.5 [{agent_id}] expected list, got {type(facts).__name__}")
-        return []
-
-    valid = []
-    for f in facts:
-        if not isinstance(f, dict):
+    all_valid: list[dict] = []
+    failed = 0
+    for i, chunk in enumerate(chunks):
+        label = f" chunk {i + 1}/{len(chunks)}" if len(chunks) > 1 else ""
+        # Never-silent: a lone entry over the budget can't be split further here;
+        # _call_openrouter_adaptive may halve (and drop the tail of) its input on a
+        # context-400, so facts in that dropped tail are lost. Surface it.
+        if len(chunk) == 1 and (only_chars := len(_render_memory(chunk[0]))) > FACT_EXTRACTION_CHUNK_CHARS:
+            log.warning(
+                f"  stage 0.5 [{agent_id}]{label} single entry is {only_chars:,} chars "
+                f"(> {FACT_EXTRACTION_CHUNK_CHARS:,} budget) — adaptive halving may truncate its tail; "
+                f"facts in any dropped tail will be lost"
+            )
+        section = _build_agent_section(agent_id, chunk)
+        result = _extract_facts_from_section(agent_id, section, label)
+        if result is None:
+            failed += 1
             continue
-        if not all(k in f and f[k] for k in ("entity", "attribute", "value")):
-            continue
-        valid.append({
-            "entity": str(f["entity"]),
-            "attribute": str(f["attribute"]),
-            "value": str(f["value"]),
-            "evidence_source": str(f.get("evidence_source", f"dream:{datetime.now(timezone.utc).strftime('%Y-%m-%d')} extraction")),
-        })
-    log.info(f"  stage 0.5 [{agent_id}] extracted {len(valid)} valid facts (LLM tokens: {usage.get('prompt_tokens', '?')} in / {usage.get('completion_tokens', '?')} out)")
-    return valid
+        all_valid.extend(result)
+
+    if failed:
+        log.warning(
+            f"  stage 0.5 [{agent_id}] {failed}/{len(chunks)} chunk(s) failed extraction — "
+            f"kept facts from the {len(chunks) - failed} that parsed (one bad chunk no longer drops the whole agent)"
+        )
+    log.info(f"  stage 0.5 [{agent_id}] extracted {len(all_valid)} valid facts across {len(chunks) - failed}/{len(chunks)} chunk(s)")
+    return all_valid
 
 
 def post_facts(extracted: list[dict], source_agent: str) -> list[dict]:

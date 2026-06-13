@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.2.2 (2026-06-13) — Dreamer: chunk Stage-0.5 fact extraction so a heavy day doesn't lose all its facts
+
+**Problem (found in the 2026-06-13 morning verify).** Stage 0.5 (`extract_facts_for_agent`)
+sent ALL of one agent's non-auto-capture entries to the LLM in a single call capped at
+`max_tokens=4096` *output*. On a heavy day — cc had 165 entries / 64,470 chars after the
+2026-06-12 redesign + fleet session — the model's JSON fact array overran the 4096-token
+output cap, truncated mid-string ("Unterminated string"), `json.loads` failed, and
+`extract_facts_for_agent` returned `[]` — losing **every** fact for that agent that night.
+(The same truncation hit cc *and* opie on 2026-06-12.) The adaptive-halving backstop only
+retries input-side context 400s, so an output truncation (HTTP 200 with a complete-but-
+truncated body) never triggered it.
+
+**Fix.**
+- New `_chunk_memories_by_chars` splits an agent's entries into chunks bounded by
+  `MNEMO_DREAM_FACT_CHUNK_CHARS` (default **20,000 chars**) so each call's output array fits
+  well inside `max_tokens`. Chronological order preserved; a lone oversized memory becomes
+  its own chunk (never silently dropped).
+- New `_extract_facts_from_section` isolates call+parse+validate for one chunk and returns
+  `None` on failure, so a parse failure now costs **one chunk**, not the whole agent's facts.
+  `extract_facts_for_agent` accumulates across chunks and logs how many failed.
+- Tests: `tests/test_dream_cap.py` +6 (chunk split / under-budget / oversized-single /
+  order-preservation / multi-call-on-big-input [mutation: huge budget → 1 call → fails] /
+  one-bad-chunk-doesn't-zero-the-agent). Full suite **230 pass, 1 known pre-existing fail**
+  (passport #425).
+
+**Not a bug:** the "no Discord beep overnight" noticed the same morning is by design — the
+dreamer's beep is git-sync-activity-driven, so clean no-change nights (June 12 & 13) are
+silent. The notifier is fine.
+
 ## v4.2.1 (2026-06-11) — Dreamer (mnemo-dream.py): stop one big agent from killing the nightly run
 
 **Problem (found via bus #616 — "no Discord beeps overnight").** The nightly Dreamer
