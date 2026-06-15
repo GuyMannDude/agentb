@@ -1,5 +1,52 @@
 # Changelog
 
+## v4.3.0 (2026-06-15) — The Thesaurus Loop: query expansion on a whiff
+
+**Problem.** A recall commits to one phrasing. If a memory was filed under different
+words than the query used, the vector match is weak or misses entirely — *assumption
+misalignment* between how you ask and how it was stored. (Opie searched 3× for the
+transcript pipeline because "transcribe routine" didn't match "transcript processing
+pipeline.")
+
+**Fix — multi-query retrieval (RAG-Fusion), gated by escalation.** The standard single
+-query recall runs first, unchanged. Only when it **whiffs** — zero results, or a top
+raw relevance below `expansion.relevance_floor` (default 0.5) — does the handler fan the
+query into a few alternative phrasings (one isolated Flash call), search each, and fuse
+the passes. Escalation means a good search pays **nothing** (the expansion branch is never
+reached), which makes default-ON safe.
+
+- **`merge_passes` — max-relevance-per-memory_id (the crux).** Cross-pass fusion keeps the
+  highest-relevance instance of a memory across phrasings, not the first seen. A dict
+  update preserves insertion order, so a single pass is byte-identical to the v4.1 pooled
+  re-rank handler. The retrieval itself is factored into `_retrieve_for_embedding` so the
+  same tier stack (HOT/L1/VEC/L2/L3, with its intra-pass dedup) runs once per phrasing.
+  (One narrow exception to "byte-identical": two HOT exchanges from the same session with
+  an identical truncated prompt+response now collapse to one — a dedup improvement, not a
+  data-loss regression.)
+- **`expand_query` — isolated, fail-safe.** One OpenRouter Flash call (`google/gemini-2.5
+  -flash` by default), reusing whatever OpenRouter key the reasoning chain already carries.
+  Hard `timeout_ms` (default 800), kept entirely off the shared reasoner circuit breaker (a
+  Flash hiccup must never poison preflight/classification), and LRU-cached by normalized
+  query so repeat recalls (`agent_startup`, etc.) are free. Any failure/timeout/no-key →
+  `[]` → the handler behaves exactly as it did pre-v4.2.
+- **Live-path only.** A `batch: true` recall (backfill, scripted sweeps) never expands, and
+  callers can force it off per request with `expand: false`.
+
+**Config.** New `expansion` block: `enabled` (default true), `relevance_floor`,
+`max_variants` (4), `timeout_ms` (800), `min_query_words` (3 — short/entity lookups skip
+expansion), `model`, optional `api_key`/`api_base`.
+
+**Tests.** `tests/test_query_expansion.py` (19 cases): max-relevance merge incl. single-pass
+identity and HOT dedup; the escalation trigger (short/zero/weak/strong); `expand_query`
+no-key no-op, timeout = `[]` (no regression), parsing/cap/drop-original, LRU cache, failures
+uncached; and `/context` end-to-end — escalation fires on a whiff, never for batch /
+`expand=false` / a strong first pass. Full suite green (the pre-existing local
+`pytest-asyncio` env failures aside).
+
+**Deploy.** Shipped to artforge default-ON (escalation makes that safe — zero cost on good
+searches). Instant-off via `expansion.enabled=false`. The live recall path serving every
+agent, so it went out as a deliberate, gated step with a post-deploy `/context` smoke test.
+
 ## v4.2.3 (2026-06-14) — Dreamer: salvage truncated fact arrays + raise the output ceiling (quality recall)
 
 **Problem (found in the 2026-06-14 morning verify).** The v4.2.2 chunking fix kept one

@@ -14,11 +14,14 @@ https://github.com/GuyMannDude/mnemo-cortex
 """
 
 import os
+import re
 import json
 import time
 import hashlib
 import logging
 import asyncio
+import httpx
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
@@ -30,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from agentb.config import (
     load_config, AgentBConfig, get_agent_data_dir, get_persona, PersonaConfig,
+    ExpansionConfig,
 )
 from agentb.providers import create_resilient_reasoning, create_resilient_embedding
 from agentb.cache import L1Cache, L2Index, l3_scan, ContextChunk, resolve_disk_truth
@@ -113,6 +117,21 @@ class ContextRequest(BaseModel):
         description=(
             "Categories to hide. Defaults to DEFAULT_HIDDEN_CATEGORIES "
             "(session_log). Pass an empty list to disable hiding entirely."
+        ),
+    )
+    expand: Optional[bool] = Field(
+        None,
+        description=(
+            "Thesaurus Loop query expansion. None = server default; True = allow; "
+            "False = never. Expansion only ever fires on a weak/empty first pass "
+            "(escalation), so it never slows a good search."
+        ),
+    )
+    batch: bool = Field(
+        False,
+        description=(
+            "Mark a bulk/offline recall (backfill, scripted sweeps). Batch calls "
+            "never trigger query expansion — the Thesaurus Loop is live-path only."
         ),
     )
     exclude_stale: bool = Field(
@@ -309,6 +328,131 @@ def build_preflight_system_prompt(persona: PersonaConfig) -> str:
 #  App Factory
 # ─────────────────────────────────────────────
 
+# ── Thesaurus Loop: query expansion (v4.2) ──────────────────────────────────
+# Fired only on a weak/empty first recall (escalation). One isolated Flash call
+# generates alternative phrasings; each is searched and the passes are fused by
+# max-relevance. Kept entirely off the shared reasoner breaker — a Flash hiccup
+# here must never poison preflight/classification — with its own tight timeout
+# and a small LRU so repeat recalls (agent_startup, etc.) cost nothing.
+
+_EXPAND_CACHE: "OrderedDict[str, list[str]]" = OrderedDict()
+_EXPAND_CACHE_MAX = 256
+
+_EXPAND_SYSTEM = (
+    "You rewrite a search query into alternative phrasings to improve memory "
+    "retrieval. Given one query, output up to {n} alternative phrasings that mean "
+    "the same thing using DIFFERENT words and synonyms. One phrasing per line. "
+    "No numbering, no quotes, no preamble, no commentary — only the phrasings."
+)
+
+
+def _resolve_openrouter_creds(reasoning_cfg) -> tuple[str, str]:
+    """Find an already-configured OpenRouter key/base in the reasoning provider
+    chain, so expansion reuses existing credentials with zero new config."""
+    providers = [reasoning_cfg.primary, *reasoning_cfg.fallbacks]
+    for p in providers:
+        if getattr(p, "provider", "") == "openrouter" and getattr(p, "api_key", ""):
+            return p.api_key, (p.api_base or "https://openrouter.ai/api/v1")
+    return "", "https://openrouter.ai/api/v1"
+
+
+def merge_passes(passes) -> list:
+    """Fuse one or more retrieval passes into a single candidate pool.
+
+    THE CRUX of the Thesaurus Loop: when the same memory_id surfaces from more
+    than one phrasing, keep the instance with the HIGHEST relevance (RAG-Fusion
+    max-relevance), not the first one seen. A plain dict update keeps the
+    original insertion position, so a single pass — already tier-deduped inside
+    _retrieve_for_embedding — returns byte-identical order to the pre-expansion
+    handler. memory_id-less HOT chunks dedup by (source, content).
+    """
+    merged: dict = {}
+    for pass_chunks in passes:
+        for c in pass_chunks:
+            key = c.memory_id or ("__hot__", c.source, c.content)
+            prev = merged.get(key)
+            if prev is None or c.relevance > prev.relevance:
+                merged[key] = c
+    return list(merged.values())
+
+
+def top_relevance(chunks) -> float:
+    """Highest raw relevance in a candidate pool (0.0 if empty). Raw, not the
+    composite score — the escalation check runs before the re-rank."""
+    return max((c.relevance for c in chunks), default=0.0)
+
+
+def should_expand(prompt: str, chunks, cfg: ExpansionConfig) -> bool:
+    """Escalate to expansion only when the first pass whiffed: too-short queries
+    (likely single-entity lookups) never expand; otherwise expand on zero results
+    or a top relevance below the floor."""
+    if len(prompt.split()) < cfg.min_query_words:
+        return False
+    if not chunks:
+        return True
+    return top_relevance(chunks) < cfg.relevance_floor
+
+
+async def expand_query(prompt: str, cfg: ExpansionConfig, api_key: str, api_base: str) -> list[str]:
+    """Return up to cfg.max_variants alternative phrasings, or [] on any failure.
+    Isolated: own httpx client + hard timeout, no breaker. Non-empty results are
+    LRU-cached by normalized query; failures are never cached (could be transient)."""
+    if not api_key or cfg.max_variants < 1:
+        return []
+    key = prompt.strip().lower()
+    cached = _EXPAND_CACHE.get(key)
+    if cached is not None:
+        _EXPAND_CACHE.move_to_end(key)
+        return list(cached)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/GuyMannDude/mnemo-cortex",
+        "X-Title": "Mnemo Cortex",
+    }
+    body = {
+        "model": cfg.model,
+        "messages": [
+            {"role": "system", "content": _EXPAND_SYSTEM.format(n=cfg.max_variants)},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 160,
+        "temperature": 0.7,
+    }
+    base = api_base or "https://openrouter.ai/api/v1"
+    try:
+        async with httpx.AsyncClient(timeout=cfg.timeout_ms / 1000.0) as client:
+            resp = await client.post(f"{base}/chat/completions", headers=headers, json=body)
+            resp.raise_for_status()
+            # `content` can be null on a refused/tool-only completion — coerce to
+            # "" INSIDE the guard so the parse loop never sees None (a None here
+            # would AttributeError past this try and 500 the live recall path).
+            text = resp.json()["choices"][0]["message"].get("content") or ""
+    except Exception as e:
+        log.warning(f"query expansion call failed (no expansion this query): {e}")
+        return []
+
+    original = prompt.strip().lower()
+    variants: list[str] = []
+    for line in text.splitlines():
+        # Strip a leading list marker only — a bullet (-, •, *) or an ordered
+        # marker (digits + . or )). NOT a char-set lstrip: that would eat the
+        # leading digits of a real phrasing ("3D printing" → "D printing").
+        v = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s+", "", line).strip().strip('"')
+        if v and v.lower() != original and v.lower() not in (x.lower() for x in variants):
+            variants.append(v)
+        if len(variants) >= cfg.max_variants:
+            break
+
+    if variants:
+        _EXPAND_CACHE[key] = list(variants)
+        _EXPAND_CACHE.move_to_end(key)
+        while len(_EXPAND_CACHE) > _EXPAND_CACHE_MAX:
+            _EXPAND_CACHE.popitem(last=False)
+    return variants
+
+
 def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     if config is None:
         config = load_config()
@@ -318,6 +462,14 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     reasoner = create_resilient_reasoning(config.reasoning)
     embedder = create_resilient_embedding(config.embedding)
     tenants = TenantManager(config)
+
+    # Thesaurus Loop credentials: reuse whatever OpenRouter key the reasoning
+    # chain already carries (zero new config), unless expansion overrides it.
+    expand_or_key, expand_or_base = _resolve_openrouter_creds(config.reasoning)
+    if config.expansion.api_key:
+        expand_or_key = config.expansion.api_key
+    if config.expansion.api_base:
+        expand_or_base = config.expansion.api_base
 
     # Phase 3: shared global facts store (one file, all agents share)
     data_root = Path(config.data_dir or os.path.expanduser("~/.agentb"))
@@ -333,7 +485,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        log.info(f"⚡ Mnemo Cortex v4.2.0 — I remember everything so your agent doesn't have to.")
+        log.info(f"⚡ Mnemo Cortex v4.3.0 — I remember everything so your agent doesn't have to.")
         log.info(f"  Reasoning: {reasoner.status}")
         log.info(f"  Embedding: {embedder.status}")
         log.info(f"  Data dir:  {config.data_dir}")
@@ -346,7 +498,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     app = FastAPI(
         title="Mnemo Cortex",
         description="Drop-in memory superhero for AI agents",
-        version="4.2.0",
+        version="4.3.0",
         lifespan=lifespan,
     )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
@@ -399,7 +551,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="4.2.0",
+            version="4.3.0",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
@@ -462,7 +614,6 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         overfetch = max(req.max_results * 3, req.max_results + 5)
 
         cache_hits = {"HOT": 0, "L1": 0, "VEC": 0, "L2": 0, "L3": 0, "MEM0": 0}
-        all_chunks: list[ContextChunk] = []
 
         # v4.1: tiers no longer fill a sequential budget. Each tier contributes
         # its filtered candidates to a pool; the pool is re-ranked by the
@@ -470,155 +621,198 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # frequency) and trimmed once at the end. Under the old budget fill,
         # whichever tier ran first owned the result slots regardless of how
         # weak its matches were.
+        #
+        # v4.2 (Thesaurus Loop): a single retrieval pass is factored out here so
+        # the same pass can run once for the original query or once per expanded
+        # phrasing. With expansion off the handler calls this exactly once and
+        # merge_passes is an identity over that one pass → behaviour is
+        # byte-identical to the v4.1 pooled re-rank handler.
+        async def _retrieve_for_embedding(query_str: str, query_embedding) -> list[ContextChunk]:
+            pass_chunks: list[ContextChunk] = []
 
-        # HOT: keyword search over recent live sessions. These are raw session
-        # logs, so they carry category=session_log and obey the same two-tier
-        # default hiding as every other log (opt back in via
-        # exclude_categories=[]). relevance 0.75: a keyword hit in a recent
-        # session is decent signal, but the old hardcoded 0.95 put raw logs
-        # above every semantic match, sight unseen.
-        hot_results = sessions.search_hot(req.prompt, max_results=min(3, req.max_results))
-        for hr in hot_results:
-            content = f"[{hr['timestamp'][:16]}] User: {hr['prompt']}\nAgent: {hr['response']}"
-            if hr.get("actions"):
-                content += "\nActions: " + " | ".join(hr["actions"][:3])
-            if hr.get("thinking"):
-                content += f"\nThinking: {hr['thinking']}"
-            c = ContextChunk(
-                content=content,
-                source=f"hot-session:{hr['session_id']}",
-                relevance=0.75,
-                cache_tier="HOT",
-                category="session_log",
+            # HOT: keyword search over recent live sessions. These are raw
+            # session logs, so they carry category=session_log and obey the same
+            # two-tier default hiding as every other log (opt back in via
+            # exclude_categories=[]). relevance 0.75: a keyword hit in a recent
+            # session is decent signal, but the old hardcoded 0.95 put raw logs
+            # above every semantic match, sight unseen.
+            hot_results = sessions.search_hot(query_str, max_results=min(3, req.max_results))
+            for hr in hot_results:
+                content = f"[{hr['timestamp'][:16]}] User: {hr['prompt']}\nAgent: {hr['response']}"
+                if hr.get("actions"):
+                    content += "\nActions: " + " | ".join(hr["actions"][:3])
+                if hr.get("thinking"):
+                    content += f"\nThinking: {hr['thinking']}"
+                c = ContextChunk(
+                    content=content,
+                    source=f"hot-session:{hr['session_id']}",
+                    relevance=0.75,
+                    cache_tier="HOT",
+                    category="session_log",
+                )
+                if keep_chunk(c):
+                    pass_chunks.append(c)
+
+            # L1
+            # v4.0.2: disk-truth the category before filtering — L1's cached
+            # category is stale/absent after the reclassification migration, so
+            # session_log leaked. Resolve per-hit (cheap, over-fetch is small),
+            # like the VEC tier. v4.1: resolve_disk_truth returns None for
+            # deleted memories.
+            pass_chunks.extend(
+                c for c in (resolve_disk_truth(c, memory_dir)
+                            for c in l1.search(query_embedding, top_k=overfetch, persona=persona))
+                if c is not None and keep_chunk(c)
             )
-            if keep_chunk(c):
-                all_chunks.append(c)
+
+            # Intra-pass cross-tier dedup: a memory written via /writeback ends
+            # up in BOTH the vec index and the L2/L3 stores. Without this, the
+            # same chunk appears once per tier within this pass. (Cross-PASS
+            # dedup — fusing the original query with expanded phrasings — happens
+            # in merge_passes, by max-relevance, not first-wins.)
+            seen_memory_ids: set[str] = {c.memory_id for c in pass_chunks if c.memory_id}
+
+            # VEC: indexed sqlite-vec lookup over written memories.
+            # #468: push the category filter INTO the kNN. A session_log-dominated
+            # store (cc) otherwise hands back an all-hidden top-k → every category
+            # filter falls through to the slow L3 disk-walk. With the category
+            # column, search over-fetches and filters in-index so VEC fills the
+            # budget. keep_chunk below still disk-truths every hit (final authority).
+            # Note the over-fetch compounds: top_k here is already `overfetch`
+            # (3×max_results, for the post-filter trim), and search multiplies THAT
+            # by the multiplier — so the kNN fetches ~15×max_results candidates when
+            # a category filter is active. Intentional headroom for thin categories;
+            # the kNN cost of a larger k is negligible and the handler trims to
+            # max_results regardless.
+            if vec_store.count() > 0:
+                try:
+                    vec_hits = vec_store.search(
+                        query_embedding,
+                        top_k=overfetch,
+                        include_category=req.category,
+                        exclude_categories=effective_exclude,
+                        overfetch_multiplier=config.cache.vec_category_overfetch_multiplier,
+                    )
+                except VecDimMismatch as e:
+                    log.error(f"vec query dim mismatch: {e}")
+                    vec_hits = []
+                for hit in vec_hits:
+                    if hit.memory_id in seen_memory_ids:
+                        continue
+                    # vec0 distance is L2 by default; convert to similarity-ish (0..1)
+                    relevance = 1.0 / (1.0 + hit.distance)
+                    # v4.0.1: load category/source from the memory's JSON so the
+                    # metadata filter (session_log exclusion, stale, source) applies
+                    # to VEC hits too. Without this the VEC tier silently bypassed
+                    # every category filter — session_log noise crowded recall.
+                    category = provenance_source = None
+                    age_days = stale = None
+                    if hit.source_file and os.path.exists(hit.source_file):
+                        try:
+                            mj = json.loads(Path(hit.source_file).read_text())
+                            category = mj.get("category")
+                            provenance_source = mj.get("source")
+                        except Exception:
+                            pass
+                    if hit.created_at:
+                        age_days = (time.time() - hit.created_at) / 86400.0
+                        if category:
+                            stale = compute_stale_warning(category, hit.created_at)
+                    c = ContextChunk(
+                        content=hit.text,
+                        source=f"memory:{hit.memory_id}",
+                        relevance=relevance,
+                        cache_tier="VEC",
+                        memory_id=hit.memory_id,
+                        provenance_source=provenance_source,
+                        category=category,
+                        age_days=age_days,
+                        stale_warning=stale,
+                    )
+                    if keep_chunk(c):
+                        pass_chunks.append(c)
+                        seen_memory_ids.add(hit.memory_id)
+
+            # L2 (legacy read-only tier — new writes stopped in v4.1)
+            # v4.0.2: resolve disk-truth category first — L2's metadata cache
+            # kept the pre-migration category, so session_log leaked here too.
+            # v4.1: resolve_disk_truth returns None for deleted memories.
+            l2_results = [
+                c for c in (resolve_disk_truth(c, memory_dir)
+                            for c in l2.search(query_embedding, top_k=overfetch, persona=persona))
+                if c is not None and keep_chunk(c)
+                and (not c.memory_id or c.memory_id not in seen_memory_ids)
+            ]
+            pass_chunks.extend(l2_results)
+            for c in l2_results:
+                if c.memory_id:
+                    seen_memory_ids.add(c.memory_id)
+
+            # L3: the expensive disk-walk (embeds candidates) stays an escape
+            # hatch — only runs when the cheap tiers couldn't fill the request.
+            # #468: when the caller pinned a specific category AND the VEC tier
+            # actually served on-category hits, VEC already did the category-filtered
+            # over-fetch that L3 would duplicate — a thin category genuinely has few
+            # memories, and a partial result beats the multi-second disk-walk (which
+            # on a large store can exceed the bridge timeout). Return partial instead.
+            # Gate on a real VEC contribution, NOT just "category set + index
+            # non-empty": in the un-backfilled deploy window every column is NULL, so
+            # an include filter matches nothing and VEC returns zero — there L3 is
+            # still the escape hatch that finds the memories via disk-truth. Every
+            # VEC chunk that reached pass_chunks already passed keep_chunk, so when a
+            # category is pinned a VEC chunk here is by definition on-category.
+            vec_served_category = bool(req.category) and any(
+                c.cache_tier == "VEC" for c in pass_chunks
+            )
+            if len(pass_chunks) < req.max_results and not vec_served_category:
+                l3_results = [
+                    c for c in await l3_scan(memory_dir, query_embedding,
+                                              embed_fn=embedder.embed,
+                                              threshold=config.cache.l3_similarity_threshold,
+                                              top_k=overfetch,
+                                              prefilter=passes_metadata,
+                                              max_candidates=config.cache.l3_max_candidates)
+                    if keep_chunk(c) and (not c.memory_id or c.memory_id not in seen_memory_ids)
+                ]
+                pass_chunks.extend(l3_results)
+
+            return pass_chunks
 
         try:
             query_embedding = await embedder.embed(req.prompt)
         except Exception as e:
             raise HTTPException(503, f"Embedding unavailable: {e}")
 
-        # L1
-        # v4.0.2: disk-truth the category before filtering — L1's cached
-        # category is stale/absent after the reclassification migration, so
-        # session_log leaked. Resolve per-hit (cheap, over-fetch is small),
-        # like the VEC tier. v4.1: resolve_disk_truth returns None for
-        # deleted memories.
-        all_chunks.extend(
-            c for c in (resolve_disk_truth(c, memory_dir)
-                        for c in l1.search(query_embedding, top_k=overfetch, persona=persona))
-            if c is not None and keep_chunk(c)
-        )
+        # Standard pass — always runs, identical to v4.1.
+        standard = await _retrieve_for_embedding(req.prompt, query_embedding)
+        all_chunks = merge_passes([standard])
 
-        # Cross-tier dedup: a memory written via /writeback ends up in BOTH
-        # the vec index and the L2/L3 stores. Without this, the same chunk
-        # appears once per tier and burns max_results budget.
-        seen_memory_ids: set[str] = {c.memory_id for c in all_chunks if c.memory_id}
-
-        # VEC: indexed sqlite-vec lookup over written memories.
-        # #468: push the category filter INTO the kNN. A session_log-dominated
-        # store (cc) otherwise hands back an all-hidden top-k → every category
-        # filter falls through to the slow L3 disk-walk. With the category
-        # column, search over-fetches and filters in-index so VEC fills the
-        # budget. keep_chunk below still disk-truths every hit (final authority).
-        # Note the over-fetch compounds: top_k here is already `overfetch`
-        # (3×max_results, for the post-filter trim), and search multiplies THAT
-        # by the multiplier — so the kNN fetches ~15×max_results candidates when
-        # a category filter is active. Intentional headroom for thin categories;
-        # the kNN cost of a larger k is negligible and the handler trims to
-        # max_results regardless.
-        if vec_store.count() > 0:
-            try:
-                vec_hits = vec_store.search(
-                    query_embedding,
-                    top_k=overfetch,
-                    include_category=req.category,
-                    exclude_categories=effective_exclude,
-                    overfetch_multiplier=config.cache.vec_category_overfetch_multiplier,
-                )
-            except VecDimMismatch as e:
-                log.error(f"vec query dim mismatch: {e}")
-                vec_hits = []
-            for hit in vec_hits:
-                if hit.memory_id in seen_memory_ids:
+        # Thesaurus Loop (v4.2): escalate ONLY when the first pass whiffed. A
+        # zero/weak result fans the query into a few alternative phrasings (one
+        # isolated Flash call), searches each, and fuses by max-relevance. Good
+        # searches never reach this branch, so there's no hot-path cost.
+        exp = config.expansion
+        if exp.enabled and req.expand is not False and not req.batch \
+                and should_expand(req.prompt, all_chunks, exp):
+            variants = await expand_query(req.prompt, exp, expand_or_key, expand_or_base)
+            extra_passes = []
+            for v in variants:
+                try:
+                    v_emb = await embedder.embed(v)
+                except Exception as e:
+                    # A failed variant embed must not sink the recall — skip it.
+                    log.warning(f"expansion variant embed failed (skipped): {e}")
                     continue
-                # vec0 distance is L2 by default; convert to similarity-ish (0..1)
-                relevance = 1.0 / (1.0 + hit.distance)
-                # v4.0.1: load category/source from the memory's JSON so the
-                # metadata filter (session_log exclusion, stale, source) applies
-                # to VEC hits too. Without this the VEC tier silently bypassed
-                # every category filter — session_log noise crowded recall.
-                category = provenance_source = None
-                age_days = stale = None
-                if hit.source_file and os.path.exists(hit.source_file):
-                    try:
-                        mj = json.loads(Path(hit.source_file).read_text())
-                        category = mj.get("category")
-                        provenance_source = mj.get("source")
-                    except Exception:
-                        pass
-                if hit.created_at:
-                    age_days = (time.time() - hit.created_at) / 86400.0
-                    if category:
-                        stale = compute_stale_warning(category, hit.created_at)
-                c = ContextChunk(
-                    content=hit.text,
-                    source=f"memory:{hit.memory_id}",
-                    relevance=relevance,
-                    cache_tier="VEC",
-                    memory_id=hit.memory_id,
-                    provenance_source=provenance_source,
-                    category=category,
-                    age_days=age_days,
-                    stale_warning=stale,
+                extra_passes.append(await _retrieve_for_embedding(v, v_emb))
+            if extra_passes:
+                before = top_relevance(all_chunks)
+                all_chunks = merge_passes([standard, *extra_passes])
+                log.info(
+                    "query expansion fired (agent=%s): %d variant(s), "
+                    "top relevance %.3f -> %.3f, pool %d",
+                    req.agent_id, len(extra_passes), before,
+                    top_relevance(all_chunks), len(all_chunks),
                 )
-                if keep_chunk(c):
-                    all_chunks.append(c)
-                    seen_memory_ids.add(hit.memory_id)
-
-        # L2 (legacy read-only tier — new writes stopped in v4.1)
-        # v4.0.2: resolve disk-truth category first — L2's metadata cache
-        # kept the pre-migration category, so session_log leaked here too.
-        # v4.1: resolve_disk_truth returns None for deleted memories.
-        l2_results = [
-            c for c in (resolve_disk_truth(c, memory_dir)
-                        for c in l2.search(query_embedding, top_k=overfetch, persona=persona))
-            if c is not None and keep_chunk(c)
-            and (not c.memory_id or c.memory_id not in seen_memory_ids)
-        ]
-        all_chunks.extend(l2_results)
-        for c in l2_results:
-            if c.memory_id:
-                seen_memory_ids.add(c.memory_id)
-
-        # L3: the expensive disk-walk (embeds candidates) stays an escape
-        # hatch — only runs when the cheap tiers couldn't fill the request.
-        # #468: when the caller pinned a specific category AND the VEC tier
-        # actually served on-category hits, VEC already did the category-filtered
-        # over-fetch that L3 would duplicate — a thin category genuinely has few
-        # memories, and a partial result beats the multi-second disk-walk (which
-        # on a large store can exceed the bridge timeout). Return partial instead.
-        # Gate on a real VEC contribution, NOT just "category set + index
-        # non-empty": in the un-backfilled deploy window every column is NULL, so
-        # an include filter matches nothing and VEC returns zero — there L3 is
-        # still the escape hatch that finds the memories via disk-truth. Every
-        # VEC chunk that reached all_chunks already passed keep_chunk, so when a
-        # category is pinned a VEC chunk here is by definition on-category.
-        vec_served_category = bool(req.category) and any(
-            c.cache_tier == "VEC" for c in all_chunks
-        )
-        if len(all_chunks) < req.max_results and not vec_served_category:
-            l3_results = [
-                c for c in await l3_scan(memory_dir, query_embedding,
-                                          embed_fn=embedder.embed,
-                                          threshold=config.cache.l3_similarity_threshold,
-                                          top_k=overfetch,
-                                          prefilter=passes_metadata,
-                                          max_candidates=config.cache.l3_max_candidates)
-                if keep_chunk(c) and (not c.memory_id or c.memory_id not in seen_memory_ids)
-            ]
-            all_chunks.extend(l3_results)
 
         # Composite re-rank over the pooled candidates, then a single trim.
         if config.ranking.enabled:

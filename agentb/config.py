@@ -143,6 +143,26 @@ class AnalysisConfig:
 
 
 @dataclass
+class ExpansionConfig:
+    # The Thesaurus Loop (v4.2): query expansion on a WHIFF. The standard recall
+    # runs first; only when it comes back empty or weak do we fan the query into
+    # a few alternative phrasings (one isolated Flash call), search each, and
+    # fuse by max-relevance. Escalation means good searches pay nothing, so
+    # default-ON is safe. Disable for the exact pre-v4.2 single-query behavior.
+    enabled: bool = True
+    relevance_floor: float = 0.5   # first pass is "weak" if its top relevance < this
+    max_variants: int = 4          # alternative phrasings requested from Flash
+    timeout_ms: int = 800          # hard cap on the expansion LLM call; expire → no expansion
+    min_query_words: int = 3       # skip expansion for short/entity-lookup queries
+    model: str = "google/gemini-2.5-flash"  # fast model for phrasing generation (OpenRouter)
+    # api_key / api_base default to whatever OpenRouter provider is already
+    # configured for reasoning (resolved at server startup); set here only to
+    # override. No key anywhere → expansion silently no-ops.
+    api_key: str = ""
+    api_base: str = ""
+
+
+@dataclass
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 50001
@@ -170,6 +190,7 @@ class AgentBConfig:
     classification: ClassificationConfig = field(default_factory=ClassificationConfig)
     ranking: RankingConfig = field(default_factory=RankingConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
+    expansion: ExpansionConfig = field(default_factory=ExpansionConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     data_dir: str = ""
     log_level: str = "info"
@@ -273,6 +294,13 @@ def _parse_config(raw: dict) -> AgentBConfig:
         an = raw["analysis"]
         cfg.analysis = AnalysisConfig(
             **{k: an[k] for k in an if hasattr(AnalysisConfig, k)})
+    if "expansion" in raw and raw["expansion"]:
+        ex = raw["expansion"]
+        ex_kwargs = {k: ex[k] for k in ex if hasattr(ExpansionConfig, k)}
+        for sk in ("api_key", "api_base"):
+            if sk in ex_kwargs:
+                ex_kwargs[sk] = _resolve_env(ex_kwargs[sk])
+        cfg.expansion = ExpansionConfig(**ex_kwargs)
     if "server" in raw and raw["server"]:
         s = raw["server"]
         cfg.server = ServerConfig(
