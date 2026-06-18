@@ -150,7 +150,15 @@ class ExpansionConfig:
     # fuse by max-relevance. Escalation means good searches pay nothing, so
     # default-ON is safe. Disable for the exact pre-v4.2 single-query behavior.
     enabled: bool = True
-    relevance_floor: float = 0.5   # first pass is "weak" if its top relevance < this
+    # A first pass is a "whiff" when its best hit barely rises above the pack:
+    # top_relevance - median_relevance < this. RELATIVE shape, not an absolute
+    # score — the v4.3.0 absolute relevance_floor (0.5) sat INSIDE this embedder's
+    # compressed noise band (gibberish ~0.50, real on-topic 0.51-0.58, overlapping)
+    # and so fired 0× in production. Strong recalls peak ~0.04 over the pack; 0.03
+    # separates them while accepting the cheap false-positive on a uniform pool
+    # (one Flash call, ~$0.001, and max-relevance merge makes the result identical
+    # to not expanding). Embedder-agnostic by construction. (v4.4.0; was relevance_floor.)
+    gap_threshold: float = 0.03
     max_variants: int = 4          # alternative phrasings requested from Flash
     # Hard cap on the expansion LLM call; expire → no expansion (graceful). 2.5s:
     # live OpenRouter Flash latency straddles ~1s, and 800ms timed out on exactly

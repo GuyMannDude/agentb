@@ -20,6 +20,7 @@ import time
 import hashlib
 import logging
 import asyncio
+import statistics
 import httpx
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -382,15 +383,33 @@ def top_relevance(chunks) -> float:
     return max((c.relevance for c in chunks), default=0.0)
 
 
+def median_relevance(chunks) -> float:
+    """Median raw relevance in a candidate pool (0.0 if empty). Paired with
+    top_relevance to measure how far the best hit rises above the pack — the
+    embedder-agnostic 'shape' signal the escalation uses."""
+    rels = [c.relevance for c in chunks]
+    return statistics.median(rels) if rels else 0.0
+
+
 def should_expand(prompt: str, chunks, cfg: ExpansionConfig) -> bool:
-    """Escalate to expansion only when the first pass whiffed: too-short queries
-    (likely single-entity lookups) never expand; otherwise expand on zero results
-    or a top relevance below the floor."""
+    """Escalate to expansion only when the first pass whiffed.
+
+    Too-short queries (likely single-entity lookups) never expand. Otherwise
+    expand when the pass is EMPTY, or when its distribution is FLAT — the top hit
+    barely rises above the median (top - median < gap_threshold), meaning nothing
+    stood out and a rephrase is worth one Flash call.
+
+    The trigger is the relative top-vs-pack gap, NOT an absolute relevance floor:
+    this embedder compresses scores into a narrow band where good recalls and
+    noise overlap (the v4.3.0 absolute floor sat inside that band and never
+    fired), but a strong recall still PEAKS above its own pack regardless of where
+    the band sits. A uniform pool (incl. a single result, where top == median)
+    expands — the accepted, near-free false-positive per the locked design."""
     if len(prompt.split()) < cfg.min_query_words:
         return False
     if not chunks:
         return True
-    return top_relevance(chunks) < cfg.relevance_floor
+    return top_relevance(chunks) - median_relevance(chunks) < cfg.gap_threshold
 
 
 async def expand_query(prompt: str, cfg: ExpansionConfig, api_key: str, api_base: str) -> list[str]:
@@ -487,7 +506,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        log.info(f"⚡ Mnemo Cortex v4.3.0 — I remember everything so your agent doesn't have to.")
+        log.info(f"⚡ Mnemo Cortex v4.4.0 — I remember everything so your agent doesn't have to.")
         log.info(f"  Reasoning: {reasoner.status}")
         log.info(f"  Embedding: {embedder.status}")
         log.info(f"  Data dir:  {config.data_dir}")
@@ -500,7 +519,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     app = FastAPI(
         title="Mnemo Cortex",
         description="Drop-in memory superhero for AI agents",
-        version="4.3.0",
+        version="4.4.0",
         lifespan=lifespan,
     )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
@@ -553,7 +572,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="4.3.0",
+            version="4.4.0",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},

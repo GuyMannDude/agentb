@@ -1,5 +1,46 @@
 # Changelog
 
+## v4.4.0 (2026-06-17) — Recalibrate the Thesaurus Loop: gap signal, not an absolute floor
+
+**Problem.** The v4.3.0 query expansion shipped but **fired 0× in production** — diagnosed
+by replaying real recalls against the live store. Escalation gated on an *absolute* top
+relevance below `expansion.relevance_floor` (0.5), but this embedder compresses scores into
+a narrow band where good recalls and noise **overlap**: gibberish landed at ~0.50, a real
+on-topic hit ("Hoffman bedding") at 0.512 — indistinguishable. No fixed absolute floor can
+separate signal from noise here: 0.5 never fires, 0.53 fires on good queries too, 0.55 fires
+on everything. The escalation-only design quietly degraded to never-escalate.
+
+**Fix — trigger on the relative top-vs-pack gap, which is embedder-agnostic.** A strong recall
+*peaks above its own pack* regardless of where the absolute band sits; a whiff comes back
+*flat*. So expansion now escalates when the pass is **empty**, or when
+`top_relevance - median_relevance < expansion.gap_threshold` (default 0.03). Strong recalls
+in live data peak ~0.04 over the median; 0.03 separates them. The signal doesn't depend on
+the score distribution's absolute location, so it survives an embedder swap.
+
+- **`should_expand`** drops the absolute-relevance comparison; adds the `top - median` gap
+  check. Word-count gate (<3 words skip) and Flash isolation (own timeout/breaker/fallback)
+  are unchanged. New `median_relevance` helper alongside `top_relevance`.
+- **Accepted false-positive (per design):** a uniform pool — including a single result, where
+  `top == median` — escalates. The cost is one ~$0.001 Flash call, and max-relevance
+  `merge_passes` makes the merged result identical to not expanding. No companion absolute
+  threshold, no self-calibration — kept simple deliberately.
+- **Rest of the pipeline untouched:** `merge_passes`, the tier dedup, the LRU, and
+  `expand_query` are byte-identical to v4.3.0.
+
+**Config.** `expansion.relevance_floor` is **removed**; `expansion.gap_threshold` (default
+0.03) replaces it. The config loader filters unknown keys, so a stale `relevance_floor:` in a
+deployed YAML is silently ignored (no crash) rather than honored.
+
+**Tests.** `tests/test_query_expansion.py` grows to 27 cases: gap-trigger units (flat→expand,
+clear-winner→skip, single-result→expand, threshold configurable, exact-boundary), a
+`median_relevance` unit, and two end-to-end tests through the real L3 cosine path — a
+discriminating embedder proving a clear winner skips expansion, and the v4.3.0 regression
+(four uniformly-*high* hits the old floor passed at 1.0 ≥ 0.5 but which are a flat pool) now
+correctly escalating. Full suite green except the pre-existing passport #425 red.
+
+**Also** de-drifts the `/health` + startup-banner version strings (were stuck at 4.3.0) and
+the CLI `--version` / `pyproject` (were 4.3.1) up to 4.4.0.
+
 ## v4.3.1 (2026-06-16) — Fix: Windows CLI crash on redirected stdout (issue #3)
 
 **Problem.** Any CLI command that prints the banner — notably `mnemo-cortex watch` — crashed

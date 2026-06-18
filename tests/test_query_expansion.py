@@ -3,7 +3,11 @@
 Covers the four moving parts:
   - merge_passes        — max-relevance-per-memory_id fusion (the crux); a single
                           pass is byte-identical to the pre-expansion handler.
-  - should_expand       — escalation trigger (short query / zero / weak / strong).
+  - should_expand       — escalation trigger: short query / zero results / FLAT
+                          distribution (top - median < gap_threshold) vs a clear
+                          winner. Gap signal is embedder-agnostic — the v4.3.0
+                          absolute relevance_floor sat inside the noise band and
+                          fired 0× (v4.4.0 recalibration).
   - expand_query        — the isolated Flash call: no-key no-op, timeout = [] (no
                           regression), parsing/cap, drop-original, LRU cache.
   - /context end-to-end — escalation fires on a whiff, and never fires for a batch
@@ -24,7 +28,9 @@ from agentb.config import (
     CacheConfig, ServerConfig, ClassificationConfig, ExpansionConfig, DEFAULT_PERSONAS,
 )
 from agentb.cache import ContextChunk
-from agentb.server import merge_passes, should_expand, top_relevance, expand_query, _EXPAND_CACHE
+from agentb.server import (
+    merge_passes, should_expand, top_relevance, median_relevance, expand_query, _EXPAND_CACHE,
+)
 
 
 def _chunk(mid, rel, tier="VEC", content="c", source=None):
@@ -69,6 +75,14 @@ def test_top_relevance_empty_is_zero():
     assert top_relevance([]) == 0.0
 
 
+def test_median_relevance_empty_is_zero():
+    assert median_relevance([]) == 0.0
+
+
+def test_median_relevance_value():
+    assert median_relevance([_chunk("a", 0.2), _chunk("b", 0.6), _chunk("c", 0.4)]) == 0.4
+
+
 def test_short_query_never_expands_even_with_zero_results():
     # 2 words < min_query_words(3): a likely single-entity lookup, skip it.
     assert should_expand("solr index", [], ExpansionConfig()) is False
@@ -78,14 +92,39 @@ def test_zero_results_expands():
     assert should_expand("how do we deploy", [], ExpansionConfig()) is True
 
 
-def test_weak_top_relevance_expands():
-    cfg = ExpansionConfig(relevance_floor=0.5)
-    assert should_expand("how do we deploy", [_chunk("a", 0.3)], cfg) is True
+def test_flat_distribution_expands():
+    # The v4.3.0 calibration trap, reproduced: every hit is high-but-uniform,
+    # straddling the OLD absolute floor (0.5). Nothing stands out → whiff → expand.
+    # top - median = 0.55 - 0.54 = 0.01 < gap_threshold(0.03).
+    chunks = [_chunk("a", 0.55), _chunk("b", 0.54), _chunk("c", 0.53), _chunk("d", 0.54)]
+    assert should_expand("how do we deploy the service", chunks, ExpansionConfig()) is True
 
 
-def test_strong_top_relevance_does_not_expand():
-    cfg = ExpansionConfig(relevance_floor=0.5)
-    assert should_expand("how do we deploy", [_chunk("a", 0.8)], cfg) is False
+def test_clear_winner_does_not_expand():
+    # A real on-topic hit peaks above its own pack regardless of the absolute band.
+    # top - median = 0.58 - 0.51 = 0.07 >= gap_threshold(0.03) → strong → skip.
+    chunks = [_chunk("a", 0.58), _chunk("b", 0.51), _chunk("c", 0.50), _chunk("d", 0.51)]
+    assert should_expand("how do we deploy the service", chunks, ExpansionConfig()) is False
+
+
+def test_single_uniform_result_expands_accepted_false_positive():
+    # One result: top == median → gap 0 < threshold → expands. This is the
+    # near-free false-positive the locked design explicitly accepts (one Flash
+    # call; max-relevance merge makes the merged result identical to not expanding).
+    assert should_expand("how do we deploy the service", [_chunk("a", 0.9)], ExpansionConfig()) is True
+
+
+def test_gap_threshold_is_configurable():
+    # Same pool, two thresholds straddling its 0.04 gap → opposite verdicts.
+    chunks = [_chunk("a", 0.58), _chunk("b", 0.54), _chunk("c", 0.54)]  # top-median = 0.04
+    assert should_expand("how do we deploy the service", chunks, ExpansionConfig(gap_threshold=0.02)) is False
+    assert should_expand("how do we deploy the service", chunks, ExpansionConfig(gap_threshold=0.06)) is True
+
+
+def test_gap_exactly_at_threshold_does_not_expand():
+    # Boundary: top - median == gap_threshold is NOT "< threshold" → no expand.
+    chunks = [_chunk("a", 0.53), _chunk("b", 0.50), _chunk("c", 0.50)]  # gap == 0.03
+    assert should_expand("how do we deploy the service", chunks, ExpansionConfig(gap_threshold=0.03)) is False
 
 
 # ── expand_query: the isolated Flash call ───────────────────────────────────
@@ -220,6 +259,23 @@ class _RecordingEmbedding:
         return True
 
 
+class _DiscriminatingEmbedding(_RecordingEmbedding):
+    """Unlike the uniform _RecordingEmbedding, embeds 'deploy'-mentioning text to
+    e0 = [1,0,...] and everything else off-axis ([1,0.5,...]), so a real on-topic
+    memory lands at cosine 1.0 and fillers at 1/sqrt(1.25)=0.894 through the ACTUAL
+    L3 cosine path. Proves the gap signal works end-to-end on real cosine spread,
+    not just hand-fed relevances (gap = 1.0 - 0.894 = 0.106 >= gap_threshold)."""
+    active_label = "fake/embed-discriminating"
+
+    async def embed(self, text, *, use_breaker=True):
+        self.embedded.append(text)
+        v = [0.0] * 768
+        v[0] = 1.0
+        if "deploy" not in text.lower():
+            v[1] = 0.5
+        return v
+
+
 class _FakeReasoning:
     active_label = "fake/reason"
 
@@ -325,21 +381,48 @@ def test_expand_false_never_expands():
                 p.stop()
 
 
-def test_strong_first_pass_skips_expansion():
+def test_clear_winner_first_pass_skips_expansion():
+    # A real on-topic memory peaks above filler memories (cosine 1.0 vs 0.894)
+    # through the actual L3 cosine path, so top - median = 0.106 >= gap_threshold
+    # → clear winner → no whiff → no expansion.
     import tempfile
     from pathlib import Path
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         _seed_memory(tmp, "m-strong", "deployment runbook for the service")
-        client, patches = _make_client(tmp, _RecordingEmbedding())
+        for i in range(3):
+            _seed_memory(tmp, f"m-filler-{i}", f"an unrelated note number {i}")
+        client, patches = _make_client(tmp, _DiscriminatingEmbedding())
         try:
             mock_expand = AsyncMock(return_value=["x"])
             with patch("agentb.server.expand_query", mock_expand):
                 r = client.post("/context", json={"prompt": "how do we deploy this", "max_results": 5})
             assert r.status_code == 200, r.text
-            # A strong VEC hit (relevance ~1.0 ≥ floor) means no whiff → no expansion.
             assert r.json()["total_found"] >= 1
             mock_expand.assert_not_awaited()
+        finally:
+            client.__exit__(None, None, None)
+            for p in patches:
+                p.stop()
+
+
+def test_flat_high_distribution_expands():
+    # THE v4.3.0 regression: multiple hits, all uniformly HIGH (relevance 1.0),
+    # but no standout. The old absolute floor (0.5) saw 1.0 >= 0.5 and never
+    # expanded; the gap signal sees top == median (gap 0) and correctly escalates.
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        for i in range(4):
+            _seed_memory(tmp, f"m-{i}", f"some memory content {i}")
+        client, patches = _make_client(tmp, _RecordingEmbedding())
+        try:
+            mock_expand = AsyncMock(return_value=["an alternate phrasing here"])
+            with patch("agentb.server.expand_query", mock_expand):
+                r = client.post("/context", json={"prompt": "how do we deploy this", "max_results": 5})
+            assert r.status_code == 200, r.text
+            mock_expand.assert_awaited_once()  # flat pool → whiff → escalate
         finally:
             client.__exit__(None, None, None)
             for p in patches:
