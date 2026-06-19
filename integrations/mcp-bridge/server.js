@@ -412,7 +412,7 @@ process.stdin.on("end", () => {
 
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.11.0",
+  version: "2.11.1",
 });
 
 // ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────
@@ -788,19 +788,35 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
   // Pull the brain repo so we read the freshest cross-agent state,
   // not whatever was last on disk. Best-effort — if pull fails (no
   // network, dirty tree, etc.) we keep going with local files.
-  let pullStatus = "skipped (no .git)";
+  // The brain dir is often a SUBDIR of its repo — sparks-brain/brain, or
+  // the mnemo-plan default ~/mnemo-plan/brain — where .git lives at the repo
+  // root, not inside BRAIN_DIR. Looking for join(BRAIN_DIR, ".git") missed
+  // that and silently skipped the pull. Detect the work tree the way git
+  // itself does (walking up the tree); git pull then runs fine from the
+  // subdir (it's a repo-level op regardless of cwd).
+  let pullStatus = "skipped (not a git repo)";
+  let insideWorkTree = false;
   try {
-    const gitDir = join(BRAIN_DIR, ".git");
-    if (existsSync(gitDir)) {
+    insideWorkTree =
+      execSync("git rev-parse --is-inside-work-tree", {
+        cwd: BRAIN_DIR,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() === "true";
+  } catch {
+    // Not a git repo (or git unavailable) — keep the "skipped" status.
+  }
+  if (insideWorkTree) {
+    try {
       const out = execSync("git pull --ff-only", {
         cwd: BRAIN_DIR,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
       }).trim();
       pullStatus = out.split("\n")[0] || "OK";
+    } catch (e) {
+      pullStatus = `FAILED (${e.message.split("\n")[0]})`;
     }
-  } catch (e) {
-    pullStatus = `FAILED (${e.message.split("\n")[0]})`;
   }
 
   try {

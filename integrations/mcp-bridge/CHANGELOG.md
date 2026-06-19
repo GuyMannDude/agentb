@@ -12,6 +12,33 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.11.1 — 2026-06-18 — Auto-pull works when the brain dir is a repo subdir
+
+**Problem:** The startup `agent_startup` git-pull was gated on
+`existsSync(join(BRAIN_DIR, ".git"))` — it only pulled if `.git` sat
+*directly inside* `BRAIN_DIR`. But the brain dir is commonly a **subdir** of
+its repo: the shared `sparks-brain-guy/brain` layout (`.git` at the repo
+root) and the documented mnemo-plan default `~/mnemo-plan/brain` both put the
+`.md` files one level below `.git`. For those, the check returned false and
+the pull was silently skipped (`pullStatus = "skipped (no .git)"`), so the
+agent read whatever stale snapshot was on disk. It went unnoticed because the
+interactive IGOR agents refresh the clone via a manual session-ritual `git
+pull`; a daemon agent (Dave, migrated onto the shared brain 2026-06-18) has no
+such ritual and so never auto-refreshed at all.
+
+**Fix:** Detect the work tree the way git itself does — walk up the tree with
+`git rev-parse --is-inside-work-tree` (cwd = `BRAIN_DIR`) instead of looking
+for a literal `.git`. `git pull --ff-only` then runs from the subdir fine
+(it's a repo-level operation regardless of cwd). A non-repo brain dir now
+reports `skipped (not a git repo)`; a real pull failure still reports
+`FAILED (...)`. Verified across a repo subdir (was false → now pulls), a repo
+root (unchanged), and a non-git dir (correctly skips, no false FAILED).
+Commands are constant literals — no shell interpolation, no injection surface.
+
+> History note: 2.11.0 (capture pause/resume, see main CHANGELOG) bumped the
+> server version string but never got an entry here — pre-existing gap, noted
+> not back-filled.
+
 ## 2.10.1 — 2026-06-07 — Stop auto-capture from duplicating manual saves
 
 **Problem:** `mnemo_save` was set to `"full"` in the `TOOL_CAPTURE` policy
