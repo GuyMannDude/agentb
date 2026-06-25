@@ -1,5 +1,39 @@
 # Changelog
 
+## v4.5.0 (2026-06-25) — Trajectory Learning Phase 1: agents capture & recall proven recipes
+
+**Problem.** Mnemo stores *what happened* (memories) and *why* (decisions/doctrines), but the
+step-by-step **recipe** of a task that went well evaporated with the session. An agent that
+figured out, say, how to repoint a misconfigured bus path, or how to run a Shopify fix, had no
+way to hand that working sequence to its future self or to another session — it re-derived the
+approach from scratch every time. Today's "procedural" memory was only hand-authored brain-file
+doctrines, never learned from experience.
+
+**Fix — two explicit MCP tools backed by per-agent trajectory storage.** (Opie spec
+2026-06-25, Guy-approved.)
+- **`mnemo_save_trajectory`** — called AFTER a task succeeds. Captures `task_type`,
+  `task_description`, the ordered `steps` (action / tool_used / args / result_summary),
+  `outcome`, and an honest 1–5 self-`rating` (plus optional token_cost / model / duration).
+- **`mnemo_recall_trajectory`** — called BEFORE a similar task. Embeds an NL `query`, returns
+  the nearest recipes ranked by **(1) semantic similarity, (2) rating, (3) recency**, filtered
+  to `min_rating` (default 3) and optionally a `task_type`. Each result carries the full step
+  sequence — the proven recipe.
+
+**Storage** mirrors Mnemo's existing "JSONL is disk truth, sqlite-vec is the index" philosophy:
+append-only crash-safe `{agent_data_dir}/trajectories/{task_type}.jsonl` (a torn final line is
+skipped on read, never corrupting earlier entries) plus a per-tenant `traj_index.sqlite`
+VecStore over each recipe's embedding text. `task_type` becomes a filename (sanitized to block
+path traversal) and rides the vec `category` column so recall filters by type inside the kNN.
+
+**Boundaries (Phase 1):** no export, no fine-tuning, **no automatic capture** (agents explicitly
+save when they judge a task went well), no cross-agent sharing — each agent's trajectories are
+its own. The later ReasoningBank-style auto-distill design (Dreamer Stage 0.7) can feed this same
+store as a future phase.
+
+New module `agentb/trajectory.py`; endpoints `POST /trajectory/save` + `POST /trajectory/recall`;
+bridge tools at v2.12.0. 21 new tests (store unit + HTTP endpoint round-trip, min_rating /
+task_type filters, tenant isolation, crash-safe malformed-line recovery).
+
 ## v4.4.1 (2026-06-23) — Native Windows: cross-platform Passport file locking
 
 **Problem.** The server failed to import on native Windows. `agentb.server.create_app()`

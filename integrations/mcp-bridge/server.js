@@ -246,6 +246,31 @@ function formatChunks(chunks, showAgent) {
   return parts.join("\n\n");
 }
 
+// ── Trajectory recipe formatter ────────────────────────────────
+// Render one trajectory record as a readable, numbered recipe.
+
+function formatTrajectory(t) {
+  const sim =
+    t._score && typeof t._score.similarity === "number"
+      ? ` (similarity: ${t._score.similarity.toFixed(2)})`
+      : "";
+  const lines = [
+    `### ${t.task_type || "?"} — rating ${t.rating ?? "?"}/5${sim}`,
+    `Goal: ${t.task_description || ""}`,
+  ];
+  const steps = Array.isArray(t.steps) ? t.steps : [];
+  if (steps.length) {
+    lines.push("Steps:");
+    steps.forEach((s, i) => {
+      const tool = s.tool_used ? ` [${s.tool_used}]` : "";
+      const res = s.result_summary ? ` → ${s.result_summary}` : "";
+      lines.push(`  ${i + 1}. ${s.action || ""}${tool}${res}`);
+    });
+  }
+  if (t.outcome) lines.push(`Outcome: ${t.outcome}`);
+  return lines.join("\n");
+}
+
 // ── Nudge system — remind the agent to save ────────────────────
 // Counts non-save tool calls. After SAVE_REMINDER_THRESHOLD calls
 // without a manual save, append a reminder to subsequent tool
@@ -412,7 +437,7 @@ process.stdin.on("end", () => {
 
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.11.1",
+  version: "2.12.0",
 });
 
 // ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────
@@ -714,6 +739,147 @@ server.registerTool(
     } catch (err) {
       return {
         content: [{ type: "text", text: `Save error: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ── Tool: mnemo_save_trajectory ────────────────────────────────
+// Capture a proven task recipe AFTER a task succeeds (v4.5).
+
+server.registerTool(
+  "mnemo_save_trajectory",
+  {
+    description:
+      "Save a proven task recipe to Mnemo Cortex AFTER you complete a task well, so you (or another session) can recall the working approach before a similar task. Capture the ordered steps you actually took, the outcome, and an honest 1–5 self-rating. Use after a non-trivial task that went well (or instructively badly — a low rating still teaches).",
+    inputSchema: {
+      task_type: z
+        .string()
+        .min(1)
+        .max(128)
+        .describe("Category tag, e.g. shopify_fix, bus_debug, security_triage, file_migration"),
+      task_description: z
+        .string()
+        .min(1)
+        .max(10000)
+        .describe("The goal — what you set out to do"),
+      steps: z
+        .array(
+          z.object({
+            action: z.string().describe("What you did at this step"),
+            tool_used: z.string().optional().describe("Tool/command used, if any"),
+            args: z.record(z.string(), z.any()).optional().describe("Arguments, if any"),
+            result_summary: z.string().optional().describe("What the step produced"),
+          })
+        )
+        .min(1)
+        .describe("Ordered list of the steps you took"),
+      outcome: z.string().min(1).max(10000).describe("The final result"),
+      rating: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .describe("Honest self-assessment 1–5 (5 = clean success)"),
+      token_cost: z.number().int().min(0).optional(),
+      model: z.string().optional(),
+      duration_seconds: z.number().int().min(0).optional(),
+    },
+    annotations: { title: "Save Trajectory", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  async ({ task_type, task_description, steps, outcome, rating, token_cost, model, duration_seconds }) => {
+    captureCall("mnemo_save_trajectory", `${task_type}: ${task_description.slice(0, 100)}`);
+    try {
+      await ensureHealth();
+      const body = {
+        agent_id: AGENT_ID,
+        task_type,
+        task_description,
+        steps: steps.map((s) => ({
+          action: s.action,
+          tool_used: s.tool_used,
+          args: s.args,
+          result_summary: s.result_summary || "",
+        })),
+        outcome,
+        rating,
+      };
+      if (token_cost !== undefined) body.token_cost = token_cost;
+      if (model !== undefined) body.model = model;
+      if (duration_seconds !== undefined) body.duration_seconds = duration_seconds;
+
+      const data = await mnemoRequest("POST", "/trajectory/save", body);
+      const lines = [
+        "Trajectory saved to Mnemo Cortex.",
+        `  trajectory_id: ${data.trajectory_id || "ok"}`,
+        `  task_type:     ${task_type}`,
+        `  rating:        ${rating}/5`,
+        `  agent:         ${AGENT_ID}`,
+      ];
+      if (typeof data.total_for_agent === "number") {
+        lines.push(`  (${data.total_for_agent} trajectories now stored for ${AGENT_ID})`);
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Save trajectory error: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ── Tool: mnemo_recall_trajectory ──────────────────────────────
+// Recall proven task recipes BEFORE a similar task (v4.5).
+
+server.registerTool(
+  "mnemo_recall_trajectory",
+  {
+    description: `Recall proven task recipes for the current agent (${AGENT_ID}) BEFORE starting a task. Returns past trajectories ranked by semantic similarity, then rating, then recency — each with its full step sequence (the proven recipe). Call this when you're about to do something you may have done before.`,
+    inputSchema: {
+      query: z
+        .string()
+        .min(1)
+        .max(10000)
+        .describe("Describe what you're about to do"),
+      task_type: z.string().optional().describe("Filter by category tag"),
+      min_rating: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .optional()
+        .describe("Quality threshold, default 3 (excludes ratings below this)"),
+      max_results: z.number().int().min(1).max(20).optional().describe("Default 3"),
+    },
+    annotations: { title: "Recall Trajectory", readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  },
+  async ({ query, task_type, min_rating, max_results }) => {
+    try {
+      await ensureHealth();
+      const body = { query, agent_id: AGENT_ID };
+      if (task_type !== undefined) body.task_type = task_type;
+      if (min_rating !== undefined) body.min_rating = min_rating;
+      if (max_results !== undefined) body.max_results = max_results;
+
+      const data = await mnemoRequest("POST", "/trajectory/recall", body);
+      const trajs = data.trajectories || [];
+      captureCall("mnemo_recall_trajectory", `${trajs.length} recipes for: ${query.slice(0, 80)}`);
+      if (trajs.length === 0) {
+        return {
+          content: [
+            { type: "text", text: "No matching trajectories found. (Nothing saved yet, or none above the rating threshold.)" },
+          ],
+        };
+      }
+      const text = trajs.map(formatTrajectory).join("\n\n---\n\n");
+      return {
+        content: [{ type: "text", text: `Found ${trajs.length} trajectory recipe(s):\n\n${text}` }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Recall trajectory error: ${err.message}` }],
         isError: true,
       };
     }

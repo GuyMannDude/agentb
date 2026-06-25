@@ -49,6 +49,7 @@ from agentb.capture_gate import CaptureGate
 from agentb.ranking import composite_score
 from agentb.analyst import analyze_tenant
 from agentb.vec import VecStore, detect_mode as vec_detect_mode, backfill as vec_backfill, VecDimMismatch
+from agentb.trajectory import TrajectoryStore, embedding_text as traj_embedding_text
 from agentb.facts_store import FactsStore, CONFIDENCE_LEVELS
 
 logging.basicConfig(
@@ -239,6 +240,54 @@ class WritebackResponse(BaseModel):
     redactions: int = 0
 
 
+# ── v4.5 Trajectory Learning ──
+
+class TrajectoryStep(BaseModel):
+    action: str = Field(..., description="What the agent did at this step")
+    tool_used: Optional[str] = Field(None, description="Tool/command used, if any")
+    args: Optional[dict] = Field(None, description="Arguments passed, if any")
+    result_summary: str = Field("", description="What the step produced")
+
+
+class TrajectorySaveRequest(BaseModel):
+    agent_id: Optional[str] = Field(None, description="Who completed the task")
+    task_type: str = Field(..., min_length=1, max_length=128,
+                           description="Category tag, e.g. shopify_fix, bus_debug")
+    task_description: str = Field(..., min_length=1, max_length=10000,
+                                 description="The goal of the task")
+    steps: list[TrajectoryStep] = Field(..., description="Ordered steps taken")
+    outcome: str = Field(..., min_length=1, max_length=10000,
+                        description="Final result of the task")
+    rating: int = Field(..., ge=1, le=5, description="Agent self-assessment 1–5")
+    token_cost: Optional[int] = Field(None, ge=0)
+    model: Optional[str] = None
+    duration_seconds: Optional[int] = Field(None, ge=0)
+
+
+class TrajectorySaveResponse(BaseModel):
+    status: str
+    trajectory_id: str
+    agent_id: Optional[str]
+    task_type: str
+    total_for_agent: int
+    message: str
+
+
+class TrajectoryRecallRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=10000,
+                      description="NL description of what's about to be done")
+    agent_id: Optional[str] = Field(None, description="Whose trajectories to search")
+    task_type: Optional[str] = Field(None, description="Filter by category tag")
+    min_rating: int = Field(3, ge=1, le=5, description="Quality threshold")
+    max_results: int = Field(3, ge=1, le=20)
+
+
+class TrajectoryRecallResponse(BaseModel):
+    trajectories: list[dict]
+    total_found: int
+    agent_id: Optional[str]
+
+
 # ─────────────────────────────────────────────
 #  Tenant Manager — isolated cache/memory per agent
 # ─────────────────────────────────────────────
@@ -274,6 +323,10 @@ class TenantManager:
         vec_store = VecStore(data_dir / "vec_index.sqlite")
         log.info(f"Tenant '{key}' vec index ({vec_mode} mode, {vec_store.count()} embedded)")
 
+        # v4.5: trajectory learning — proven task recipes, isolated under the
+        # tenant's own trajectories/ dir (JSONL truth + its own vec index).
+        traj_store = TrajectoryStore(data_dir / "trajectories")
+
         tenant = {
             "data_dir": data_dir,
             "memory_dir": memory_dir,
@@ -282,6 +335,7 @@ class TenantManager:
             "sessions": SessionManager(data_dir, session_cfg),
             "vec": vec_store,
             "vec_mode": vec_mode,
+            "trajectories": traj_store,
         }
         self._tenants[key] = tenant
         log.info(f"Tenant '{key}' initialized at {data_dir}")
@@ -506,7 +560,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        log.info(f"⚡ Mnemo Cortex v4.4.0 — I remember everything so your agent doesn't have to.")
+        log.info(f"⚡ Mnemo Cortex v4.5.0 — I remember everything so your agent doesn't have to.")
         log.info(f"  Reasoning: {reasoner.status}")
         log.info(f"  Embedding: {embedder.status}")
         log.info(f"  Data dir:  {config.data_dir}")
@@ -519,7 +573,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     app = FastAPI(
         title="Mnemo Cortex",
         description="Drop-in memory superhero for AI agents",
-        version="4.4.0",
+        version="4.5.0",
         lifespan=lifespan,
     )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
@@ -572,7 +626,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="4.4.0",
+            version="4.5.0",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
@@ -1081,6 +1135,81 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             category_match_keywords=category_match_keywords_field,
             source_used=source_used,
             redactions=sum(red_counts.values()),
+        )
+
+    # ── Trajectory Learning (v4.5) ──
+    @app.post("/trajectory/save", response_model=TrajectorySaveResponse)
+    async def trajectory_save(req: TrajectorySaveRequest):
+        """Capture a proven task recipe AFTER the agent judges it succeeded."""
+        if req.agent_id and req.agent_id in config.agents:
+            if config.agents[req.agent_id].read_only:
+                raise HTTPException(403, f"Agent '{req.agent_id}' is read-only")
+
+        tenant = tenants.get(req.agent_id)
+        traj: TrajectoryStore = tenant["trajectories"]
+        steps = [s.model_dump() for s in req.steps]
+
+        # Embed the recipe so it's recallable by NL description. Any embedder
+        # failure must surface — a saved-but-unindexed trajectory would never be
+        # recalled (silent loss is the failure mode Vapor Truth forbids).
+        text = traj_embedding_text(req.task_description, req.outcome, steps)
+        try:
+            embedding = await embedder.embed(text)
+        except Exception as e:
+            log.error(f"Trajectory embed failed (agent={req.agent_id}): {e}")
+            raise HTTPException(503, f"Embedder unavailable, trajectory not saved: {e}")
+
+        try:
+            record = traj.save(
+                agent_id=req.agent_id,
+                task_type=req.task_type,
+                task_description=req.task_description,
+                steps=steps,
+                outcome=req.outcome,
+                rating=req.rating,
+                embedding=embedding,
+                token_cost=req.token_cost,
+                model=req.model,
+                duration_seconds=req.duration_seconds,
+            )
+        except VecDimMismatch as e:
+            log.error(f"Trajectory vec dim mismatch (agent={req.agent_id}): {e}")
+            raise HTTPException(500, f"vec index dim mismatch: {e}")
+
+        return TrajectorySaveResponse(
+            status="saved",
+            trajectory_id=record["id"],
+            agent_id=req.agent_id,
+            task_type=req.task_type,
+            total_for_agent=traj.count(),
+            message=(
+                f"Trajectory '{req.task_type}' saved for agent "
+                f"'{req.agent_id or 'default'}' (rating {req.rating})."
+            ),
+        )
+
+    @app.post("/trajectory/recall", response_model=TrajectoryRecallResponse)
+    async def trajectory_recall(req: TrajectoryRecallRequest):
+        """Recall proven task recipes BEFORE a similar task."""
+        tenant = tenants.get(req.agent_id)
+        traj: TrajectoryStore = tenant["trajectories"]
+
+        try:
+            query_embedding = await embedder.embed(req.query)
+        except Exception as e:
+            log.error(f"Trajectory recall embed failed (agent={req.agent_id}): {e}")
+            raise HTTPException(503, f"Embedder unavailable: {e}")
+
+        results = traj.recall(
+            query_embedding,
+            task_type=req.task_type,
+            min_rating=req.min_rating,
+            max_results=req.max_results,
+        )
+        return TrajectoryRecallResponse(
+            trajectories=results,
+            total_found=len(results),
+            agent_id=req.agent_id,
         )
 
     # ── Ingest (The Live Wire) ──

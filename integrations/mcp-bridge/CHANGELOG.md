@@ -12,6 +12,21 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.12.0 — 2026-06-25 — Trajectory tools: mnemo_save_trajectory + mnemo_recall_trajectory
+
+**Problem:** The bridge exposed memory save/recall but not the new v4.5 trajectory-learning
+endpoints, so agents had no tool to capture or recall a proven task recipe.
+
+**Fix:** Two new tools wrapping the server's `/trajectory/save` and `/trajectory/recall`:
+- `mnemo_save_trajectory` — agent calls it AFTER a task succeeds with the ordered steps,
+  outcome, and a 1–5 self-rating (POST `/trajectory/save`, `agent_id` = this agent).
+- `mnemo_recall_trajectory` — agent calls it BEFORE a task with an NL query; returns the
+  nearest recipes (similarity → rating → recency) rendered as readable numbered recipes via a
+  new `formatTrajectory` helper. Honors `task_type` and `min_rating` (default 3).
+
+Both surface ambient `captureCall` like the existing tools. No change to the memory tools.
+Bridge 26 tools total (was 24).
+
 ## 2.11.1 — 2026-06-18 — Auto-pull works when the brain dir is a repo subdir
 
 **Problem:** The startup `agent_startup` git-pull was gated on
