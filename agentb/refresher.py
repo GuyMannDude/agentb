@@ -81,7 +81,7 @@ def write_context(workspace: Path, filename: str, context: str):
         f"_Auto-refreshed at {time.strftime('%Y-%m-%d %H:%M:%S')}_\n"
         f"_Agent: {AGENT_ID} | Source: {MNEMO_URL}_\n\n"
     )
-    output.write_text(header + context + "\n")
+    output.write_text(header + context + "\n", encoding="utf-8")
 
 
 def main():

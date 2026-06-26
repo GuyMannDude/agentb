@@ -562,7 +562,7 @@ def write_dream(dream_text: str, memories: list[dict], since: datetime) -> str:
         "created_at": time.time(),
     }
     json_path = DREAMER_MEMORY_DIR / f"{dream_id}.json"
-    json_path.write_text(json.dumps(memory_entry, indent=2, default=str))
+    json_path.write_text(json.dumps(memory_entry, indent=2, default=str), encoding="utf-8")
 
     # Write human-readable markdown
     md_content = f"""# Mnemo Dream — {date_str}
@@ -576,7 +576,7 @@ _Sources: {', '.join(f'{a} ({c} entries)' for a, c in sorted(agent_counts.items(
 {dream_text}
 """
     md_path = DREAM_DIR / f"{date_str}.md"
-    md_path.write_text(md_content)
+    md_path.write_text(md_content, encoding="utf-8")
 
     log.info(f"Dream written: {json_path} + {md_path}")
 

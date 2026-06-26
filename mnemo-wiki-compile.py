@@ -653,7 +653,7 @@ def write_page(section: str, slug: str, content: str, state: dict) -> Path:
     if page_path.exists():
         prev = page_path.with_suffix(".md.prev")
         prev.write_bytes(page_path.read_bytes())  # one-deep rollback
-    page_path.write_text(content)
+    page_path.write_text(content, encoding="utf-8")
     rel = str(page_path.relative_to(WIKI_DIR))
     state["hashes"][rel] = file_sha(page_path)
     state["last_compiled"][rel] = datetime.now(timezone.utc).isoformat()
@@ -732,7 +732,7 @@ def regenerate_index() -> Path:
     lines.insert(4, "")
 
     index_path = WIKI_DIR / "INDEX.md"
-    index_path.write_text("\n".join(lines))
+    index_path.write_text("\n".join(lines), encoding="utf-8")
     return index_path
 
 

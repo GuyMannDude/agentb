@@ -1,5 +1,27 @@
 # Changelog
 
+## v4.5.1 (2026-06-26) — Fix: nightly dream silently dropped on Windows (cp1252 file-write crash)
+
+**Problem.** After the artforge→IGOR-2 server cutover (2026-06-24), the nightly Dreamer ran on
+Windows for the first time. On 6/25 and 6/26 it crashed at the very end with
+`UnicodeEncodeError: 'charmap' codec can't encode character '→' (→)` — `Path.write_text()`
+defaults to the platform encoding, which is **cp1252** on Windows (it was utf-8 on artforge, so
+this never bit). The dream text routinely contains `→`, emoji, and smart quotes, so the write
+blew up. Damage was masked three ways: (1) facts were already `post_facts()`'d *before*
+`write_dream()`, so the store looked fine; (2) the `.md` was opened in `'w'` mode and truncated
+to **0 bytes** before the crash, so a file existed (just empty) — `agent_startup` then showed no
+dream brief; (3) the PowerShell launcher exited 0 regardless of Python's exit code, so the
+Scheduled Task reported **Last Result: 0 (success)** while Python exited 1. A silent drop.
+
+**Fix.** Force `encoding="utf-8"` on every raw-text `write_text()` in code that runs on Windows:
+`mnemo-dream.py` (dream `.md` + JSON record), `agentb/refresher.py` and `agentb/cli.py` (context
+bundles), `mnemo-wiki-compile.py` (wiki pages + index). `json.dumps()` writes were already
+ASCII-safe (`ensure_ascii=True`) and left as-is. Complements the existing issue-#3 stdout-stream
+reconfigure (that covered console output; this covers file writes). The Dreamer's PS launcher on
+IGOR-2 was also fixed to propagate `$LASTEXITCODE` so future failures surface in the task result
+instead of hiding behind a green checkmark. Note: facts for 6/25–6/26 were retained (saved
+pre-crash); only those two human-readable briefs + their L2 writeback were lost.
+
 ## v4.5.0 (2026-06-25) — Trajectory Learning Phase 1: agents capture & recall proven recipes
 
 **Problem.** Mnemo stores *what happened* (memories) and *why* (decisions/doctrines), but the

@@ -71,7 +71,7 @@ from agentb.health import health
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.version_option(version="4.5.0", prog_name="mnemo-cortex")
+@click.version_option(version="4.5.1", prog_name="mnemo-cortex")
 def main(ctx):
     """⚡ Mnemo Cortex — Drop-in memory superhero for AI agents."""
     if ctx.invoked_subcommand is None:
@@ -814,7 +814,7 @@ def _do_refresh(mnemo_url: str, agent_id: str, recent: int, output_path: Path) -
         f"_Auto-refreshed at {time.strftime('%Y-%m-%d %H:%M:%S')}_\n"
         f"_Agent: {agent_id} | Source: {mnemo_url}_\n\n"
     )
-    output_path.write_text(header + context_text + "\n")
+    output_path.write_text(header + context_text + "\n", encoding="utf-8")
     return True
 
 
