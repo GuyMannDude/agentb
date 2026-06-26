@@ -16,10 +16,12 @@ Scheduled Task reported **Last Result: 0 (success)** while Python exited 1. A si
 **Fix.** Force `encoding="utf-8"` on every raw-text `write_text()` in code that runs on Windows:
 `mnemo-dream.py` (dream `.md` + JSON record), `agentb/refresher.py` and `agentb/cli.py` (context
 bundles), `mnemo-wiki-compile.py` (wiki pages + index). `json.dumps()` writes were already
-ASCII-safe (`ensure_ascii=True`) and left as-is. Complements the existing issue-#3 stdout-stream
-reconfigure (that covered console output; this covers file writes). The Dreamer's PS launcher on
-IGOR-2 was also fixed to propagate `$LASTEXITCODE` so future failures surface in the task result
-instead of hiding behind a green checkmark. Note: facts for 6/25–6/26 were retained (saved
+ASCII-safe (`ensure_ascii=True`) and left as-is. **Second site:** the dreamer's own `stdout` was
+also unguarded — the final `print(dream_text)` / `print(sync_block)` crashed on `→`/`✅` (cp1252)
+*after* the brief + writeback had already succeeded, so the run still exited 1. Added the same
+issue-#3 `sys.stdout`/`stderr` utf-8 reconfigure that `cli.py` already carries, at the top of
+`mnemo-dream.py`. The Dreamer's PS launcher on IGOR-2 was also fixed to propagate `$LASTEXITCODE`
+so future failures surface in the task result instead of hiding behind a green checkmark. Note: facts for 6/25–6/26 were retained (saved
 pre-crash); only those two human-readable briefs + their L2 writeback were lost.
 
 ## v4.5.0 (2026-06-25) — Trajectory Learning Phase 1: agents capture & recall proven recipes

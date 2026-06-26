@@ -40,6 +40,20 @@ from pathlib import Path
 
 import httpx
 
+# Windows redirected-stdout safety (mirrors cli.py issue #3): under a Scheduled
+# Task the dreamer's stdout is not a console and defaults to cp1252, which can't
+# encode '→'/'✅'/emoji in the dream text or git-sync block — the final print()
+# crashed the run with exit 1 *after* the brief + writeback had already
+# succeeded, falsely signalling failure. Reconfigure to utf-8/replace; no-op on
+# a normal terminal and on platforms that already default to utf-8.
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if _reconfigure is not None:
+        try:
+            _reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
