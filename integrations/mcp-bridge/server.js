@@ -450,7 +450,7 @@ process.stdin.on("end", () => {
 
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.12.1",
+  version: "2.12.2",
 });
 
 // ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────
@@ -956,6 +956,22 @@ if (BRAIN_AVAILABLE) {
 // Mnemo context, dream brief, session writeback — is identical
 // and agent-agnostic.
 
+// Brain files (esp. the session lane + active.md) grow unbounded over time —
+// CC's lane hit ~572 KB / 4,656 lines, which blew past the MCP tool-result cap
+// and made agent_startup unreadable (audit finding 3.3). Cap each file in the
+// boot block to its most-recent slice (these files are newest-first), pointing
+// to read_brain_file for the full content.
+const STARTUP_FILE_CAP = 40_000;
+async function readBrainCapped(path, cap = STARTUP_FILE_CAP) {
+  const content = await readFile(path, "utf-8");
+  if (content.length <= cap) return content;
+  return (
+    content.slice(0, cap) +
+    `\n\n…[truncated ${content.length - cap} of ${content.length} chars — ` +
+    `newest content kept; use read_brain_file for the full file]…\n`
+  );
+}
+
 async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates }) {
   sessionStartTime = new Date().toISOString();
   sessionId = `${effectiveAgentId}-${localTimestamp()}`;
@@ -1005,7 +1021,7 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     let laneLoaded = null;
     for (const candidate of laneCandidates) {
       try {
-        const brain = await readFile(join(BRAIN_DIR, candidate), "utf-8");
+        const brain = await readBrainCapped(join(BRAIN_DIR, candidate));
         parts.push(`# YOUR BRAIN LANE (${candidate})\n\n` + brain);
         laneLoaded = candidate;
         break;
@@ -1027,7 +1043,7 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     // its session ritual frames everything else.
     for (const file of ["CLAUDE.md", "active.md", "people.md", "doctrines.md"]) {
       try {
-        const content = await readFile(join(BRAIN_DIR, file), "utf-8");
+        const content = await readBrainCapped(join(BRAIN_DIR, file));
         parts.push(`# ${file.toUpperCase()}\n\n` + content);
       } catch {
         // skip if missing

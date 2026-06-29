@@ -1,5 +1,19 @@
 # Changelog
 
+## bridge v2.12.2 (2026-06-29) — Fix: agent_startup overflowed the tool-result cap on large brain files
+
+**Problem.** `_runStartup` read the session lane file and the cross-agent docs (`active.md` etc.)
+whole into the boot block. Those files grow unbounded — CC's `cc-session.md` reached ~572 KB /
+4,656 lines and `active.md` ~126 KB — so `agent_startup` returned ~721 K chars, blew past the MCP
+tool-result cap, and had to be read back via a subagent every single session boot (audit finding
+3.3). The relevant content (newest session + kickstart) sat at the top, buried under stale history.
+
+**Fix.** Added `readBrainCapped()` — each brain file in the boot block is capped to its most-recent
+`STARTUP_FILE_CAP` (40 KB) slice (these files are newest-first, so the top is the relevant part),
+with a truncation marker pointing to `read_brain_file` for the full content. Applied to the lane
+file and the CLAUDE/active/people/doctrines reads. Takes effect on next bridge restart. Operational
+follow-up: periodically archive old sessions out of the lane file too.
+
 ## bridge v2.12.1 (2026-06-29) — Fix: auto-capture trail silently dropped on a /writeback failure
 
 **Problem.** The MCP bridge's auto-capture ring buffer (`flushBuffer`) `splice(0)`'d all pending
