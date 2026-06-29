@@ -1,5 +1,20 @@
 # Changelog
 
+## bridge v2.12.1 (2026-06-29) — Fix: auto-capture trail silently dropped on a /writeback failure
+
+**Problem.** The MCP bridge's auto-capture ring buffer (`flushBuffer`) `splice(0)`'d all pending
+tool-call entries into a local array and POSTed them to `/writeback`. On a failed POST (server
+restart, transient network, embedder stall) the `catch` only wrote to stderr — the spliced-out
+batch was then discarded. Result: every tool-call trail captured since the last successful flush
+was lost whenever a flush failed. A silent ingest-path loss, surfaced by the foundation audit
+(finding 1.3).
+
+**Fix.** On flush failure, re-queue the failed batch at the front of the buffer (preserving order),
+cap the backlog at `MAX_BUFFER_BACKLOG = 200` so a prolonged outage can't grow memory unboundedly
+(keeps the most-recent activity), and self-schedule a retry so recovery doesn't depend on the next
+captured call arriving. Verified in isolation: re-queue preserves order, retry drains on recovery,
+and the cap drops only the oldest entries. Takes effect on next bridge restart.
+
 ## v4.5.1 (2026-06-26) — Fix: nightly dream silently dropped on Windows (cp1252 file-write crash)
 
 **Problem.** After the artforge→IGOR-2 server cutover (2026-06-24), the nightly Dreamer ran on

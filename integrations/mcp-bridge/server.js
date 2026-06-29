@@ -321,6 +321,9 @@ function trackSave() {
 
 const BUFFER_FLUSH_SIZE = 8;
 const BUFFER_FLUSH_IDLE_MS = 120_000;
+// Cap on re-queued entries during a /writeback outage so a long server-side
+// outage can't grow this buffer unboundedly (keeps the most recent activity).
+const MAX_BUFFER_BACKLOG = 200;
 const captureBuffer = [];
 let flushTimer = null;
 
@@ -395,7 +398,17 @@ async function flushBuffer() {
       category: "session_log",
     });
   } catch (err) {
-    process.stderr.write(`[auto-capture] flush failed: ${err.message}\n`);
+    // Re-queue instead of dropping the trail (this was a silent-loss bug: the
+    // spliced-out batch was discarded on failure). Put the failed batch back at
+    // the front to preserve order, cap the backlog so a prolonged /writeback
+    // outage can't grow memory unboundedly, and self-schedule a retry so
+    // recovery doesn't depend on the next captureCall arriving.
+    process.stderr.write(`[auto-capture] flush failed (will retry): ${err.message}\n`);
+    captureBuffer.unshift(...entries);
+    if (captureBuffer.length > MAX_BUFFER_BACKLOG) {
+      captureBuffer.splice(0, captureBuffer.length - MAX_BUFFER_BACKLOG);
+    }
+    if (!flushTimer) flushTimer = setTimeout(() => flushBuffer(), BUFFER_FLUSH_IDLE_MS);
   }
 }
 
@@ -437,7 +450,7 @@ process.stdin.on("end", () => {
 
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.12.0",
+  version: "2.12.1",
 });
 
 // ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────
