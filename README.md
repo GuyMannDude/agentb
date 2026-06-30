@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/mnemo-cortex-constellation.png" alt="Mnemo Cortex constellation — verified hosts: Claude Desktop, LM Studio, AnythingLLM, OpenClaw, Agent Zero, Ollama. Local-first, cross-agent, open source. A Mnemo in Every Bot." width="540">
+  <img src="docs/mnemo-cortex-eye.png" alt="Mnemo Cortex — Cognitive Coprocessor with Active Memory. Circuit-eye logo with a golden M iris. Local-first, cross-agent, open source." width="540">
 </p>
 
 # ⚡ Mnemo Cortex v4.5.2 — Cognitive Coprocessor with Active Memory
