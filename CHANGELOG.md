@@ -1,5 +1,25 @@
 # Changelog
 
+## v4.5.3 (2026-07-01) — Query-expansion `gap_threshold` retuned for IGOR-2's nomic embedder (0.03 → 0.02)
+
+**Problem.** The Thesaurus Loop's whiff trigger (`should_expand`) escalates when a first pass is
+FLAT: `top_relevance - median_relevance < gap_threshold`. That `gap_threshold=0.03` was calibrated
+against artforge's embedder. Mnemo now runs on IGOR-2 with a local `nomic-embed-text` embedder whose
+similarity band is even more compressed — measured **~0.49–0.62** across 8 live recall probes. At that
+compression the top-vs-pack gaps run: clear-standout on-topic **0.05–0.07**, flat-but-on-topic **~0.02**,
+whiff/gibberish **~0.01**. So `0.03` expanded flat-but-on-topic pools too (gap 0.02 < 0.03) —
+reintroducing the hot-path tax the escalation design exists to avoid.
+
+**Fix.** `gap_threshold` **0.03 → 0.02**. Still catches every measured true whiff (all 0.01) and empty
+passes, but spares flat on-topic recalls the wasted Flash call; clear-standout recalls (gap ≥0.05)
+continue to skip. The near-free false-positive on a genuinely uniform pool is still accepted per the
+locked design (one ~$0.001 Flash call; max-relevance merge makes the merged result identical to not
+expanding). Config-only default, tunable without redeploy. Timeout unchanged — the expansion call is
+still OpenRouter `gemini-2.5-flash`, which the local-embedder migration doesn't touch. Regression test
+pins the new 0.02 boundary. **Follow-up queued** (bus #969, Opie): add nomic's `search_query:` /
+`search_document:` task prefixes to decompress the similarity band and make the whiff signal robust
+rather than noise-limited.
+
 ## v4.5.2 (2026-06-30) — Embedder refuse-and-alert (foundation-audit 4.5) + silence non-git-repo dreamer noise (2.4)
 
 **Problem.** On embedder failure the resilient chain failed over to any configured fallback and

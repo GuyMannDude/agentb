@@ -95,14 +95,14 @@ def test_zero_results_expands():
 def test_flat_distribution_expands():
     # The v4.3.0 calibration trap, reproduced: every hit is high-but-uniform,
     # straddling the OLD absolute floor (0.5). Nothing stands out → whiff → expand.
-    # top - median = 0.55 - 0.54 = 0.01 < gap_threshold(0.03).
+    # top - median = 0.55 - 0.54 = 0.01 < gap_threshold(0.02).
     chunks = [_chunk("a", 0.55), _chunk("b", 0.54), _chunk("c", 0.53), _chunk("d", 0.54)]
     assert should_expand("how do we deploy the service", chunks, ExpansionConfig()) is True
 
 
 def test_clear_winner_does_not_expand():
     # A real on-topic hit peaks above its own pack regardless of the absolute band.
-    # top - median = 0.58 - 0.51 = 0.07 >= gap_threshold(0.03) → strong → skip.
+    # top - median = 0.58 - 0.51 = 0.07 >= gap_threshold(0.02) → strong → skip.
     chunks = [_chunk("a", 0.58), _chunk("b", 0.51), _chunk("c", 0.50), _chunk("d", 0.51)]
     assert should_expand("how do we deploy the service", chunks, ExpansionConfig()) is False
 
@@ -125,6 +125,17 @@ def test_gap_exactly_at_threshold_does_not_expand():
     # Boundary: top - median == gap_threshold is NOT "< threshold" → no expand.
     chunks = [_chunk("a", 0.53), _chunk("b", 0.50), _chunk("c", 0.50)]  # gap == 0.03
     assert should_expand("how do we deploy the service", chunks, ExpansionConfig(gap_threshold=0.03)) is False
+
+
+def test_default_retune_flat_on_topic_pool_no_longer_expands():
+    # v4.5.3 retune for IGOR-2's nomic band (gap_threshold 0.03 → 0.02): a flat
+    # but on-topic pool that rises exactly 0.02 above its pack is NO LONGER a whiff
+    # under the default (it was, at 0.03). gap = 0.56 - 0.54 = 0.02; 0.02 < 0.02 is
+    # False → skip. A true whiff still peaks only ~0.01 over the pack and expands.
+    flat = [_chunk("a", 0.56), _chunk("b", 0.54), _chunk("c", 0.54), _chunk("d", 0.53)]
+    assert should_expand("how do we deploy the service", flat, ExpansionConfig()) is False
+    whiff = [_chunk("a", 0.55), _chunk("b", 0.54), _chunk("c", 0.54), _chunk("d", 0.54)]
+    assert should_expand("how do we deploy the service", whiff, ExpansionConfig()) is True
 
 
 # ── expand_query: the isolated Flash call ───────────────────────────────────

@@ -2,7 +2,7 @@
   <img src="docs/mnemo-cortex-eye.png" alt="Mnemo Cortex — Cognitive Coprocessor with Active Memory. Circuit-eye logo with a golden M iris. Local-first, cross-agent, open source." width="540">
 </p>
 
-# ⚡ Mnemo Cortex v4.5.2 — Cognitive Coprocessor with Active Memory
+# ⚡ Mnemo Cortex v4.5.3 — Cognitive Coprocessor with Active Memory
 
 ![GitHub stars](https://img.shields.io/github/stars/GuyMannDude/mnemo-cortex)
 ![License](https://img.shields.io/github/license/GuyMannDude/mnemo-cortex)

@@ -154,11 +154,15 @@ class ExpansionConfig:
     # top_relevance - median_relevance < this. RELATIVE shape, not an absolute
     # score — the v4.3.0 absolute relevance_floor (0.5) sat INSIDE this embedder's
     # compressed noise band (gibberish ~0.50, real on-topic 0.51-0.58, overlapping)
-    # and so fired 0× in production. Strong recalls peak ~0.04 over the pack; 0.03
-    # separates them while accepting the cheap false-positive on a uniform pool
-    # (one Flash call, ~$0.001, and max-relevance merge makes the result identical
-    # to not expanding). Embedder-agnostic by construction. (v4.4.0; was relevance_floor.)
-    gap_threshold: float = 0.03
+    # and so fired 0× in production. Retuned for IGOR-2's local
+    # nomic-embed-text (v4.5.3): that band is even tighter (~0.49-0.62), so
+    # measured top-vs-pack gaps run clear-standout on-topic 0.05-0.07, flat-but-
+    # on-topic ~0.02, whiff ~0.01. 0.02 catches every true whiff + empty while
+    # sparing flat on-topic pools the escalation tax; the near-free false-positive
+    # on a uniform pool is still accepted (one Flash call, ~$0.001, max-relevance
+    # merge makes the merged result identical to not expanding). (v4.4.0 gap-not-
+    # floor; v4.5.3 nomic retune; was relevance_floor.)
+    gap_threshold: float = 0.02
     max_variants: int = 4          # alternative phrasings requested from Flash
     # Hard cap on the expansion LLM call; expire → no expansion (graceful). 2.5s:
     # live OpenRouter Flash latency straddles ~1s, and 800ms timed out on exactly
