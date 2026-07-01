@@ -29,6 +29,10 @@
 > learns what works, and gets smarter every session. No commands needed —
 > you just talk naturally and your AI remembers.
 
+**What is Mnemo Cortex?**
+
+Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures what happened, recalls what matters, and shares context across your tools. Run it on your own machine — no cloud required.
+
 | | |
 |---|---|
 | 🔥 **Active Memory** | Memory that works while you don't. Auto-capture, smart classification, overnight consolidation, trajectory learning. No "remember this" commands needed. |
