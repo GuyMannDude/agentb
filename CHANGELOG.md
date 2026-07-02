@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.7.1 (2026-07-02) — Stage 0.7 first-live-run fix: strict=False JSON parse + bigger output budget
+
+**Problem.** The first live Stage 0.7 run lost 2 of 3 sessions to "JSON parse failed, nothing
+salvageable": the judge emits raw newlines inside JSON string values (multi-line lesson text —
+one failing item was literally `bash-quoting-collision`), strict json rejects the first object,
+so even object-by-object salvage recovered zero.
+
+**Fix.** `_parse_fact_array` parses with `strict=False` on both the clean and salvage paths
+(accepts control chars inside strings; Stage 0.5 benefits too), `STRATEGY_MAX_TOKENS` default
+8192→16384 (the same output-truncation lesson Stage 0.5 learned in v4.2.3), and parse-failure
+logs now show head AND tail. Regression-tested.
+
 ## v4.7.0 (2026-07-02) — Trajectory Phase 2: Dreamer strategy distillation (Stage 0.7)
 
 **Problem.** Phase 1 (v4.5.0) captures task recipes only when an agent explicitly calls
