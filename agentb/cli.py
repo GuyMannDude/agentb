@@ -1383,7 +1383,12 @@ def muse_cmd(agents, limit):
                 console.print(f"  [cyan]•[/] {n['summary']}")
                 if n["key_facts"]:
                     console.print(f"    [dim]{', '.join(n['key_facts'])}[/]")
-            if not notes and stats["scanned"]:
+            if stats["failed"]:
+                console.print(
+                    "  [bold red]LLM pass FAILED[/] — this is an error, not a "
+                    "zero-ideas result. Check provider config/env (see log lines above)."
+                )
+            elif not notes and stats["scanned"]:
                 console.print("  [dim](no idea seeds in this batch — zero is a valid answer)[/]")
             if not stats["scanned"]:
                 console.print("  [dim](no unprocessed session logs to read)[/]")
