@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Mnemo Cortex server LaunchAgent (template).
+
+  Placeholders — substitute before installing (see docs/install-macos.md):
+    @REPO@  absolute path to your mnemo-cortex checkout (venv expected at @REPO@/.venv)
+    @HOME@  your home directory (launchd does not expand ~)
+
+  One-liner from the repo root:
+    sed -e "s|@REPO@|$(pwd)|g" -e "s|@HOME@|$HOME|g" \
+        deploy/macos/com.mnemo-cortex.server.plist \
+        > ~/Library/LaunchAgents/com.mnemo-cortex.server.plist
+    mkdir -p ~/Library/Logs/mnemo-cortex
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.mnemo-cortex.server.plist
+
+  Stop/uninstall:
+    launchctl bootout gui/$UID/com.mnemo-cortex.server
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mnemo-cortex.server</string>
+
+    <!-- Foreground server process, supervised by launchd.
+         Deliberately NOT `mnemo-cortex start` (that daemonizes and detaches,
+         which breaks launchd's process tracking and KeepAlive). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>@REPO@/.venv/bin/python</string>
+        <string>-m</string>
+        <string>agentb.server</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AGENTB_CONFIG</key>
+        <string>@HOME@/.config/agentb/agentb.yaml</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash, stay down on clean exit (launchctl bootout). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Don't restart-loop faster than every 10s if the server is failing. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>@HOME@/Library/Logs/mnemo-cortex/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>@HOME@/Library/Logs/mnemo-cortex/server.log</string>
+</dict>
+</plist>

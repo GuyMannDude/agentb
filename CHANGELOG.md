@@ -1,5 +1,35 @@
 # Changelog
 
+## v4.8.1 (2026-07-02) — macOS support pass: passport portability fix, green suite on fresh installs, launchd + install guide
+
+**Problem.** Three things stood between a fresh `git clone` on a Mac and a working, verifiable
+install. (1) A real passport bug: the untrusted-alone rule in `passport/validation.py` only fired
+when the final disposition was `allow`, so when the trust-bucket floor had already raised the
+disposition to `review_required`, portability stayed `portable` — an observation backed *only* by
+untrusted web evidence could still be marked portable to the shared passport, contradicting the
+rule's own comment ("the data cannot be trusted enough to promote to the shared passport"). The
+pre-existing red test `test_all_untrusted_web_caps_at_local_only` (#425) was correct all along.
+(2) Fresh installs get today's dep versions: `pytest-asyncio` 1.x removes the implicit event loop,
+turning `asyncio.get_event_loop().run_until_complete(...)` in `tests/test_agentb.py` into 10
+order-dependent failures; Starlette 1.x adds router objects without `.path` to `app.routes`,
+breaking the health-route smoke test. A beta tester running the suite saw 12 failures on any OS.
+(3) macOS had no install path: no guide, no launchd unit, and the #1 darwin gotcha (Apple's and
+python.org's Python builds ship SQLite without loadable-extension support, so
+`enable_load_extension` at `vec.py` doesn't exist) was undocumented.
+
+**Fix.** (1) The untrusted-alone rule now also caps *portability* at `local_only` whenever every
+evidence row is `untrusted_web` (disposition still escalates `allow → local_only` as before);
+suite is 352/352. (2) Tests modernized: `asyncio.run(...)` everywhere (verified green on
+pytest-asyncio 0.26 *and* 1.4), route smoke test skips path-less router objects. (3) New
+[`docs/install-macos.md`](docs/install-macos.md) — Homebrew-Python-only warning with a 10-second
+preflight check, Ollama setup, bridge setup, troubleshooting — plus
+[`deploy/macos/com.mnemo-cortex.server.plist`](deploy/macos/) launchd template with
+install/uninstall steps. Verified without Mac hardware: the full dependency tree resolves as
+prebuilt wheels for `macosx_11_0_arm64` and Intel on Python 3.12/3.13/3.14 (`pip download
+--only-binary=:all:`) — nothing compiles at install time. Homebrew formula deferred: `sqlite-vec`
+ships no sdist and mnemo-cortex isn't on PyPI yet; publishing to PyPI unlocks `pipx install`
+as the one-liner instead.
+
 ## v4.8.0 (2026-07-02) — The Creative Harness: `idea` category, the Muse, riff-scale capture, recall mode=explore
 
 **Problem.** The creative-harness audit (bus #1002→#1003) found every distillation layer was

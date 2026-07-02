@@ -528,7 +528,7 @@ class TestCosine:
 class TestL1Cache:
     def test_add_and_search(self, tmp_data_dir, sample_embedding, similar_embedding):
         l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.7))
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l1.add("Easter gnomes $20-30", "test", sample_embedding)
         )
         assert l1.size == 1
@@ -540,7 +540,7 @@ class TestL1Cache:
 
     def test_no_match_below_threshold(self, tmp_data_dir, sample_embedding, different_embedding):
         l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.95))
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l1.add("test content", "test", sample_embedding)
         )
         results = l1.search(different_embedding, top_k=3)
@@ -550,15 +550,14 @@ class TestL1Cache:
 
     def test_eviction_at_max(self, tmp_data_dir, sample_embedding):
         l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_max_bundles=2))
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(l1.add("first", "s1", sample_embedding))
-        loop.run_until_complete(l1.add("second", "s2", sample_embedding))
-        loop.run_until_complete(l1.add("third", "s3", sample_embedding))
+        asyncio.run(l1.add("first", "s1", sample_embedding))
+        asyncio.run(l1.add("second", "s2", sample_embedding))
+        asyncio.run(l1.add("third", "s3", sample_embedding))
         assert l1.size == 2  # oldest evicted
 
     def test_stale_bundles_skipped(self, tmp_data_dir, sample_embedding):
         l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_ttl_seconds=0))
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l1.add("stale content", "test", sample_embedding)
         )
         time.sleep(0.01)
@@ -567,7 +566,7 @@ class TestL1Cache:
 
     def test_persona_overrides_threshold(self, tmp_data_dir, sample_embedding, similar_embedding):
         l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.99))
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l1.add("test", "test", sample_embedding)
         )
         # Default threshold too high
@@ -581,7 +580,7 @@ class TestL1Cache:
     def test_disk_persistence(self, tmp_data_dir, sample_embedding):
         l1_dir = tmp_data_dir / "cache" / "l1"
         l1 = L1Cache(l1_dir, CacheConfig())
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l1.add("persistent content", "test", sample_embedding)
         )
         json_files = list(l1_dir.glob("*.json"))
@@ -595,7 +594,7 @@ class TestL1Cache:
 class TestL2Index:
     def test_add_and_search(self, tmp_data_dir, sample_embedding, similar_embedding):
         l2 = L2Index(tmp_data_dir / "cache" / "l2", CacheConfig())
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l2.add("Stormtrooper bunnies launch", "session:123", sample_embedding)
         )
         results = l2.search(similar_embedding)
@@ -605,7 +604,7 @@ class TestL2Index:
     def test_index_persistence(self, tmp_data_dir, sample_embedding):
         l2_dir = tmp_data_dir / "cache" / "l2"
         l2 = L2Index(l2_dir, CacheConfig())
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l2.add("test entry", "test", sample_embedding)
         )
         assert (l2_dir / "index.json").exists()
@@ -726,11 +725,10 @@ class TestMultiTenant:
         rocky_l2 = L2Index(rocky_dir, CacheConfig())
         bw_l2 = L2Index(bw_dir, CacheConfig())
 
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
+        asyncio.run(
             rocky_l2.add("Easter bunnies at $20", "session:r1", sample_embedding)
         )
-        loop.run_until_complete(
+        asyncio.run(
             bw_l2.add("Shopify order #1234", "session:b1", sample_embedding)
         )
 
@@ -777,7 +775,7 @@ class TestPersonas:
     def test_persona_affects_search_threshold(self, tmp_data_dir, sample_embedding, similar_embedding):
         """Creative persona surfaces more results than strict."""
         l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.85))
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             l1.add("brainstorm ideas", "test", sample_embedding)
         )
 
@@ -807,7 +805,8 @@ class TestServerSmoke:
         """Health route is registered."""
         from agentb.server import create_app
         app = create_app(basic_config)
-        routes = [r.path for r in app.routes]
+        # Starlette 1.x includes router objects without .path in app.routes
+        routes = [p for r in app.routes if (p := getattr(r, "path", None))]
         assert "/health" in routes
         assert "/context" in routes
         assert "/preflight" in routes

@@ -270,12 +270,15 @@ def validate_observation(obs: Observation, stable: dict) -> ValidationResult:
     # regardless of what detectors said about the content — the data cannot be
     # trusted enough to promote to the shared passport.
     unique_buckets = set(evidence_buckets)
+    portability = _portability(final)
     if (
         unique_buckets == {"untrusted_web"}
         and not rules.get("untrusted_alone_can_promote_shared", False)
-        and final == "allow"
     ):
-        final = "local_only"
+        if final == "allow":
+            final = "local_only"
+        if portability == "portable":
+            portability = "local_only"
         reason_codes.append("provenance:untrusted_web_alone")
 
     return ValidationResult(
@@ -287,6 +290,6 @@ def validate_observation(obs: Observation, stable: dict) -> ValidationResult:
         evidence_trust=evidence_trust,
         salvageability=salvageability,
         taint_flags=taint_flags,
-        portability=_portability(final),
+        portability=portability,
         redaction_applied=redaction_applied,
     )

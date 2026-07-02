@@ -660,6 +660,8 @@ Mnemo Cortex runs on **Linux, macOS, and Windows**. The core (Python + SQLite) i
 | **Claude Desktop** | `.mcpb` bundle | `.mcpb` bundle | `.mcpb` bundle |
 | **OpenClaw** | Full support | Full support | Full support |
 
+> 🍎 **On a Mac?** Follow the dedicated **[macOS install guide](docs/install-macos.md)** — it covers the one gotcha that matters (which Python can load SQLite extensions), Homebrew setup, and a launchd template for start-at-login. *macOS support is in beta — testers wanted.*
+
 ### Prerequisites
 
 - **Python 3.11+** — for the server
