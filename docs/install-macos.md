@@ -156,6 +156,12 @@ Then point your MCP host at `integrations/mcp-bridge/server.js` — per-host wal
 are in the [main README](../README.md#-use-with-any-local-llm). Claude Desktop config on
 macOS lives at `~/Library/Application Support/Claude/claude_desktop_config.json`.
 
+> **Client support:** any MCP client speaking **stdio transport** works (Claude Code,
+> Claude Desktop, OpenAI Codex CLI, LM Studio, and the rest of the README list).
+> **ChatGPT Desktop is not supported** — it has no native MCP; its connectors would
+> require exposing your memory server on a public HTTPS endpoint, and that security
+> cost exceeds the value. We'll revisit if OpenAI ships native MCP support.
+
 ---
 
 ## Known limitations on macOS (beta)

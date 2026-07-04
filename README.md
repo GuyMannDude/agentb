@@ -68,6 +68,12 @@ Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures 
 
 🧭 **[How should my agent use it? → Session Guide](SESSION-GUIDE.md)** — Workflow patterns, per-platform boot snippets, common mistakes
 
+### ✅ Supported clients
+
+**Supported:** Claude Code, Claude Desktop, OpenAI Codex CLI, and **any local MCP client that speaks stdio transport** — LM Studio, AnythingLLM, OpenClaw, Agent Zero, Hermes, Open WebUI, llama.cpp, LobeChat, Jan, and friends (see the integration links above).
+
+**Not supported (v1): ChatGPT Desktop.** It has no native MCP support — its connectors are reached from OpenAI's cloud, which would force your memory server onto a **publicly exposed HTTPS endpoint**. A public door into a personal memory store is a security cost that exceeds the value, so we won't ship it. When OpenAI adds native (local/stdio) MCP support, we'll revisit.
+
 ---
 
 ### 📜 How to Use Mnemo Effectively
