@@ -1,5 +1,22 @@
 # Changelog
 
+## v4.9.2 (2026-07-05) — /context: stop the routine 23s L3 disk-walk
+
+**Problem.** On a session_log-dominated store (cc: 6.2k memories, 65% session_log), most default
+recalls paid a 20–25s L3 disk-walk: a session-flavored prompt's nearest neighbors are nearly all
+session_log, so even the 15× filtered kNN over-fetch (#468) filtered down to fewer than
+max_results — and the L3 gate only honored the *pinned-category* case, so the default session_log
+*exclusion* fell through to L3, which re-embeds up to 80 candidate documents per query
+(~250ms each). Observed live: 23s /context calls; the morning agent_startup dream-brief timeout
+was this at scale.
+
+**Fix.** Two-part, in the /context handler: (1) on a filtered underfill, re-run the kNN once with
+a 5× wider over-fetch — milliseconds — before accepting a partial set; (2) the L3 gate now honors
+the vec.search pushdown contract for ANY category filter, exclusion included: if the filtered kNN
+(plus escalation) served even one survivor, return the partial pool instead of walking the disk.
+Zero VEC survivors still falls through to L3, which keeps the un-backfilled-index escape hatch
+(NULL category columns) intact. Live effect on the cc store: 23s → sub-second.
+
 ## v4.9.1 (2026-07-04) — Muse judge round 3: dedup + doctrine-echo rules
 
 **Problem.** Muse audition round 2 (precision 2/4) failed in exactly two ways: the same underlying

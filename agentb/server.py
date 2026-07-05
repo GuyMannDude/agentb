@@ -808,54 +808,72 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             # a category filter is active. Intentional headroom for thin categories;
             # the kNN cost of a larger k is negligible and the handler trims to
             # max_results regardless.
+            vec_filter_active = bool(req.category) or bool(effective_exclude)
             if vec_store.count() > 0:
-                try:
-                    vec_hits = vec_store.search(
-                        query_embedding,
-                        top_k=overfetch,
-                        include_category=req.category,
-                        exclude_categories=effective_exclude,
-                        overfetch_multiplier=config.cache.vec_category_overfetch_multiplier,
-                    )
-                except VecDimMismatch as e:
-                    log.error(f"vec query dim mismatch: {e}")
-                    vec_hits = []
-                for hit in vec_hits:
-                    if hit.memory_id in seen_memory_ids:
-                        continue
-                    # vec0 distance is L2 by default; convert to similarity-ish (0..1)
-                    relevance = 1.0 / (1.0 + hit.distance)
-                    # v4.0.1: load category/source from the memory's JSON so the
-                    # metadata filter (session_log exclusion, stale, source) applies
-                    # to VEC hits too. Without this the VEC tier silently bypassed
-                    # every category filter — session_log noise crowded recall.
-                    category = provenance_source = None
-                    age_days = stale = None
-                    if hit.source_file and os.path.exists(hit.source_file):
-                        try:
-                            mj = json.loads(Path(hit.source_file).read_text())
-                            category = mj.get("category")
-                            provenance_source = mj.get("source")
-                        except Exception:
-                            pass
-                    if hit.created_at:
-                        age_days = (time.time() - hit.created_at) / 86400.0
-                        if category:
-                            stale = compute_stale_warning(category, hit.created_at)
-                    c = ContextChunk(
-                        content=hit.text,
-                        source=f"memory:{hit.memory_id}",
-                        relevance=relevance,
-                        cache_tier="VEC",
-                        memory_id=hit.memory_id,
-                        provenance_source=provenance_source,
-                        category=category,
-                        age_days=age_days,
-                        stale_warning=stale,
-                    )
-                    if keep_chunk(c):
-                        pass_chunks.append(c)
-                        seen_memory_ids.add(hit.memory_id)
+                def _vec_pass(multiplier: int) -> bool:
+                    """Run one filtered kNN and ingest survivors. Returns False
+                    only on a search error, so the escalation retry can skip a
+                    kNN that would just fail (and log) identically again."""
+                    try:
+                        vec_hits = vec_store.search(
+                            query_embedding,
+                            top_k=overfetch,
+                            include_category=req.category,
+                            exclude_categories=effective_exclude,
+                            overfetch_multiplier=multiplier,
+                        )
+                    except VecDimMismatch as e:
+                        log.error(f"vec query dim mismatch: {e}")
+                        return False
+                    for hit in vec_hits:
+                        if hit.memory_id in seen_memory_ids:
+                            continue
+                        # vec0 distance is L2 by default; convert to similarity-ish (0..1)
+                        relevance = 1.0 / (1.0 + hit.distance)
+                        # v4.0.1: load category/source from the memory's JSON so the
+                        # metadata filter (session_log exclusion, stale, source) applies
+                        # to VEC hits too. Without this the VEC tier silently bypassed
+                        # every category filter — session_log noise crowded recall.
+                        category = provenance_source = None
+                        age_days = stale = None
+                        if hit.source_file and os.path.exists(hit.source_file):
+                            try:
+                                mj = json.loads(Path(hit.source_file).read_text())
+                                category = mj.get("category")
+                                provenance_source = mj.get("source")
+                            except Exception:
+                                pass
+                        if hit.created_at:
+                            age_days = (time.time() - hit.created_at) / 86400.0
+                            if category:
+                                stale = compute_stale_warning(category, hit.created_at)
+                        c = ContextChunk(
+                            content=hit.text,
+                            source=f"memory:{hit.memory_id}",
+                            relevance=relevance,
+                            cache_tier="VEC",
+                            memory_id=hit.memory_id,
+                            provenance_source=provenance_source,
+                            category=category,
+                            age_days=age_days,
+                            stale_warning=stale,
+                        )
+                        if keep_chunk(c):
+                            pass_chunks.append(c)
+                            seen_memory_ids.add(hit.memory_id)
+                    return True
+
+                vec_ok = _vec_pass(config.cache.vec_category_overfetch_multiplier)
+                # v4.9.2 escalation: a filtered kNN comes back short when the
+                # query's semantic neighborhood is dominated by a hidden
+                # category — session-flavored prompts on a session_log-heavy
+                # store land ~all their neighbors in the hidden 65%, so even a
+                # 15× over-fetch filters down to less than max_results. One
+                # wider retry costs milliseconds; the L3 disk-walk it prevents
+                # costs tens of seconds on a large store (S120: 23s observed,
+                # 6.2k files). Escalate once, then accept what we have.
+                if vec_ok and vec_filter_active and len(pass_chunks) < req.max_results:
+                    _vec_pass(config.cache.vec_category_overfetch_multiplier * 5)
 
             # L2 (legacy read-only tier — new writes stopped in v4.1)
             # v4.0.2: resolve disk-truth category first — L2's metadata cache
@@ -874,21 +892,25 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
             # L3: the expensive disk-walk (embeds candidates) stays an escape
             # hatch — only runs when the cheap tiers couldn't fill the request.
-            # #468: when the caller pinned a specific category AND the VEC tier
-            # actually served on-category hits, VEC already did the category-filtered
-            # over-fetch that L3 would duplicate — a thin category genuinely has few
-            # memories, and a partial result beats the multi-second disk-walk (which
-            # on a large store can exceed the bridge timeout). Return partial instead.
-            # Gate on a real VEC contribution, NOT just "category set + index
-            # non-empty": in the un-backfilled deploy window every column is NULL, so
-            # an include filter matches nothing and VEC returns zero — there L3 is
-            # still the escape hatch that finds the memories via disk-truth. Every
-            # VEC chunk that reached pass_chunks already passed keep_chunk, so when a
-            # category is pinned a VEC chunk here is by definition on-category.
-            vec_served_category = bool(req.category) and any(
+            # #468 / v4.9.2: when ANY category filter was pushed into the kNN —
+            # a pinned include OR the default session_log exclusion — and the
+            # VEC tier actually served survivors, VEC (plus its escalation
+            # retry) already did the filtered over-fetch that L3 would
+            # duplicate. A partial result beats the multi-second disk-walk
+            # (which on a large store exceeds the bridge timeout — the vec
+            # search contract says the caller must NOT fall through). Gate on a
+            # real VEC contribution, NOT just "filter set + index non-empty":
+            # in the un-backfilled deploy window the category columns are NULL,
+            # so include filters match nothing, exclusion filters drop nothing
+            # in-index and keep_chunk then drops everything on disk-truth —
+            # both leave zero VEC survivors, and there L3 is still the escape
+            # hatch that finds the memories. Every VEC chunk that reached
+            # pass_chunks already passed keep_chunk, so a survivor here is by
+            # definition on-filter.
+            vec_served_filtered = vec_filter_active and any(
                 c.cache_tier == "VEC" for c in pass_chunks
             )
-            if len(pass_chunks) < req.max_results and not vec_served_category:
+            if len(pass_chunks) < req.max_results and not vec_served_filtered:
                 l3_results = [
                     c for c in await l3_scan(memory_dir, query_embedding,
                                               # L3 embeds candidate DOCUMENTS, not the query

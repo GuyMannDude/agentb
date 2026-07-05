@@ -133,13 +133,62 @@ def test_pinned_category_with_no_vec_hits_still_uses_l3(client, tmp_path):
 
 
 def test_default_recall_still_uses_l3_when_cheap_tiers_underfill(client):
-    """The suppression is specific to a pinned category. A plain recall that
-    underfills (everything is hidden session_log) must still reach L3 — the
-    guard must not over-suppress the escape hatch."""
+    """A plain recall where NOTHING survives the filters (everything is hidden
+    session_log) must still reach L3 — zero VEC survivors means the pushdown
+    could not serve, so the escape hatch stays open. (v4.9.2 narrowed the old
+    'any pinned-category' wording: the hatch now closes whenever a filtered
+    kNN produced at least one survivor, exclusion included — see the two
+    S120-regression tests below.)"""
     for i in range(3):
         _writeback(client, f"raw auto-sync session activity dump {i}", "session_log")
 
     with patch("agentb.server.l3_scan", new=AsyncMock(return_value=[])) as l3:
         r = client.post("/context", json={"prompt": "anything", "max_results": 5})
     assert r.status_code == 200, r.text
-    l3.assert_called()                   # no category pinned → L3 still the escape hatch
+    l3.assert_called()                   # zero survivors → L3 still the escape hatch
+
+
+# ── v4.9.2: the S120 boot-timeout regression (23s /context on a 6.2k store) ──
+
+def test_exclusion_underfill_serves_partial_without_l3(client):
+    """The default session_log exclusion is a pushed-down filter too. When the
+    filtered kNN serves at least one survivor but underfills max_results,
+    /context must return the partial set — NOT walk the disk. This was the
+    S120 boot timeout: session-flavored prompts on a session_log-dominated
+    store underfilled VEC and paid a 23s L3 embed-walk on every recall."""
+    _writeback(client, "artforge runs the mnemo server on port 50001", "topology")
+    for i in range(6):
+        _writeback(client, f"raw auto-sync session activity dump {i}", "session_log")
+
+    with patch("agentb.server.l3_scan", new=AsyncMock(return_value=[])) as l3:
+        r = client.post("/context", json={"prompt": "artforge mnemo", "max_results": 5})
+    assert r.status_code == 200, r.text
+    cats = [c.get("category") for c in r.json()["chunks"]]
+    assert "topology" in cats            # the survivor was served
+    assert "session_log" not in cats     # exclusion still holds
+    l3.assert_not_called()               # partial beats the disk-walk
+
+
+def test_vec_escalation_retry_fires_once_on_underfill(client):
+    """On a filtered underfill the handler re-runs the kNN exactly once with a
+    5x wider over-fetch (milliseconds) before accepting the partial set —
+    that's the rescue for hidden-category-dominated semantic neighborhoods."""
+    from agentb.vec import VecStore
+
+    _writeback(client, "artforge runs the mnemo server on port 50001", "topology")
+    for i in range(6):
+        _writeback(client, f"raw auto-sync session activity dump {i}", "session_log")
+
+    multipliers = []
+    orig = VecStore.search
+
+    def spy(self, *args, **kwargs):
+        multipliers.append(kwargs.get("overfetch_multiplier"))
+        return orig(self, *args, **kwargs)
+
+    with patch.object(VecStore, "search", spy), \
+         patch("agentb.server.l3_scan", new=AsyncMock(return_value=[])):
+        r = client.post("/context", json={"prompt": "artforge mnemo", "max_results": 5})
+    assert r.status_code == 200, r.text
+    assert len(multipliers) == 2                       # one pass + one escalation
+    assert multipliers[1] == multipliers[0] * 5        # escalation is 5x wider
