@@ -13,7 +13,7 @@
   "tagline": "Cognitive coprocessor with active memory for AI agents — local-first, decay-aware, cross-agent dreaming.",
   "summary": "Cognitive coprocessor with active memory that gives AI agents persistent recall across sessions. Local SQLite + FTS5 working memory plus a structured Facts table (entity/attribute/value triples with a three-state confidence ladder) for the lookups semantic search gets wrong. Every memory record carries provenance (source + category) and decays on a category-aware schedule — topology facts age fast, doctrine stays perpetual, and recall returns a structured stale_warning when a fact is past its threshold so the agent verifies before acting. Cross-agent dreaming synthesizes every connected agent's memories into a shared nightly brief.",
   "backstory": "Guy Hutchins started exploring AI memory with ChatGPT 3.5 using basic text files. When OpenClaw launched and needed better memory, he gave Opie (Claude) a simple prompt: \"If you were a ClawdBot and your user wanted you to have the best memory you could build yourself, what would it look like?\" Opie was on extended thinking and just built it — no clarifying questions, no spec, just shipped a working memory system. Guy gave the same prompt to AL (ChatGPT), who built his own version independently. AL saw Opie's and said it was more in depth. Opie saw AL's and said it had ideas worth blending. The two versions merged. When it came time to name it, the first two suggestions were \"Mnemo\" and \"Cortex.\" Guy picked both. Mnemo Cortex.",
-  "version": "4.9.8",
+  "version": "4.9.9",
   "license": "MIT",
   "homepage": "https://projectsparks.ai/mnemo-cortex",
   "source": "https://github.com/GuyMannDude/mnemo-cortex",
@@ -32,7 +32,7 @@
     "Dreamer Stage 0.5 — nightly automated fact extraction from the day's memories using a conservative direct-statements-only prompt; new facts post at confidence='high_probability', conflicts with existing 'verified' facts get rejected and batched into an end-of-run notification.",
     "Cross-agent dreaming — nightly synthesis of every connected agent's memories into a shared brief.",
     "WikAI — auto-compiled knowledge base regenerated nightly from Mnemo data.",
-    "Embedding hosted fallback — embeddings default to local Ollama (nomic-embed-text). If Ollama is unreachable, falls back to hosted Google Gemini embeddings (Matryoshka-truncated to match the 768-dim store width). Graceful degradation at effectively zero cost.",
+    "Embedding hosted fallback — embeddings default to local Ollama (nomic-embed-text). If Ollama is unreachable, recall queries fall back to hosted Google Gemini embeddings (Matryoshka-truncated to match the 768-dim store width) so reads keep working; saves refuse-and-alert instead of falling back (v4.9.9), because a different model's vectors occupy a different embedding space and storing them would corrupt the index.",
     "Per-agent memory namespaces — shared, isolated, or hybrid deployments.",
     "OAuth 2.1 Resource Server mode for remote MCP clients (Auth0-compatible).",
     "Developer Dump — JSONL trace of every MCP tool call through the bridge (tool, params, response, latency, ok/error). Off by default; flip on with MNEMO_DUMP=on. One file per agent per day, greppable with jq. CLI: mnemo-cortex dump list / dump tail <agent>.",
@@ -45,7 +45,8 @@
     "Aesthetic-technique distillation (v4.9.4) — the Stage 0.7 judge recognizes creative choices as distillable strategies under the cross-cutting art-technique task class; recall_trajectory(task_type=art-technique) briefs any art session.",
     "Tenant-path hardening + fail-closed auth (v4.9.5) — agent_id is validated at every path boundary (no traversal/absolute escapes), and the server refuses to bind a non-loopback interface with no auth configured unless explicitly opted in.",
     "session_id path hardening (v4.9.6) — the transcript read path validates session_id the same way as agent_id, so a request cannot read arbitrary *.jsonl files off disk via traversal/absolute ids.",
-    "Loss-proof capture pipeline (v4.9.7) — the session watcher's read offset is a commit record (torn JSONL lines, mid-write polls, and failed /ingest calls all retry instead of silently dropping exchanges), /ingest dedups client retries by content hash, and the offline writeback queue + bus failure path fail loudly instead of black-holing data."
+    "Loss-proof capture pipeline (v4.9.7) — the session watcher's read offset is a commit record (torn JSONL lines, mid-write polls, and failed /ingest calls all retry instead of silently dropping exchanges), /ingest dedups client retries by content hash, and the offline writeback queue + bus failure path fail loudly instead of black-holing data.",
+    "Embedding-space integrity (v4.9.9) — an empty embedder response is an error (it can no longer lock the pipeline's dimension to 0 and brick saves until restart), and vectors bound for the index (writeback, trajectory save, dreamer) never fall back to a different model: foreign-space vectors are refused with an alert instead of being written as unrecallable noise, while recall queries still fall back freely."
   ],
 
   "exposes": {
