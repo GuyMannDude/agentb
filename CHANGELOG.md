@@ -25,6 +25,13 @@ for deliberate open deploys behind an external gatekeeper. 30 new regression tes
 `test_security_c1_c2.py` (incl. one that asserts app startup itself refuses an open posture); suite
 410 green.
 
+Also (C4): added `.github/workflows/ci.yml` — the project had 6k+ lines of pytest and a wheel smoke
+test that nothing ran automatically, which is why version drift shipped in v4.9.1/v4.9.2 and nearly
+v4.9.4. CI now runs the full suite on Python 3.11 + 3.12 (activating the drift-guard and the new
+security regressions) plus `scripts/wheel-smoke-test.sh` on every push/PR. The Docker-build job is
+deliberately deferred to a TODO until C3 (the image can't boot — it COPYs only `agentb/` while
+`create_app` imports `passport.api`) is fixed, so CI stays green on a known-open finding.
+
 ## v4.9.4 (2026-07-06) — Stage 0.7 judge learns aesthetic techniques (Opie #1087 rule-5 ruling)
 
 **Problem.** A proven aesthetic technique reused across art sessions (melody-contour steering,
