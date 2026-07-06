@@ -13,7 +13,7 @@
   "tagline": "Cognitive coprocessor with active memory for AI agents — local-first, decay-aware, cross-agent dreaming.",
   "summary": "Cognitive coprocessor with active memory that gives AI agents persistent recall across sessions. Local SQLite + FTS5 working memory plus a structured Facts table (entity/attribute/value triples with a three-state confidence ladder) for the lookups semantic search gets wrong. Every memory record carries provenance (source + category) and decays on a category-aware schedule — topology facts age fast, doctrine stays perpetual, and recall returns a structured stale_warning when a fact is past its threshold so the agent verifies before acting. Cross-agent dreaming synthesizes every connected agent's memories into a shared nightly brief.",
   "backstory": "Guy Hutchins started exploring AI memory with ChatGPT 3.5 using basic text files. When OpenClaw launched and needed better memory, he gave Opie (Claude) a simple prompt: \"If you were a ClawdBot and your user wanted you to have the best memory you could build yourself, what would it look like?\" Opie was on extended thinking and just built it — no clarifying questions, no spec, just shipped a working memory system. Guy gave the same prompt to AL (ChatGPT), who built his own version independently. AL saw Opie's and said it was more in depth. Opie saw AL's and said it had ideas worth blending. The two versions merged. When it came time to name it, the first two suggestions were \"Mnemo\" and \"Cortex.\" Guy picked both. Mnemo Cortex.",
-  "version": "4.8.0",
+  "version": "4.9.3",
   "license": "MIT",
   "homepage": "https://projectsparks.ai/mnemo-cortex",
   "source": "https://github.com/GuyMannDude/mnemo-cortex",
@@ -35,7 +35,13 @@
     "Embedding hosted fallback — embeddings default to local Ollama (nomic-embed-text). If Ollama is unreachable, falls back to hosted Google Gemini embeddings (Matryoshka-truncated to match the 768-dim store width). Graceful degradation at effectively zero cost.",
     "Per-agent memory namespaces — shared, isolated, or hybrid deployments.",
     "OAuth 2.1 Resource Server mode for remote MCP clients (Auth0-compatible).",
-    "Developer Dump — JSONL trace of every MCP tool call through the bridge (tool, params, response, latency, ok/error). Off by default; flip on with MNEMO_DUMP=on. One file per agent per day, greppable with jq. CLI: mnemo-cortex dump list / dump tail <agent>."
+    "Developer Dump — JSONL trace of every MCP tool call through the bridge (tool, params, response, latency, ok/error). Off by default; flip on with MNEMO_DUMP=on. One file per agent per day, greppable with jq. CLI: mnemo-cortex dump list / dump tail <agent>.",
+    "Trajectory store (v4.5–4.7) — save/recall procedural how-to recipes separate from episodic memory; the nightly Dreamer distills strategy lessons (successes AND failures) from real session streams, and recall reinforcement tracks which recipes actually get used.",
+    "Scoped tokens (v4.9.0) — per-tenant, per-endpoint bearer credentials beside the master key; only pin-enforcing endpoints can be allowlisted, enforced at config load, constant-time compares throughout.",
+    "Embedding task-type prefixes (v4.6.0) — nomic search_document/search_query asymmetry applied inside the provider; one-command all-tenant reindex CLI (migrate reindex).",
+    "Category pushdown into the vec index (#468, v4.9.2) — category-filtered k-NN inside sqlite-vec with widened-overfetch escalation; routine recalls on a 6k-record store went 23s → sub-second.",
+    "idea category + recall mode=explore (v4.8.0) — creative seeds get their own decay class and a serendipity recall lens; the Muse (analyst sibling, gated off by default) auditions idea extraction from live session streams.",
+    "GET /dream/latest (v4.9.3) — the nightly dream brief served from the Cortex host, so agents on any machine boot with the shared overnight synthesis."
   ],
 
   "exposes": {
@@ -47,6 +53,11 @@
         {"path": "/context", "method": "POST", "purpose": "Semantic recall with v3 filters (source, category, exclude_stale, max_age_days). Returns chunks with structured stale_warning when applicable."},
         {"path": "/writeback", "method": "POST", "purpose": "Save a memory with optional source/category/additional_tags. Returns category_used + category_suggested + match_keywords."},
         {"path": "/preflight", "method": "POST", "purpose": "Score an agent's draft response against memory context — PASS / ENRICH / WARN / BLOCK verdict."},
+        {"path": "/trajectory/save", "method": "POST", "purpose": "Store a procedural recipe (task_type, steps, rating, provenance) in the trajectory store."},
+        {"path": "/trajectory/recall", "method": "POST", "purpose": "Semantic recall over stored trajectories with min_rating / task_type filters; bumps reinforcement stats."},
+        {"path": "/dream/latest", "method": "GET", "purpose": "Newest nightly dream brief (date, age_hours, markdown content) served from the Cortex host."},
+        {"path": "/vec/status", "method": "GET", "purpose": "Vec index health per tenant — indexed count vs memory entries on disk."},
+        {"path": "/vec/backfill", "method": "POST", "purpose": "Embed-and-index memories missing from the vec index (adaptive truncation, breaker-bypassed)."},
         {"path": "/facts/{entity}/{attribute}", "method": "GET", "purpose": "Look up a single structured fact by (entity, attribute). Sub-millisecond exact lookup."},
         {"path": "/facts", "method": "GET", "purpose": "Filtered fact list — by entity, attribute, value_contains, confidence."},
         {"path": "/facts", "method": "POST", "purpose": "Assert a fact. Promotion ladder enforced: verified > high_probability > false; lower confidence rejected if existing is higher."},
