@@ -1,5 +1,29 @@
 # Changelog
 
+## v4.9.4 (2026-07-06) — Stage 0.7 judge learns aesthetic techniques (Opie #1087 rule-5 ruling)
+
+**Problem.** A proven aesthetic technique reused across art sessions (melody-contour steering,
+the both-versions IP rule) never survived the Stage 0.7 judge: nothing *failed*, so the
+failure-first prompt filed it under "it worked when done carefully" and emitted nothing. The
+proposed fix — carving the Muse's rule 5 to catch reused techniques — was rejected (#1087): the
+Muse hunts *abandoned* threads; a reused technique is the opposite, and muddying rule 5 would let
+any completed task reframe itself as "a technique I applied."
+
+**Fix.** Prompt-only, per the ruling — the conservatism knob stays the prompt, nothing else.
+The judge gets one bounded exception to the clean-success bar: an AESTHETIC TECHNIQUE is
+distillable when the stream evidences aesthetic *choice* (an approach picked over an alternative
+for how the result looks, iterated against visual judgment, or explicitly kept/praised by the
+user). Executing an art pipeline cleanly still earns nothing. Technique items MUST use the
+cross-cutting `task_type: art-technique` — never the pipeline task (`gallery-drop`, ...) — so a
+single `mnemo_recall_trajectory(task_type="art-technique")` at art-session start returns the
+technique briefing regardless of which art task triggered it. Drift-guard tests pin the
+exception wording, the cross-cutting routing rule, and the zero-is-normal conservatism line.
+
+Also: the version-in-N-places trap is now a test, not a ritual. Review caught `server.py`'s two
+hardcoded strings (FastAPI app + `/health`) still at 4.9.3 — the same miss that needed follow-up
+commits in v4.9.1 AND v4.9.2. New `test_served_versions_match_release` fails the suite whenever
+any `version="X.Y.Z"` literal in `server.py`/`cli.py` drifts from `pyproject.toml`.
+
 ## v4.9.3 (2026-07-05) — GET /dream/latest + analyst notes stop landing NULL in the vec category column
 
 **Problem.** Two finds from the same live audit. (1) The dream brief never reached agents on

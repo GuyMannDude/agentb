@@ -935,6 +935,8 @@ Step 1 — SEGMENT the session into tasks. A task boundary is a context switch: 
 
 Step 2 — JUDGE each task ruthlessly. A strategy item is justified ONLY when a future agent facing the same task class would act DIFFERENTLY for having read it. Hunt failures first: errors, retries, dead ends, and recoveries in the stream are where the transferable lessons live ("X breaks when Y; do Z instead"). A clean success earns an item only when the recipe is genuinely non-obvious.
 
+One exception to the clean-success bar: AESTHETIC TECHNIQUES. When the stream shows a creative choice shaping visual or artistic output — an approach or parameter picked over an alternative for how the result LOOKS, iterated against visual judgment, or explicitly kept/praised by the user — that technique is distillable even though nothing failed. The bar is evidence of aesthetic CHOICE: cleanly executing an art pipeline is NOT a technique; the choice inside it is. Phrase it as transferable advice like any other item.
+
 NEVER emit items for: routine rituals (session startup/wrap-up, standard commits, memory writebacks), ordinary documentation or config edits, one-off trivia, or any task whose only lesson is "it worked when done carefully."
 
 Output ONLY a JSON array. ZERO items is the NORMAL result for most sessions; more than 3 items from one session is almost always over-extraction.
@@ -953,7 +955,8 @@ Rules:
 2. steps is the distilled recipe (3-8 steps), NOT a replay of every tool call.
 3. rating rubric: 5 = would clearly change how this task class is done (rare); 4 = strong recipe with a non-obvious step; 3 = useful but partly situational (the normal ceiling); below 3 = don't emit it at all.
 4. Never invent steps or outcomes not evidenced in the input.
-5. Output only the JSON array. No preamble, no markdown fences."""
+5. Aesthetic-technique items MUST use task_type "art-technique" (the cross-cutting class), never the specific pipeline task (gallery-drop, image-upscale, ...) — one recall of "art-technique" must brief ANY future art session.
+6. Output only the JSON array. No preamble, no markdown fences."""
 
 
 def _session_streams(memories: list[dict]) -> dict[str, dict[str, list[dict]]]:

@@ -230,3 +230,38 @@ def test_parse_survives_raw_newlines_inside_strings():
     assert salvaged is True
     assert len(items) == 1
     assert items[0]["note"] == "a\nb"
+
+
+# ── judge prompt drift guards (v4.9.4, Opie #1087 rule-5 ruling) ──
+
+def test_prompt_carries_aesthetic_technique_exception():
+    # The rule-5 ruling lives in the prompt, nothing else: aesthetic techniques
+    # are distillable on clean success, but only on evidence of aesthetic CHOICE.
+    p = dream.STRATEGY_DISTILL_SYSTEM_PROMPT
+    assert "AESTHETIC TECHNIQUES" in p
+    assert "aesthetic CHOICE" in p
+    # zero-is-normal conservatism must survive the addition
+    assert "ZERO items is the NORMAL result" in p
+
+
+def test_prompt_routes_techniques_to_cross_cutting_task_type():
+    # Techniques must land under the cross-cutting class so one
+    # recall_trajectory(task_type="art-technique") briefs any art session.
+    p = dream.STRATEGY_DISTILL_SYSTEM_PROMPT
+    assert '"art-technique"' in p
+    assert "never the specific pipeline task" in p
+
+
+def test_validate_accepts_art_technique_item():
+    items = [{
+        "task_type": "art-technique",
+        "task_description": "steering an upscale toward a melody contour",
+        "steps": [{"action": "pick contour", "tool_used": None, "result_summary": "shape"}],
+        "outcome": "When upscaling gallery art, steer by melody contour because it preserves flow",
+        "rating": 4,
+        "derived_from": "success",
+        "evidence": "kept the contour version",
+    }]
+    valid = dream._validate_strategy_items(items, "cc", "cc-jsonl-abc123")
+    assert len(valid) == 1
+    assert valid[0]["task_type"] == "art-technique"
