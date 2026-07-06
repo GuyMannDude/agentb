@@ -1,5 +1,27 @@
 # Changelog
 
+## v4.9.8 (2026-07-06) — DATA INTEGRITY: cc-sync per-session offsets + torn-line holdback (clean-room review, H2/H3 sibling)
+
+**Problem.** `integrations/claude-code/mnemo-cc-sync.py` tracked a single `{session_id, byte_offset}`
+and synced only the newest JSONL per tick. Two live Claude Code sessions alternate as "newest", so
+every flip reset the offset to 0 — re-posting the whole file (duplicate floods) — and the
+non-newest session's tail below the batch threshold stranded unsynced. It also had the watcher's H2
+torn-line bug: text-mode iteration + `f.tell()` meant a tick landing mid-append hit
+`JSONDecodeError` on the partial line, skipped it, and left the offset past it forever.
+
+**Fix.** Every session file modified within the active window (`MNEMO_CC_ACTIVE_HOURS`, default 24)
+now syncs against its own offset in a per-file map; a failed POST leaves that file's offset alone
+and retries next tick. `parse_new_messages` consumes only newline-terminated bytes, so torn lines
+wait for their newline (and splits on `\n` only — `splitlines()` would fragment records containing
+raw U+2028/U+2029, which Claude Code emits inside JSON strings). Upgrade-safe: the legacy
+single-session offset is carried over, and a one-time seed starts other pre-existing files at EOF
+(sync forward only) — starting them at 0 would re-flood everything the old regime already posted.
+(Fresh-install note: a session already in progress at install time syncs forward from install, not
+from its beginning.) One vanished file can't abort the tick for other sessions; state persists
+after every successful post so a mid-tick crash can't re-post; the top-level `last_post_at` mirror
+is kept for the sync-watchdog; state prunes entries for deleted files. 10 new regression tests
+(`test_cc_sync_offsets.py`).
+
 ## v4.9.7 (2026-07-06) — DATA INTEGRITY: the four silent data-loss paths (clean-room review H2/H3/H1/H7)
 
 **Problem.** The clean-room review found four independent ways the capture/delivery pipeline
