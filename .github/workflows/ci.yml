@@ -1,0 +1,65 @@
+name: CI
+
+# Activates the release safety net the project already wrote: the full pytest
+# suite (incl. the version drift-guard test_served_versions_match_release and
+# the C1/C2 security regressions) and the wheel smoke test. Without this, those
+# guards only fire when a human remembers to run them locally — which is how
+# version drift shipped in v4.9.1, v4.9.2, and nearly v4.9.4.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run test suite
+        run: pytest tests/ -v
+
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install build backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+      - name: Build wheel + install-and-run smoke test
+        run: bash scripts/wheel-smoke-test.sh
+
+  # Guards the C3 class of failure: an image that builds but cannot boot
+  # because the Dockerfile drifted from the package layout (v4.9.4 shipped a
+  # Dockerfile that COPY'd only agentb/ while create_app imports passport.api).
+  docker-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t mnemo-ci .
+      - name: Image boots (imports resolve at module load)
+        run: docker run --rm mnemo-ci python -c "import agentb.server; print('boot ok')"
