@@ -66,12 +66,13 @@ BANNER = """[bold yellow]
 #  Main CLI Group
 # ─────────────────────────────────────────────
 
+from agentb import __version__
 from agentb.doctor import doctor
 from agentb.health import health
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.version_option(version="4.9.10", prog_name="mnemo-cortex")
+@click.version_option(version=__version__, prog_name="mnemo-cortex")
 def main(ctx):
     """⚡ Mnemo Cortex — Drop-in memory superhero for AI agents."""
     if ctx.invoked_subcommand is None:

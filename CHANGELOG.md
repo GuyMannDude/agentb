@@ -1,5 +1,27 @@
 # Changelog
 
+## v4.9.11 (2026-07-06) — Passport Lane test coverage + version single-source (clean-room review H10/H11)
+
+**Problem.** (H10) The Passport Lane — 14 modules, ~2,300 lines whose entire job is stopping
+PII/secret/injection leakage across agents — had one test file, covering only the validation layer.
+The 5 `/passport/*` HTTP routes, all four detector families, and the git auto-commit helper had no
+direct coverage at all. (H11) The release version was hardcoded in 5 places; drift shipped three
+separate times (v4.9.1, v4.9.2, v4.9.4). The review suggested `importlib.metadata` as the single
+source, but that would have been WRONG for our deploy model: the live box runs from a git checkout,
+and a stale installed dist (2.3.2, months old) shadows every `git pull` — the server would have
+reported a version from last winter.
+
+**Fix.** (H10) Three new test files: `tests/passport/test_api.py` (all 5 routes, happy + failure
+paths through a real TestClient, including hard-blocked secrets never entering the pending queue),
+`test_detectors.py` (per-detector true/false-positive tests for secrets/PII/private-dict/injection,
+redaction round-trip, `detectors.yaml` narrowing + severity overrides, previews never leak the raw
+match), and `test_git_helper.py` (tmp_path repo: init idempotence, commit SHA contract, no-change
+→ None, message truncation, no remote ever configured). (H11) `agentb.__version__` resolves
+checkout-first — `pyproject.toml` next to the package wins, dist metadata only for real wheel
+installs — and `server.py` (app + `/health`) and `cli.py` now serve it. The drift-guard test flips
+polarity: it now FAILS if a hardcoded `version="X.Y.Z"` literal ever reappears in served code. The
+bump ritual shrinks to pyproject.toml + robot.info + CHANGELOG.
+
 ## v4.9.10 (2026-07-06) — `migrate reindex --all` no longer dies on archived tenant snapshots
 
 **Problem.** The `--all` discovery globs every `<data_dir>/agents/*` dir with a `memory/` subdir —
