@@ -28,9 +28,16 @@ for deliberate open deploys behind an external gatekeeper. 30 new regression tes
 Also (C4): added `.github/workflows/ci.yml` — the project had 6k+ lines of pytest and a wheel smoke
 test that nothing ran automatically, which is why version drift shipped in v4.9.1/v4.9.2 and nearly
 v4.9.4. CI now runs the full suite on Python 3.11 + 3.12 (activating the drift-guard and the new
-security regressions) plus `scripts/wheel-smoke-test.sh` on every push/PR. The Docker-build job is
-deliberately deferred to a TODO until C3 (the image can't boot — it COPYs only `agentb/` while
-`create_app` imports `passport.api`) is fixed, so CI stays green on a known-open finding.
+security regressions) plus `scripts/wheel-smoke-test.sh` on every push/PR.
+
+Also (C3): the Docker image could never boot — the Dockerfile COPY'd only `agentb/` while
+`create_app` imports `passport.api` at module load (and `sparks_bus` ships as package data), so
+`python -m agentb.server` died on ModuleNotFoundError in every image ever built; no CI existed to
+catch it. Fixed: the image now `pip install .`s from `pyproject.toml` with all three packages
+copied in, and runs as a non-root user. Verified end-to-end: image builds, `import agentb.server`
+resolves, an unconfigured container fail-closes with the C2 remediation message (not a crash), and
+a container with a mounted config serves `/health` and 401s unauthenticated writes. A `docker-boot`
+CI job now guards the drift class.
 
 ## v4.9.4 (2026-07-06) — Stage 0.7 judge learns aesthetic techniques (Opie #1087 rule-5 ruling)
 

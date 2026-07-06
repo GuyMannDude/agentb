@@ -52,8 +52,14 @@ jobs:
       - name: Build wheel + install-and-run smoke test
         run: bash scripts/wheel-smoke-test.sh
 
-  # TODO(C3): add a docker-build + `docker run <img> python -c "import
-  # agentb.server"` job once the Dockerfile is fixed to install the package
-  # (it currently COPYs only agentb/, but create_app imports passport.api at
-  # import time, so the image cannot boot). Adding this job before that fix
-  # would make CI red on a known-open finding.
+  # Guards the C3 class of failure: an image that builds but cannot boot
+  # because the Dockerfile drifted from the package layout (v4.9.4 shipped a
+  # Dockerfile that COPY'd only agentb/ while create_app imports passport.api).
+  docker-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t mnemo-ci .
+      - name: Image boots (imports resolve at module load)
+        run: docker run --rm mnemo-ci python -c "import agentb.server; print('boot ok')"
