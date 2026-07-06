@@ -87,21 +87,40 @@ def _turn_budget(role: str, content: str) -> int:
     return TURN_BUDGET.get(role, TOOL_ECHO_BUDGET)
 
 
-def get_latest_session_jsonl() -> Path | None:
-    """Recursively find the most recently modified .jsonl file under SESSIONS_DIR."""
+# Only sessions touched inside this window are synced. Keeps each tick's
+# work bounded and stops a months-old file from flooding in when touched.
+ACTIVE_HOURS = float(os.environ.get("MNEMO_CC_ACTIVE_HOURS", "24"))
+
+
+def list_session_jsonls() -> list[Path]:
+    """One tree walk per tick — both the active filter and the prune use it."""
     if not SESSIONS_DIR.exists():
-        return None
-    files = sorted(SESSIONS_DIR.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime)
-    return files[-1] if files else None
+        return []
+    return list(SESSIONS_DIR.rglob("*.jsonl"))
 
 
 def load_state() -> dict:
-    if not OFFSET_FILE.exists():
-        return {}
-    try:
-        return json.loads(OFFSET_FILE.read_text())
-    except Exception:
-        return {}
+    """Load state, migrating the legacy single-session schema to the
+    per-file offset map ({"files": {relpath: {"byte_offset": N}}})."""
+    state = {}
+    if OFFSET_FILE.exists():
+        try:
+            state = json.loads(OFFSET_FILE.read_text())
+        except Exception:
+            state = {}
+
+    if "files" not in state:
+        files = {}
+        # Legacy schema: {"session_id": stem, "byte_offset": N}. Carry the
+        # offset over to that session's file or its whole backlog re-floods.
+        legacy_stem = state.pop("session_id", None)
+        legacy_offset = state.pop("byte_offset", 0)
+        if legacy_stem and SESSIONS_DIR.exists():
+            for p in SESSIONS_DIR.rglob(f"{legacy_stem}.jsonl"):
+                files[str(p.relative_to(SESSIONS_DIR))] = {"byte_offset": legacy_offset}
+                break
+        state["files"] = files
+    return state
 
 
 def save_state(state: dict) -> None:
@@ -133,33 +152,47 @@ def extract_text(content) -> str:
 
 
 def parse_new_messages(jsonl_path: Path, byte_offset: int) -> tuple[list, int]:
-    """Returns (messages, new_byte_offset)."""
+    """Returns (messages, new_byte_offset).
+
+    Consumes only newline-terminated bytes — a tick landing while Claude Code
+    is mid-append must leave the torn final line unread (same fix class as
+    the v4.9.7 watcher H2), instead of JSONDecodeError-skipping it forever.
+    """
     messages = []
-    with jsonl_path.open("r") as fh:
+    with jsonl_path.open("rb") as fh:
         fh.seek(byte_offset)
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if payload.get("type") not in ("user", "assistant", "message"):
-                continue
-            msg = payload.get("message") or {}
-            role = msg.get("role")
-            if not role:
-                continue
-            content = extract_text(msg.get("content", ""))
-            if not content.strip():
-                continue
-            messages.append({
-                "role": role,
-                "content": content,
-                "timestamp": payload.get("timestamp", ""),
-            })
-        new_offset = fh.tell()
+        chunk = fh.read()
+
+    last_nl = chunk.rfind(b"\n")
+    if last_nl < 0:
+        return [], byte_offset
+    new_offset = byte_offset + last_nl + 1
+
+    # split("\n"), NOT splitlines(): Claude Code emits raw U+2028/U+2029 inside
+    # JSON strings, and splitlines() would break such a record into fragments
+    # that all fail json.loads — silently dropping the message.
+    for line in chunk[:last_nl + 1].decode("utf-8", errors="replace").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") not in ("user", "assistant", "message"):
+            continue
+        msg = payload.get("message") or {}
+        role = msg.get("role")
+        if not role:
+            continue
+        content = extract_text(msg.get("content", ""))
+        if not content.strip():
+            continue
+        messages.append({
+            "role": role,
+            "content": content,
+            "timestamp": payload.get("timestamp", ""),
+        })
     return messages, new_offset
 
 
@@ -226,46 +259,105 @@ def post_to_mnemo(session_id: str, summary: str, key_facts: list) -> dict:
         return json.loads(resp.read())
 
 
-def main(force: bool = False) -> int:
-    jsonl = get_latest_session_jsonl()
-    if not jsonl:
-        print(f"[cc-sync] no session jsonl found under {SESSIONS_DIR}", file=sys.stderr)
-        return 0
-
+def sync_file(jsonl: Path, entry: dict, force: bool) -> tuple[bool, bool]:
+    """Sync one session file against its own offset entry (mutated in place).
+    Returns (posted, failed)."""
     session_id = jsonl.stem
-    state = load_state()
-    last_session = state.get("session_id")
-    last_offset = state.get("byte_offset", 0)
+    offset = entry.get("byte_offset", 0)
+    if jsonl.stat().st_size < offset:
+        offset = 0  # truncated/rotated — re-read rather than wedge
 
-    if last_session != session_id:
-        last_offset = 0  # New session — start from the top
-
-    messages, new_offset = parse_new_messages(jsonl, last_offset)
+    messages, new_offset = parse_new_messages(jsonl, offset)
 
     if not messages:
-        return 0
+        # Nothing ingestable, but housekeeping lines may still be consumable.
+        entry["byte_offset"] = new_offset
+        return False, False
 
     if not force and len(messages) < MIN_TURNS_PER_BATCH:
-        return 0  # Defer — wait for more activity
+        return False, False  # Defer — wait for more activity; offset unchanged
 
     summary, key_facts = build_summary(messages, session_id)
 
     try:
         result = post_to_mnemo(session_id, summary, key_facts)
     except (urllib.error.URLError, TimeoutError) as e:
-        print(f"[cc-sync] POST to {MNEMO_URL}/writeback failed: {e}", file=sys.stderr)
-        return 1  # Don't update offset — try again next tick
+        print(f"[cc-sync] POST to {MNEMO_URL}/writeback failed for {session_id[:8]}: {e}",
+              file=sys.stderr)
+        return False, True  # Don't update offset — try again next tick
 
-    state.update({
-        "session_id": session_id,
+    entry.update({
         "byte_offset": new_offset,
         "last_post_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "last_memory_id": result.get("memory_id", ""),
     })
-    save_state(state)
+    print(f"[cc-sync] posted {len(messages)} msgs from {session_id[:8]} "
+          f"→ memory_id={result.get('memory_id', '?')}")
+    return True, False
 
-    print(f"[cc-sync] posted {len(messages)} msgs → memory_id={result.get('memory_id', '?')}")
-    return 0
+
+def main(force: bool = False) -> int:
+    all_files = list_session_jsonls()
+
+    def mtime(p: Path) -> float | None:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return None  # vanished between walk and stat
+
+    # Every file touched inside the active window syncs with its own offset —
+    # following only the single newest file made two live sessions alternate
+    # as "newest", resetting the offset each flip (floods + skipped tails).
+    cutoff = time.time() - ACTIVE_HOURS * 3600
+    stamped = [(p, m) for p in all_files if (m := mtime(p)) is not None]
+    active = [p for p, m in sorted(stamped, key=lambda pm: pm[1]) if m >= cutoff]
+
+    state = load_state()
+    files = state["files"]
+
+    # One-time seed on install/schema-migration: files already on disk start
+    # at their current end (sync forward only). The old single-file regime
+    # already posted parts of them — starting at 0 would re-flood duplicates.
+    # After seeding, an unseen file is a genuinely new session: start at 0.
+    # (The legacy-migrated entry keeps its carried offset via setdefault.)
+    if not state.get("seeded"):
+        for jsonl in active:
+            key = str(jsonl.relative_to(SESSIONS_DIR))
+            try:
+                size = jsonl.stat().st_size
+            except OSError:
+                continue
+            files.setdefault(key, {"byte_offset": size})
+        state["seeded"] = True
+
+    any_failed = False
+    for jsonl in active:
+        key = str(jsonl.relative_to(SESSIONS_DIR))
+        entry = files.setdefault(key, {"byte_offset": 0})
+        try:
+            posted, failed = sync_file(jsonl, entry, force)
+        except OSError as e:
+            # One vanished/unreadable file must not abort the other sessions.
+            print(f"[cc-sync] skipping {key}: {e}", file=sys.stderr)
+            any_failed = True
+            continue
+        if posted:
+            # Top-level mirror — the sync-watchdog reads last_post_at directly.
+            state["last_post_at"] = entry["last_post_at"]
+            state["last_memory_id"] = entry.get("last_memory_id", "")
+            # Persist per post: a crash later in the tick must not re-post
+            # this batch next tick (/writeback has no retry dedup).
+            save_state(state)
+        any_failed = any_failed or failed
+
+    # Drop entries for files that no longer exist so state stays bounded.
+    live = {str(p.relative_to(SESSIONS_DIR)) for p in all_files}
+    for key in list(files):
+        if key not in live:
+            del files[key]
+
+    save_state(state)
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":
