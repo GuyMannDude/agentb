@@ -40,19 +40,24 @@ fi
 # Health check — save locally if server unreachable
 curl -sf --max-time 5 "${MNEMO_URL}/health" >/dev/null 2>&1 || {
     echo "[mnemo] Mnemo Cortex unreachable — saving to local queue"
-    mkdir -p "${HOME}/.mnemo-cc/queue"
+    QUEUE_DIR="${HOME}/.mnemo-cc/queue"
+    mkdir -p "$QUEUE_DIR"
     python3 -c "
 import json, sys
+qdir, session_id, agent_id, summary, *key_facts = sys.argv[1:]
 entry = {
-    'session_id': sys.argv[1],
-    'agent_id': sys.argv[2],
-    'summary': sys.argv[3],
-    'key_facts': sys.argv[4:]
+    'session_id': session_id,
+    'agent_id': agent_id,
+    'summary': summary,
+    'key_facts': key_facts
 }
-with open(f'{sys.argv[5]}/{sys.argv[1]}.json', 'w') as f:
+with open(f'{qdir}/{session_id}.json', 'w') as f:
     json.dump(entry, f, indent=2)
-" "$SESSION_ID" "$AGENT_ID" "$SUMMARY" "${KEY_FACTS[@]}" "${HOME}/.mnemo-cc/queue" 2>/dev/null || true
-    echo "[mnemo] Saved to ~/.mnemo-cc/queue/${SESSION_ID}.json"
+" "$QUEUE_DIR" "$SESSION_ID" "$AGENT_ID" "$SUMMARY" ${KEY_FACTS[@]:+"${KEY_FACTS[@]}"} || {
+        echo "[mnemo] ERROR: Could not write local queue file — summary NOT saved"
+        exit 1
+    }
+    echo "[mnemo] Saved to ${QUEUE_DIR}/${SESSION_ID}.json"
     exit 0
 }
 

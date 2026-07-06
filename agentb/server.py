@@ -641,7 +641,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     app = FastAPI(
         title="Mnemo Cortex",
         description="Drop-in memory superhero for AI agents",
-        version="4.9.6",
+        version="4.9.7",
         lifespan=lifespan,
     )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
@@ -718,7 +718,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="4.9.6",
+            version="4.9.7",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
@@ -1396,8 +1396,10 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             metadata=metadata,
         )
 
+        # "duplicate" = retry of an already-captured exchange; still a 200 so
+        # clients treat it as delivered and advance their offsets.
         return IngestResponse(
-            status="captured",
+            status=result.get("status", "captured"),
             session_id=result["session_id"],
             entry_number=result["entry_number"],
             agent_id=req.agent_id,

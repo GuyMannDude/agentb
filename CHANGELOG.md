@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.9.7 (2026-07-06) — DATA INTEGRITY: the four silent data-loss paths (clean-room review H2/H3/H1/H7)
+
+**Problem.** The clean-room review found four independent ways the capture/delivery pipeline
+silently lost data — in the components whose entire job is crash-safety. (H2) The session watcher
+read from a byte offset with `readlines()` + `f.tell()`, so a poll landing mid-append consumed a
+torn final JSONL line and permanently skipped both halves of that exchange. (H3) The watcher
+advanced its offset even when `/ingest` failed — a 10-minute Mnemo restart permanently lost every
+exchange in the window. (Adjacent, same function: a poll landing between the user line and the
+assistant line dropped the whole exchange, because the lone user message couldn't pair yet but the
+offset moved past it — same bug class, found while fixing H2/H3.) (H1) The Claude Code offline
+writeback queue had broken argv indexing (`sys.argv[5]` is the queue dir only with exactly one key
+fact), swallowed all errors with `2>/dev/null || true`, and printed a false "Saved". (H7) The bus
+watcher stamped `delivery_failed_at` even when the Discord alert itself failed to post — and every
+scanner filters on that stamp, so a message that failed during a Discord outage vanished forever.
+
+**Fix.** The watcher's offset is now a commit record: it reads bytes and only consumes up to the
+last newline (torn lines wait for their newline), holds back a trailing unpaired user message until
+its assistant reply lands, and on the first failed `/ingest` parks at that exchange's user line so
+the chunk retries next poll. Server-side, `SessionManager.ingest` dedups by content hash within a
+15-minute window (bounded LRU, seeded from the newest hot file on startup) so chunk retries and
+crash-recovery re-sends are idempotent — `/ingest` returns `status="duplicate"` with a 200 so
+clients advance. Also hardened in the same file: truncated/rotated session files reset their offset
+instead of wedging, and the positions file is written atomically (tmp + `os.replace`) so a crash
+mid-save can't wipe every offset. H1: queue dir is now the first argv (`qdir, sid, aid, summary,
+*facts = sys.argv[1:]`), and a queue-write failure reports and exits 1 instead of lying. H7: the
+failure stamp only lands when the alert actually posted; otherwise the row stays visible and both
+delivery and alert retry next cycle. 13 new regression tests (`test_watcher_data_loss.py`,
+`test_ingest_dedup.py`).
+
 ## v4.9.6 (2026-07-06) — SECURITY: close session_id path traversal (clean-room review, C1 sibling)
 
 **Problem.** The v4.9.5 review flagged a second traversal in the same class as C1 but a different

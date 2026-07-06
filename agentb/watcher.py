@@ -80,9 +80,12 @@ def load_positions() -> dict:
 
 
 def save_positions(positions: dict):
-    """Save current file positions."""
+    """Save current file positions (atomically — a crash mid-write must not
+    wipe every offset and trigger a mass re-ingest)."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(positions, indent=2))
+    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(positions, indent=2))
+    os.replace(tmp, STATE_FILE)
 
 
 # ─────────────────────────────────────────────
@@ -160,6 +163,9 @@ def parse_session_lines(lines: list[str]) -> list[dict]:
     Parse JSONL lines and extract messages with full context.
     Returns user messages, assistant messages (with tool calls + thinking),
     and tool results — all linked together.
+
+    Each returned message carries "_line" (its index into `lines`) so the
+    caller can map consumed messages back to byte offsets.
     """
     messages = []
     tool_results = {}  # toolCallId -> result summary
@@ -190,7 +196,7 @@ def parse_session_lines(lines: list[str]) -> list[dict]:
             continue
 
     # Second pass: build messages with metadata
-    for line in lines:
+    for line_idx, line in enumerate(lines):
         line = line.strip()
         if not line:
             continue
@@ -210,6 +216,7 @@ def parse_session_lines(lines: list[str]) -> list[dict]:
                     "role": "user",
                     "text": text[:MAX_CONTENT_LENGTH],
                     "timestamp": msg.get("timestamp") or entry.get("timestamp", ""),
+                    "_line": line_idx,
                 })
 
             elif role == "assistant":
@@ -244,6 +251,7 @@ def parse_session_lines(lines: list[str]) -> list[dict]:
                     "timestamp": msg.get("timestamp") or entry.get("timestamp", ""),
                     "actions": actions if actions else None,
                     "thinking": thinking if thinking else None,
+                    "_line": line_idx,
                 })
 
         except json.JSONDecodeError:
@@ -253,7 +261,11 @@ def parse_session_lines(lines: list[str]) -> list[dict]:
 
 
 def pair_messages(messages: list[dict]) -> list[dict]:
-    """Pair consecutive user/assistant messages into exchanges with metadata."""
+    """Pair consecutive user/assistant messages into exchanges with metadata.
+
+    Each pair carries "_lines" = (user_line, assistant_line) from the
+    messages' "_line" indices, for offset bookkeeping.
+    """
     pairs = []
     i = 0
     while i < len(messages) - 1:
@@ -262,6 +274,7 @@ def pair_messages(messages: list[dict]) -> list[dict]:
                 "prompt": messages[i]["text"],
                 "response": messages[i + 1]["text"],
                 "timestamp": messages[i]["timestamp"],
+                "_lines": (messages[i].get("_line"), messages[i + 1].get("_line")),
             }
 
             # Attach metadata (not vectorized, but stored alongside)
@@ -332,21 +345,60 @@ def process_session_file(filepath: Path, position: int) -> tuple[int, int]:
     """
     Read new lines from a session file starting at the given byte position.
     Returns (new_position, exchanges_ingested).
+
+    The returned position is a commit record: it never advances past data
+    that hasn't been confirmed ingested. Three rules enforce that —
+      1. Only newline-terminated data is consumed; a poll landing mid-append
+         leaves the torn final line unread until its newline arrives.
+      2. A trailing user message with no assistant reply yet is held back,
+         so the exchange pairs up whole on a later poll.
+      3. On the first failed /ingest, the offset stops at that exchange's
+         user line; the chunk retries next poll (server-side dedup makes
+         the already-ingested prefix safe to resend).
     """
     file_size = filepath.stat().st_size
+    if file_size < position:
+        # File was truncated or rotated in place — re-read from the top.
+        log.warning(f"{filepath.name} shrank ({file_size} < {position}), resetting offset")
+        position = 0
     if file_size <= position:
         return position, 0
 
-    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+    with open(filepath, "rb") as f:
         f.seek(position)
-        new_lines = f.readlines()
-        new_position = f.tell()
+        chunk = f.read()
 
-    if not new_lines:
-        return new_position, 0
+    last_nl = chunk.rfind(b"\n")
+    if last_nl < 0:
+        return position, 0
+    complete = chunk[:last_nl + 1]
 
-    messages = parse_session_lines(new_lines)
+    # Split into lines, tracking each line's absolute end offset in the file.
+    text_lines = []
+    line_ends = []
+    start = 0
+    while True:
+        nl = complete.find(b"\n", start)
+        if nl < 0:
+            break
+        text_lines.append(complete[start:nl].decode("utf-8", errors="replace"))
+        line_ends.append(position + nl + 1)
+        start = nl + 1
+
+    def line_start(idx: int) -> int:
+        return line_ends[idx - 1] if idx > 0 else position
+
+    messages = parse_session_lines(text_lines)
     pairs = pair_messages(messages)
+
+    # Hold back a trailing user message that hasn't been paired yet — its
+    # assistant reply is still being written and will land in a later poll.
+    consumable_end = position + last_nl + 1
+    if messages:
+        last = messages[-1]
+        paired_lines = {ln for p in pairs for ln in p["_lines"]}
+        if last["role"] == "user" and last["_line"] not in paired_lines:
+            consumable_end = line_start(last["_line"])
 
     ingested = 0
     for pair in pairs:
@@ -360,10 +412,15 @@ def process_session_file(filepath: Path, position: int) -> tuple[int, int]:
             response=pair["response"],
             metadata=meta,
         )
-        if success:
-            ingested += 1
+        if not success:
+            # Known limitation (block-over-drop by design): an exchange the
+            # server persistently rejects parks this file's offset here and
+            # blocks later exchanges in the SAME file until it succeeds.
+            # Transient outages self-heal; the 2s-poll retry keeps logging.
+            return line_start(pair["_lines"][0]), ingested
+        ingested += 1
 
-    return new_position, ingested
+    return consumable_end, ingested
 
 
 def run_watcher():

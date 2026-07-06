@@ -18,6 +18,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from dataclasses import dataclass, field
+from collections import OrderedDict
 
 from agentb.config import validate_session_id
 
@@ -41,6 +42,8 @@ class SessionConfig:
     max_session_gap_minutes: int = 60  # new session after this gap
     auto_summarize: bool = True  # summarize on archival
     max_hot_entries: int = 500   # safety cap per session file
+    dedup_window_seconds: int = 900  # identical exchange within this window = client retry, skip
+    dedup_cache_size: int = 512      # recent-exchange hashes kept for dedup
 
 
 class SessionManager:
@@ -73,6 +76,45 @@ class SessionManager:
         self._current_session_file: Optional[Path] = None
         self._last_ingest_time: float = 0
         self._entry_count: int = 0
+
+        # Recent-exchange hashes → last write time. Clients (the watcher,
+        # cc-sync) re-send a whole chunk when any ingest in it failed; this
+        # makes those retries idempotent instead of duplicating memories.
+        self._dedup: OrderedDict[str, float] = OrderedDict()
+        self._seed_dedup_cache()
+
+    @staticmethod
+    def _hash_exchange(prompt: str, response: str) -> str:
+        return hashlib.sha256(
+            prompt.encode("utf-8") + b"\x00" + response.encode("utf-8")
+        ).hexdigest()
+
+    def _seed_dedup_cache(self):
+        """Rebuild recent hashes from the newest hot file, so a server that
+        crashed mid-batch still recognizes a client's retry after restart."""
+        hot = sorted(self.hot_dir.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
+        if not hot:
+            return
+        try:
+            lines = hot[-1].read_text().splitlines()
+        except OSError:
+            return
+        now = time.time()
+        for line in lines[-self.config.dedup_cache_size:]:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("_type") != "exchange":
+                continue
+            try:
+                written = datetime.fromisoformat(entry["timestamp"]).timestamp()
+            except (KeyError, ValueError, TypeError):
+                written = now
+            if now - written < self.config.dedup_window_seconds:
+                self._dedup[self._hash_exchange(
+                    entry.get("prompt", ""), entry.get("response", "")
+                )] = written
 
     def _generate_session_id(self) -> str:
         """Generate a new session ID based on timestamp."""
@@ -114,6 +156,20 @@ class SessionManager:
         This is the Live Wire — fast, append-only, crash-safe.
         Returns session info.
         """
+        # Retry dedup: an identical exchange inside the window is a client
+        # re-send (watcher chunk retry, crash recovery), not a new memory.
+        # Accepted tradeoff: a GENUINE byte-identical repeat inside the window
+        # is also skipped — it would duplicate an already-stored memory, so
+        # the only information lost is "it happened twice within 15 minutes".
+        dedup_key = self._hash_exchange(prompt, response)
+        last_written = self._dedup.get(dedup_key)
+        if last_written is not None and time.time() - last_written < self.config.dedup_window_seconds:
+            return {
+                "status": "duplicate",
+                "session_id": self._current_session_id or "",
+                "entry_number": self._entry_count,
+            }
+
         if self._should_start_new_session():
             self._start_session()
 
@@ -137,7 +193,13 @@ class SessionManager:
         self._last_ingest_time = time.time()
         self._entry_count += 1
 
+        self._dedup[dedup_key] = self._last_ingest_time
+        self._dedup.move_to_end(dedup_key)  # re-assign alone keeps old LRU slot
+        while len(self._dedup) > self.config.dedup_cache_size:
+            self._dedup.popitem(last=False)
+
         return {
+            "status": "captured",
             "session_id": self._current_session_id,
             "entry_number": self._entry_count,
             "session_file": str(self._current_session_file.name),

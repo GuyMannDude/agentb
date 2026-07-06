@@ -21,8 +21,10 @@ Per poll cycle:
                  ✅ PICKED UP.
   4. stale     — for any DELIVERED-but-unread row older than stale_seconds,
                  post ⚠️ STALE to the alerts channel.
-  5. failure   — handled inline during deliver: post ⚠️ DELIVERY FAILED
-                 once and stamp delivery_failed_at so we don't spam retries.
+  5. failure   — handled inline during deliver: post ⚠️ DELIVERY FAILED and
+                 stamp delivery_failed_at so we don't spam retries. The stamp
+                 only lands if the alert posted; otherwise the row retries
+                 next cycle so a Discord outage can't black-hole a message.
 
 Config: path resolution order is BUS_CONFIG env var → ./config.json →
         ./config.example.json (fallback only). All config keys can be
@@ -512,11 +514,20 @@ def notify_delivery_failure(db: sqlite3.Connection, discord: DiscordClient, aler
         f"Status: undeliverable — message stays in DB, no retries until cleared"
     )
     posted, _ = discord.post(alerts_channel, content)
-    db.execute(
-        "UPDATE messages SET delivery_failed_at = datetime('now') WHERE id = ?",
-        (msg["id"],),
-    )
-    db.commit()
+    if posted:
+        # Stamp only once someone has actually been told — a stamped row is
+        # invisible to every scanner, so stamping on a failed alert would
+        # black-hole the message with nothing but a log line left.
+        db.execute(
+            "UPDATE messages SET delivery_failed_at = datetime('now') WHERE id = ?",
+            (msg["id"],),
+        )
+        db.commit()
+    else:
+        log.error(
+            f"[{agent}] Alert for failed delivery #{msg['id']} did not post to Discord — "
+            f"leaving message unstamped so delivery and alert retry next cycle"
+        )
     log.error(f"[{agent}] DELIVERY FAILED #{msg['id']} ({tracking}): {error_text}")
     return posted
 
