@@ -44,19 +44,27 @@ def test_robot_info_version_matches_release():
     )
 
 
-def test_served_versions_match_release():
-    # v4.9.1 and v4.9.2 both shipped follow-up commits solely to fix these two
-    # hardcoded strings; v4.9.4's review caught the same miss a third time.
-    # This guard makes the suite fail instead: every version="X.Y.Z" literal in
-    # agentb/server.py and agentb/cli.py must match pyproject.toml.
-    release = _pyproject_version()
+def test_dunder_version_matches_release():
+    # v4.9.11 (H11): server.py and cli.py now serve agentb.__version__, which
+    # resolves from pyproject.toml (checkout) or dist metadata (wheel install).
+    # This guard proves the resolver tracks the release.
+    import agentb
+    assert agentb.__version__ == _pyproject_version(), (
+        f"agentb.__version__ resolved {agentb.__version__!r} but pyproject.toml "
+        f"says {_pyproject_version()!r} — the checkout-first resolution in "
+        "agentb/__init__.py is broken."
+    )
+
+
+def test_no_hardcoded_versions_in_served_code():
+    # v4.9.1, v4.9.2, and v4.9.4 each shipped follow-up commits solely to fix
+    # drifted version literals in these files. H11 removed the literals; this
+    # guard fails if one ever creeps back in.
     for rel_path in ("agentb/server.py", "agentb/cli.py"):
         src = (ROOT / rel_path).read_text(encoding="utf-8")
-        found = re.findall(r'version="(\d+\.\d+\.\d+)"', src)
-        assert found, f"{rel_path}: expected at least one hardcoded version string"
-        for v in found:
-            assert v == release, (
-                f'{rel_path} serves version "{v}" but pyproject.toml says '
-                f'"{release}" — bump every hardcoded version string in the bump '
-                "commit (server.py app+/health, cli.py, robot.info, CHANGELOG)."
-            )
+        found = re.findall(r'version\s*=\s*[\'"](\d+\.\d+\.\d+)[\'"]', src)
+        assert not found, (
+            f"{rel_path} has hardcoded version literal(s) {found} — use "
+            "agentb.__version__ instead; only pyproject.toml and robot.info "
+            "carry the number."
+        )
