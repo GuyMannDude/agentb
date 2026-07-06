@@ -26,6 +26,26 @@ class EmbeddingRefused(RuntimeError):
     """
 
 
+def _same_model(a: str, b: str) -> bool:
+    """Same embedding model ⇒ same vector space. Ollama treats "m" and
+    "m:latest" as the same model, so strip only that implicit tag — two
+    different explicit tags may be different weights and stay distinct."""
+    def norm(m: str) -> str:
+        return m[:-len(":latest")] if m.endswith(":latest") else m
+    return norm(a) == norm(b)
+
+
+def _require_vector(vec: list[float], label: str) -> list[float]:
+    """An empty embedding is an ERROR, not a value. Providers used to return
+    [] on a missing/empty response field; one such 200 then locked the
+    resilient wrapper's dim to 0 and every later valid vector was rejected
+    until restart (H4). Raise so the failure enters the normal retry/fallback
+    path instead."""
+    if not vec:
+        raise RuntimeError(f"{label} returned an empty embedding")
+    return vec
+
+
 class _EmbedAlerter:
     """Rate-limited Discord 'scream' for embedder refusal. Fail-safe: a missing
     webhook or a failed post is logged, never raised — alerting must not add a
@@ -255,6 +275,11 @@ class ResilientEmbedding:
         EMBED_DIM, so a wrong-dim fallback can never reach the index even before
         the lock is set."""
         n = len(vec)
+        if n == 0:
+            # Belt-and-suspenders under _require_vector: an empty vector must
+            # never lock the dim to 0 (which bricked all embeds until restart).
+            log.error(f"{label} returned an empty vector; rejecting")
+            return None
         if self._locked_dim is None:
             if is_primary:
                 self._locked_dim = n
@@ -325,6 +350,21 @@ class ResilientEmbedding:
                 log.warning(f"Primary embedding failed ({self.primary.label}): {e}")
 
         for i, fb in enumerate(self.fallbacks):
+            # H5: task_type="document" vectors get WRITTEN into the index. A
+            # different-model fallback embeds in a different vector SPACE —
+            # matching dimension or not, cosine against it is meaningless, so
+            # storing it corrupts recall (migrate.py calls this "the exact
+            # corruption this reindex exists to remove"). Store path: only a
+            # same-model fallback (a mirror of the primary) may serve. Query
+            # path: any dim-safe fallback may serve — degraded recall for the
+            # outage window, nothing durable written.
+            if task_type == "document" and not _same_model(fb.config.model, self.primary.config.model):
+                log.warning(
+                    f"Fallback [{i}] ({fb.label}) skipped for store-path embed: "
+                    f"different model than primary ({self.primary.label}) would "
+                    f"write foreign-space vectors into the index"
+                )
+                continue
             try:
                 result = await self._try_embed_adaptive(fb, text, task_type=task_type)
                 checked = self._check_dim(result, fb.label, is_primary=False)
@@ -412,8 +452,8 @@ class OllamaEmbedding(EmbeddingProvider):
             resp = await client.post(f"{self.config.api_base}/api/embed",
                                      json={"model": self.config.model, "input": payload_text})
             resp.raise_for_status()
-            embeddings = resp.json().get("embeddings", [[]])
-            return embeddings[0] if embeddings else []
+            embeddings = resp.json().get("embeddings") or [[]]
+            return _require_vector(embeddings[0], self.label)
 
     async def health_check(self) -> bool:
         import httpx
@@ -463,7 +503,7 @@ class OpenAIEmbedding(EmbeddingProvider):
             resp = await client.post(f"{self._url()}/embeddings", headers=headers,
                                      json={"model": self.config.model, "input": text})
             resp.raise_for_status()
-            return resp.json()["data"][0]["embedding"]
+            return _require_vector(resp.json()["data"][0]["embedding"], self.label)
 
     async def health_check(self) -> bool:
         import httpx
@@ -578,7 +618,7 @@ class OpenRouterEmbedding(EmbeddingProvider):
             resp = await client.post(f"{base}/embeddings", headers=headers,
                                      json={"model": self.config.model, "input": text})
             resp.raise_for_status()
-            return resp.json()["data"][0]["embedding"]
+            return _require_vector(resp.json()["data"][0]["embedding"], self.label)
 
     async def health_check(self) -> bool:
         return await _openrouter_auth_ok(self.config)
@@ -624,7 +664,8 @@ class GoogleEmbedding(EmbeddingProvider):
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(url, json=payload)
             resp.raise_for_status()
-            return resp.json().get("embedding", {}).get("values", [])
+            return _require_vector(
+                resp.json().get("embedding", {}).get("values", []), self.label)
 
     async def health_check(self) -> bool:
         return await _google_auth_ok(self.config)
@@ -637,7 +678,7 @@ class HuggingFaceEmbedding(EmbeddingProvider):
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(f"{self.config.api_base}/embed", json={"inputs": text})
                 resp.raise_for_status()
-                return resp.json()[0]
+                return _require_vector(resp.json()[0], self.label)
         else:
             headers = {"Authorization": f"Bearer {self.config.api_key}"}
             url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{self.config.model}"
@@ -645,7 +686,7 @@ class HuggingFaceEmbedding(EmbeddingProvider):
                 resp = await client.post(url, json={"inputs": text}, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
-                return data[0] if isinstance(data[0], list) else data
+                return _require_vector(data[0] if isinstance(data[0], list) else data, self.label)
 
     async def health_check(self) -> bool:
         # Self-hosted TEI endpoint: probe /health (free). Hosted HF inference:

@@ -274,7 +274,8 @@ class TestResilientEmbedding:
         resilient.primary.embed = AsyncMock(side_effect=Exception("ollama down"))
         resilient.fallbacks[0].embed = AsyncMock(return_value=[0.4, 0.5, 0.6])
 
-        result = await resilient.embed("test")
+        # H5: foreign-model fallback only serves the READ path now.
+        result = await resilient.embed("test", task_type="query")
         assert result == [0.4, 0.5, 0.6]
         assert resilient.failed_over
 
@@ -311,7 +312,8 @@ class TestResilientEmbedding:
         assert await resilient.embed("a") == [1.0, 2.0, 3.0]
         resilient.primary.embed = AsyncMock(side_effect=Exception("down"))
         resilient.fallbacks[0].embed = AsyncMock(return_value=[4.0, 5.0, 6.0])  # dim 3 OK
-        assert await resilient.embed("b") == [4.0, 5.0, 6.0]
+        # H5: foreign-model fallback only serves the READ path now.
+        assert await resilient.embed("b", task_type="query") == [4.0, 5.0, 6.0]
         assert resilient.failed_over
 
     @pytest.mark.asyncio
@@ -360,7 +362,8 @@ class TestResilientEmbedding:
         resilient.primary.embed = AsyncMock(side_effect=Exception("down from boot"))
         good = [0.0] * EMBED_DIM
         resilient.fallbacks[0].embed = AsyncMock(return_value=good)
-        assert await resilient.embed("x") == good
+        # H5: foreign-model fallback only serves the READ path now.
+        assert await resilient.embed("x", task_type="query") == good
         assert resilient.failed_over
 
     # ── Adaptive truncation on HTTP 400 (input too long) — v2.11.5 ──
@@ -428,7 +431,7 @@ class TestResilientEmbedding:
         resilient.primary.embed = AsyncMock(side_effect=self._make_400())
         resilient.fallbacks[0].embed = AsyncMock(return_value=[0.7, 0.8])
 
-        result = await resilient.embed("a" * 4000)
+        result = await resilient.embed("a" * 4000, task_type="query")
         assert result == [0.7, 0.8]
         assert resilient.failed_over
 
@@ -449,7 +452,7 @@ class TestResilientEmbedding:
         )
         resilient.fallbacks[0].embed = AsyncMock(return_value=[0.5])
 
-        result = await resilient.embed("a" * 4000)
+        result = await resilient.embed("a" * 4000, task_type="query")
         assert result == [0.5]
         assert resilient.failed_over
         # No halving attempted — single call to primary.

@@ -1,5 +1,33 @@
 # Changelog
 
+## v4.9.9 (2026-07-06) — EMBEDDING INTEGRITY: empty-vector brick + foreign-space store fallback (clean-room review H4/H5)
+
+**Problem.** (H4) Ollama and Google embedding providers turned a malformed-but-200 response into an
+empty `[]` vector. `ResilientEmbedding._check_dim` then locked `_locked_dim = 0` from that first
+"successful" primary embed, and every subsequent valid 768-dim vector was rejected (`768 != 0`)
+until process restart — one transient malformed response disabled all saves and vector recalls.
+(The 4.5 foundation audit had already added refuse-and-alert, but the empty vector could still
+poison the lock.) (H5) The only guard on a fallback vector was its *dimension*. The live config —
+Gemini fallback with `output_dimensionality: 768` for nomic compat — passes that check, but a
+different model embeds in a different vector *space*: cosine between spaces is meaningless, so
+every breaker-open window wrote store-path fallback vectors into the index as silent unrecallable
+noise. `migrate.py` itself calls foreign-space rows "the exact corruption this reindex exists to
+remove," yet `/writeback` allowed it on every primary hiccup.
+
+**Fix.** (H4) All five embedding providers now raise on an empty/missing embedding
+(`_require_vector`), so the failure enters the normal retry/fallback path; `_check_dim`
+additionally rejects `n == 0` outright and can never lock 0. Recovery needs no restart. (H5) The
+store path (`task_type="document"` — every vector that gets written: /writeback, /trajectory/save,
+analyst, the dreamer cycle, L3-scan candidate embeds) refuses fallbacks running a *different
+model* than the primary via the existing refuse-and-alert machinery; a same-model fallback (a
+mirror host — `:latest` tag normalized) still serves, and the query path still falls back freely —
+degraded recall during an outage writes nothing durable. Outage semantics: capture (`/ingest`)
+never embeds so nothing is lost; `/writeback` keeps the memory JSON on disk unindexed; after an
+extended primary outage run `mnemo-cortex reindex` (or wait for L3 scans) to vec-index the
+memories saved during the window. The five 4.5-era tests that pinned foreign-model fallback on the
+default path now pin it on the query path. 12 new regression tests
+(`test_embedding_integrity.py`).
+
 ## v4.9.8 (2026-07-06) — DATA INTEGRITY: cc-sync per-session offsets + torn-line holdback (clean-room review, H2/H3 sibling)
 
 **Problem.** `integrations/claude-code/mnemo-cc-sync.py` tracked a single `{session_id, byte_offset}`
