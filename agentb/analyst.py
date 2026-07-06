@@ -346,6 +346,7 @@ async def _lens_pass(
                 memory_id, full_text, embedding,
                 source_file=(memory_dir / f"{memory_id}.json").as_posix(),
                 created_at=now,
+                category=note["category"],  # #468: without this, every analyst/muse note lands NULL in the search pre-filter column
             )
             stats["notes_saved"] += 1
             emoji = "🎨" if lens == "muse" else "📝"

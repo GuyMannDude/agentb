@@ -12,6 +12,19 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.14.0 — 2026-07-05 — Dream brief fetched from the Cortex, not local disk
+
+**Problem:** `agent_startup` read the dream brief from `DREAM_DIR` on the
+machine running the bridge, inside a silent catch. The dreamer writes dreams
+on the Cortex host — since the dreamer moved off the agents' machine, the
+bridges' `~/.agentb/dreams` never existed and every boot silently skipped the
+DREAM BRIEF section. (Misdiagnosed in the field as a `/context` timeout.)
+
+**Fix:** The dream section now asks the server first — `GET /dream/latest`
+(new in mnemo-cortex v4.9.3) — and only falls back to the local `DREAM_DIR`
+read when the server is unreachable or predates the endpoint. The 48h
+freshness gate applies on both paths.
+
 ## 2.13.0 — 2026-07-02 — Creative harness: `idea` category + recall mode=explore
 
 **Problem:** The creative-harness audit (bus #1003) found the bridge's category

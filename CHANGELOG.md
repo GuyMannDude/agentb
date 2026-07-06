@@ -1,5 +1,23 @@
 # Changelog
 
+## v4.9.3 (2026-07-05) — GET /dream/latest + analyst notes stop landing NULL in the vec category column
+
+**Problem.** Two finds from the same live audit. (1) The dream brief never reached agents on
+machines other than the Cortex host: the bridge read `DREAM_DIR` from *its own* local disk inside
+a silent catch, but the dreamer writes dreams on the *server's* disk — so every `agent_startup`
+off-host silently skipped the DREAM BRIEF section (misread in the field as a `/context` timeout).
+(2) The NULL-category vec rows the #468 backfill was supposed to drain were *growing* (202 → 212):
+`analyst.py` saves analyst/muse notes with a category in the JSON but omitted `category=` in the
+`vec_store.upsert(...)` call, so every new note landed NULL in the search pre-filter column — and
+the hourly reclassifier never drains them because the JSON side looks correctly categorized.
+
+**Fix.** (1) New `GET /dream/latest`: serves the newest `<data_dir>/dreams/*.md` with `date` and
+`age_hours`; the bridge (2.14.0) asks the server first and keeps the local read as an offline
+fallback. (2) One-line pushdown fix in `analyst.py` — notes now carry their category into
+`vec_sources`; existing NULL rows drained with the standing `migrate vec-backfill` deploy step.
+Also caught `cli.py --version` still at 4.9.1 (missed in the 4.9.2 bump — the version-in-four-places
+trap): all four version strings verified at 4.9.3.
+
 ## v4.9.2 (2026-07-05) — /context: stop the routine 23s L3 disk-walk
 
 **Problem.** On a session_log-dominated store (cc: 6.2k memories, 65% session_log), most default

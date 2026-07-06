@@ -594,7 +594,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     app = FastAPI(
         title="Mnemo Cortex",
         description="Drop-in memory superhero for AI agents",
-        version="4.9.2",
+        version="4.9.3",
         lifespan=lifespan,
     )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
@@ -671,7 +671,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return HealthResponse(
             status="ok" if (r_ok and e_ok) else ("degraded" if (r_ok or e_ok) else "down"),
-            version="4.9.2",
+            version="4.9.3",
             timestamp=datetime.now(timezone.utc).isoformat(),
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
@@ -1375,6 +1375,38 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     @app.get("/capture/status")
     async def capture_status():
         return gate.status()
+
+    # ── Dream brief (v4.9.3) ──
+    @app.get("/dream/latest")
+    async def dream_latest():
+        """Serve the newest dream brief markdown.
+
+        The dreamer writes <data_dir>/dreams/YYYY-MM-DD.md on THIS host.
+        Bridges used to read that directory from their own local disk, which
+        broke silently the day the dreamer moved to a different machine than
+        the agents. Serving it over HTTP makes the Cortex the single source
+        of dreams; the bridge keeps its local read as an offline fallback.
+        """
+        dream_dir = Path(config.data_dir) / "dreams"
+        try:
+            candidates = sorted(
+                dream_dir.glob("*.md"), key=lambda p: p.name, reverse=True
+            )
+        except OSError:
+            candidates = []
+        if not candidates:
+            raise HTTPException(404, "No dream briefs on disk")
+        latest = candidates[0]
+        try:
+            content = latest.read_text(encoding="utf-8")
+            mtime = latest.stat().st_mtime
+        except OSError as e:
+            raise HTTPException(500, f"Dream brief unreadable: {e}")
+        return {
+            "date": latest.stem,
+            "age_hours": round((time.time() - mtime) / 3600, 1),
+            "content": content,
+        }
 
     # ── Session Info ──
     @app.get("/sessions")

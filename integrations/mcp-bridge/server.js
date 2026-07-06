@@ -450,7 +450,7 @@ process.stdin.on("end", () => {
 
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.13.0",
+  version: "2.14.0",
 });
 
 // ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────
@@ -1081,20 +1081,39 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     }
 
     try {
-      const dreamFiles = (await readdir(DREAM_DIR))
-        .filter((f) => f.endsWith(".md"))
-        .sort()
-        .reverse();
-      if (dreamFiles.length > 0) {
-        const latestDream = join(DREAM_DIR, dreamFiles[0]);
-        const st = await stat(latestDream);
-        const dreamAge = (Date.now() - st.mtimeMs) / 3600000;
-        if (dreamAge < 48) {
-          const dreamContent = await readFile(latestDream, "utf-8");
-          parts.push(
-            `# DREAM BRIEF (cross-agent overnight synthesis, ${Math.round(dreamAge)}h ago)\n\n${dreamContent}`
-          );
+      // v2.14.0: dreams are written on the Cortex host, which is not
+      // necessarily this machine — ask the server first, keep the local
+      // DREAM_DIR read as an offline fallback. 48h freshness gate on both.
+      let brief = null;
+      try {
+        const d = await mnemoRequest("GET", "/dream/latest");
+        if (d && d.content && d.age_hours < 48) {
+          brief = { ageH: Math.round(d.age_hours), content: d.content };
         }
+      } catch {
+        // server predates /dream/latest or is unreachable — try local disk
+      }
+      if (!brief) {
+        const dreamFiles = (await readdir(DREAM_DIR))
+          .filter((f) => f.endsWith(".md"))
+          .sort()
+          .reverse();
+        if (dreamFiles.length > 0) {
+          const latestDream = join(DREAM_DIR, dreamFiles[0]);
+          const st = await stat(latestDream);
+          const dreamAge = (Date.now() - st.mtimeMs) / 3600000;
+          if (dreamAge < 48) {
+            brief = {
+              ageH: Math.round(dreamAge),
+              content: await readFile(latestDream, "utf-8"),
+            };
+          }
+        }
+      }
+      if (brief) {
+        parts.push(
+          `# DREAM BRIEF (cross-agent overnight synthesis, ${brief.ageH}h ago)\n\n${brief.content}`
+        );
       }
     } catch {
       // dreams are supplementary

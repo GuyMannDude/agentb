@@ -102,6 +102,11 @@ def test_analyze_extracts_persists_and_marks(tmp_path):
     assert note["source"] == "inferred"
     assert set(note["derived_from"]) == {"log1", "log2"}
     assert store.has(note["id"]), "note must be recallable via VEC"
+    # v4.9.3: the note's category must reach the vec pre-filter column too —
+    # omitting it left every analyst/muse note NULL there, invisible to
+    # category-filtered recall and undrainable by the reclassifier.
+    hit = store.search(list(VEC_A), top_k=1)[0]
+    assert hit.category == "decision"
 
     # Sources marked processed; Tier 2 NOT deleted
     for mid in ("log1", "log2"):
