@@ -28,7 +28,7 @@ The brain-lane, wiki, and Passport tools only register when their backing direct
 
 ```bash
 cd mnemo-cortex/integrations/mcp-bridge
-npm install
+npm ci
 ```
 
 ## Point your MCP host at it

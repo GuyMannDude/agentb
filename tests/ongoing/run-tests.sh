@@ -30,6 +30,7 @@ export MNEMO_URL DATE AGENT_ID QUESTIONS_FILE RESULTS_FILE RESULTS_JSON
 python3 << 'PYEOF'
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -134,11 +135,19 @@ for level in ["needle", "chain", "general"]:
         if level == "needle":
             # For needle: check if the exact answer appears in context
             answer_lower = expected.lower().replace("$", "").replace("°f", "")
-            # Extract core number/fact from expected answer
+            # Partial credit requires the answer TOKEN (the number/value).
+            # It used to fire on ANY >2-char word from the expected sentence,
+            # so common words ("the", "with") made the harness unable to fail.
+            answer_tokens = re.findall(r"\d[\d,.]*", answer_lower)
+            if not answer_tokens:
+                stop = {"the", "and", "with", "from", "that", "this",
+                        "for", "was", "are", "has", "have", "will"}
+                answer_tokens = [w for w in answer_lower.split()
+                                 if len(w) >= 4 and w not in stop]
             if answer_lower in context_lower:
                 score = "correct"
                 total_correct += 1
-            elif any(word.lower() in context_lower for word in expected.split() if len(word) > 2):
+            elif answer_tokens and any(tok in context_lower for tok in answer_tokens):
                 score = "partial"
                 total_partial += 1
             elif context_text.strip():

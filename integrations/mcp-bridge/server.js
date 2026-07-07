@@ -453,9 +453,15 @@ process.stdin.on("end", () => {
 
 // ── MCP Server ─────────────────────────────────────────────────
 
+// Version single-sourced from package.json — hardcoded copies here and in
+// package.json drifted three ways (4.1.1 / 2.15.1 / 2.10.0) before this.
+const BRIDGE_VERSION = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8")
+).version;
+
 const server = new McpServer({
   name: "mnemo-cortex",
-  version: "2.15.1",
+  version: BRIDGE_VERSION,
 });
 
 // ── Developer Dump (v2.9.0, Mnemo v4 Phase 1) ──────────────────

@@ -21,7 +21,6 @@ Usage:
 """
 
 import argparse
-import fcntl
 import hashlib
 import json
 import logging
@@ -33,6 +32,40 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import httpx
+
+# Portable non-blocking single-writer lock (same pattern as passport/storage.py):
+# POSIX fcntl.flock, msvcrt fallback on Windows — a hard `import fcntl` was an
+# instant ImportError there, though the paired mnemo-dream.py runs on Windows.
+try:
+    import fcntl  # POSIX
+
+    def _try_lock_exclusive(f) -> bool:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+
+    def _unlock(f) -> None:
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+except ImportError:  # Windows (no fcntl)
+    import msvcrt
+
+    def _try_lock_exclusive(f) -> bool:
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    def _unlock(f) -> None:
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
 
 # ---------------------------------------------------------------------------
 # Config — mirrors mnemo-dream.py for consistency
@@ -826,10 +859,9 @@ def main() -> int:
     COMPILE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     lock_path = COMPILE_STATE_PATH.with_suffix(".lock")
     lock_fd = open(lock_path, "w")
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    if not _try_lock_exclusive(lock_fd):
         log.error(f"Another compiler holds the lock at {lock_path}")
+        lock_fd.close()
         return 1
 
     try:
@@ -985,7 +1017,7 @@ def main() -> int:
 
         return 0 if not failures else 2
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        _unlock(lock_fd)
         lock_fd.close()
 
 

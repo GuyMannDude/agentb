@@ -50,6 +50,14 @@ def main():
         vr = validation.validate_observation(obs, stable)
         results_by_file[source].append((obs.observation_id, expected, vr.disposition, rationale))
 
+    if not results_by_file:
+        # The corpus YAMLs are deliberately untracked (public repo; pending
+        # content review — see tests/passport/corpus/.gitignore), so a fresh
+        # clone has none. Say so instead of dying on a ZeroDivisionError.
+        print("SKIPPED: no corpus YAMLs in tests/passport/corpus/ — the corpus "
+              "is kept local pending content review (see that dir's .gitignore).")
+        return
+
     # Build stats per file + overall
     summary = {}
     all_true, all_pred = [], []
