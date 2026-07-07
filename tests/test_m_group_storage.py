@@ -104,6 +104,24 @@ def test_l2_cap_zero_disables(tmp_path):
     assert l2.size == 4
 
 
+def test_l2_concurrent_adds_all_land_and_index_stays_valid(tmp_path):
+    # _save now snapshots on the loop and writes in a worker thread under a
+    # lock — concurrent adds must all end up on disk, with no torn file.
+    cfg = CacheConfig(l2_max_entries=10)
+    l2 = L2Index(tmp_path / "l2", cfg)
+
+    async def _add_many():
+        await asyncio.gather(*[
+            l2.add(f"concurrent {i}", "test", list(VEC)) for i in range(8)
+        ])
+
+    asyncio.run(_add_many())
+    assert l2.size == 8
+    on_disk = json.loads((tmp_path / "l2" / "index.json").read_text())
+    assert len(on_disk) == 8
+    assert not (tmp_path / "l2" / "index.json.tmp").exists()
+
+
 # ── migrate: WAL-safe sqlite snapshot ──
 
 def test_sqlite_snapshot_captures_uncheckpointed_wal_pages(tmp_path):

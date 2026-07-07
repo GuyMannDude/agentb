@@ -459,6 +459,14 @@ class BodySizeLimitMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """tmp + os.replace so a reader can never see a half-written file and a
+    crash mid-write can never destroy the previous contents."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def _log_maintenance_exit(task: "asyncio.Task") -> None:
     """Done-callback for the maintenance task: a silent death here used to
     stop archival/dreamer/Analyst/Muse until the next restart with no trace."""
@@ -1332,7 +1340,13 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             memory_entry["classified_by"] = classified_by
         if needs_reclassification:
             memory_entry["needs_reclassification"] = True
-        (memory_dir / f"{memory_id}.json").write_text(json.dumps(memory_entry, indent=2, default=str))
+        # Off-loop + atomic: the dump/write used to run on the event loop
+        # (blocking every concurrent request), and a plain write_text leaves
+        # a torn-read window for on-loop readers (precache, analyst) now that
+        # the write can interleave with them.
+        await asyncio.to_thread(
+            _atomic_write_text, memory_dir / f"{memory_id}.json",
+            json.dumps(memory_entry, indent=2, default=str))
         log.info(f"Writeback: {req.session_id} → {memory_id} (agent: {req.agent_id or 'default'}, source={source_used}, category={category_used})")
 
         l1_updated = 0
@@ -1545,22 +1559,30 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         of dreams; the bridge keeps its local read as an offline fallback.
         """
         dream_dir = Path(config.data_dir) / "dreams"
+
+        def _read_latest():
+            # Directory walk + file read off the event loop — a slow or large
+            # dreams dir must not stall unrelated requests.
+            try:
+                candidates = sorted(
+                    dream_dir.glob("*.md"), key=lambda p: p.name, reverse=True
+                )
+            except OSError:
+                candidates = []
+            if not candidates:
+                return None
+            p = candidates[0]
+            return p.stem, p.read_text(encoding="utf-8"), p.stat().st_mtime
+
         try:
-            candidates = sorted(
-                dream_dir.glob("*.md"), key=lambda p: p.name, reverse=True
-            )
-        except OSError:
-            candidates = []
-        if not candidates:
-            raise HTTPException(404, "No dream briefs on disk")
-        latest = candidates[0]
-        try:
-            content = latest.read_text(encoding="utf-8")
-            mtime = latest.stat().st_mtime
+            found = await asyncio.to_thread(_read_latest)
         except OSError as e:
             raise HTTPException(500, f"Dream brief unreadable: {e}")
+        if found is None:
+            raise HTTPException(404, "No dream briefs on disk")
+        stem, content, mtime = found
         return {
-            "date": latest.stem,
+            "date": stem,
             "age_hours": round((time.time() - mtime) / 3600, 1),
             "content": content,
         }

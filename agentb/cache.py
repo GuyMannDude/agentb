@@ -3,6 +3,7 @@ AgentB Cache Hierarchy v0.3.0
 L1/L2/L3 with persona-aware similarity thresholds.
 """
 
+import asyncio
 import json
 import os
 import time
@@ -184,6 +185,9 @@ class L2Index:
         self.index_dir = index_dir
         self.config = config
         self.entries: list[dict] = []
+        # Orders concurrent saves so a slower older write can't land on disk
+        # after a newer one.
+        self._save_lock = asyncio.Lock()
         self._load()
 
     def _load(self):
@@ -196,13 +200,22 @@ class L2Index:
             except Exception as e:
                 log.warning(f"L2 load error: {e}")
 
-    def _save(self):
+    def _write_snapshot(self, entries: list[dict]):
         # Atomic tmp+replace (same pattern as trajectory.py): truncate-then-
         # write here meant a crash mid-write wiped the whole L2 index.
         index_file = self.index_dir / "index.json"
         tmp = index_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self.entries, default=str))
+        tmp.write_text(json.dumps(entries, default=str))
         os.replace(tmp, index_file)
+
+    async def _save(self):
+        # Each entry carries a ~6 KB embedding, so dumps of the whole index
+        # can hold the event loop for hundreds of ms. Snapshot on the loop
+        # (under the lock, so a later save always carries newer state) and
+        # serialize+write in a worker thread.
+        async with self._save_lock:
+            snapshot = list(self.entries)
+            await asyncio.to_thread(self._write_snapshot, snapshot)
 
     def search(self, query_embedding: list[float], top_k: int = 5,
                persona: Optional[PersonaConfig] = None) -> list[ContextChunk]:
@@ -255,9 +268,13 @@ class L2Index:
         # write disk churn, and per-search scan time all degrade linearly.
         max_entries = self.config.l2_max_entries
         if max_entries > 0 and len(self.entries) > max_entries:
-            self.entries.sort(key=lambda e: e.get("created_at", 0))
-            self.entries = self.entries[len(self.entries) - max_entries:]
-        self._save()
+            # Reassign instead of sorting in place: _save snapshots the list
+            # on the loop, and a concurrent add() must never reorder a list a
+            # snapshot was just taken from.
+            self.entries = sorted(
+                self.entries, key=lambda e: e.get("created_at", 0)
+            )[-max_entries:]
+        await self._save()
         return entry_id
 
     @property
@@ -279,6 +296,7 @@ async def l3_scan(
     memory_dir.mkdir(parents=True, exist_ok=True)
     now = time.time()
     results = []
+
     # v4.1.1: walk newest-first and cap the number of EMBEDS (max_candidates).
     # L3 embeds every prefilter-passing file — O(store size) ollama calls — which
     # blows the bridge timeout on a large session_log-dominated store. Recency
@@ -286,30 +304,46 @@ async def l3_scan(
     # candidates instead of an arbitrary filename-hash slice. None = uncapped
     # (legacy callers / small stores). Cheap reads (json.loads, prefilter) are NOT
     # capped — only the expensive embed is.
-    files = sorted(memory_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    def _collect_candidates() -> list[tuple]:
+        # The whole disk walk (O(store) stat calls + file reads + prefilter)
+        # runs off the event loop: on a 6.2k-file store this section alone
+        # stalled every concurrent request — including /health — for seconds.
+        out = []
+        files = sorted(memory_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for mem_file in files:
+            try:
+                mem = json.loads(mem_file.read_text())
+                content = mem.get("summary", "") + "\n" + "\n".join(mem.get("key_facts", []))
+                if not content.strip():
+                    continue
+                # Compute metadata from disk *before* the expensive embed. A
+                # category / source / age / stale filter prunes here so we never
+                # pay to embed a candidate we'd only discard. Before this, a
+                # category-filtered cross-agent recall embedded ~every file
+                # (~17 sequential embed calls/request → MCP-bridge timeout).
+                created_at = mem.get("created_at")
+                age_days = round((now - float(created_at)) / 86400.0, 1) if created_at else None
+                category = mem.get("category")
+                stale = compute_stale_warning(category, created_at) if category else None
+                source = mem.get("source")
+                if prefilter is not None and not prefilter(
+                    source=source, category=category, age_days=age_days, stale_warning=stale
+                ):
+                    continue
+                out.append((mem_file, mem, content, created_at, age_days,
+                            category, stale, source))
+            except Exception as e:
+                log.warning(f"L3 error {mem_file}: {e}")
+        return out
+
+    candidates = await asyncio.to_thread(_collect_candidates)
+
     embedded = 0
-    for mem_file in files:
+    for (mem_file, mem, content, created_at, age_days,
+         category, stale, source) in candidates:
         if max_candidates is not None and embedded >= max_candidates:
             break
         try:
-            mem = json.loads(mem_file.read_text())
-            content = mem.get("summary", "") + "\n" + "\n".join(mem.get("key_facts", []))
-            if not content.strip():
-                continue
-            # Compute metadata from disk *before* the expensive embed. A
-            # category / source / age / stale filter prunes here so we never
-            # pay to embed a candidate we'd only discard. Before this, a
-            # category-filtered cross-agent recall embedded ~every file
-            # (~17 sequential embed calls/request → MCP-bridge timeout).
-            created_at = mem.get("created_at")
-            age_days = round((now - float(created_at)) / 86400.0, 1) if created_at else None
-            category = mem.get("category")
-            stale = compute_stale_warning(category, created_at) if category else None
-            source = mem.get("source")
-            if prefilter is not None and not prefilter(
-                source=source, category=category, age_days=age_days, stale_warning=stale
-            ):
-                continue
             content_embedding = await embed_fn(content)
             embedded += 1
             sim = cosine_similarity(query_embedding, content_embedding)
