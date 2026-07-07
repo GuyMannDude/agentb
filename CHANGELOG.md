@@ -1,6 +1,32 @@
 # Changelog
 
-## v4.9.12 (2026-07-07) — Server hardening: streamed body cap, immortal maintenance loop, preflight fail-closed (clean-room review M-group, part 1)
+## v4.9.13 (2026-07-07) — Storage integrity: facts write-lock, ranking normalization, L2 cap + atomic save, WAL-safe backups, RMW re-reads, broader redaction (clean-room review M-group, part 2)
+
+**Problem.** Six storage-layer M-group findings. (1) `facts_store.save()`/`demote()` did a
+read-check-write on the default deferred transaction — two processes (server + dreamer + CLI
+share the DB) could both read "no existing fact" and collide on INSERT (uncaught IntegrityError
+→ 500), or a stale `high_probability` value could overwrite a fact verified in between.
+(2) Trajectory recall's `sim = 1/(1+distance)` compresses similarity into a narrow band, so
+despite SIM_WEIGHT=0.60 an off-topic 5-star recipe could outrank an on-topic 3-star — the exact
+inversion the ranking comment promises against. (3) The L2 semantic index had no cap (every
+entry a full embedding, the whole file rewritten per add, cosine-scanned per search) and its
+`_save` was truncate-then-write — a crash mid-write wiped the index. (4) `migrate._backup`
+copied live WAL DBs with `shutil.copy2`, missing uncheckpointed `-wal` pages — the "safe to run
+live" promise could hand back an inconsistent backup. (5) The Analyst/Muse marker write and the
+reclassify write both wrote back a JSON dict read *before* seconds of LLM latency, clobbering
+anything a concurrent writer changed in between. (6) `redact.py` missed bare `*_TOKEN` /
+`SECRET` / `PRIVATE_KEY` / `passphrase` assignments and URL-embedded passwords
+(`postgres://user:pass@host`).
+
+**Fix.** (1) `BEGIN IMMEDIATE` takes the write lock before the read in both save paths.
+(2) Similarity is min-max normalized across the candidate pool before weighting; rating and
+recency stay absolute. New regression test encodes the review's worked example (raw sims 0.667
+vs 0.625). (3) `l2_max_entries` (default 2000, oldest-first eviction mirroring L1, 0 disables)
++ atomic tmp+`os.replace` save. (4) `_sqlite_snapshot` uses the SQLite online backup API for
+`vec_index.sqlite` and the trajectory vec index. (5) Both writers re-read the file immediately
+before writing and patch only the fields they own. (6) Generic-assignment alternation gains
+`token|secret|private_key|passphrase`; new `url-credential` pattern redacts only the password
+and stays idempotent. Tests 534 → 551.
 
 **Problem.** Four server-side M-group findings, all variations of "the guard exists but is
 half-wired." (M1) The body-size cap only read the Content-Length header — a chunked request
