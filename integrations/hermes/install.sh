@@ -85,8 +85,8 @@ ok "Bridge found: $BRIDGE_DIR/server.js"
 # Bridge npm deps
 # ─────────────────────────────────────────────
 if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
-    info "Installing bridge dependencies (npm install in $BRIDGE_DIR)..."
-    (cd "$BRIDGE_DIR" && npm install --no-audit --no-fund)
+    info "Installing bridge dependencies (npm ci in $BRIDGE_DIR)..."
+    (cd "$BRIDGE_DIR" && npm ci --no-audit --no-fund)
     ok "Bridge dependencies installed"
 else
     ok "Bridge dependencies already installed"

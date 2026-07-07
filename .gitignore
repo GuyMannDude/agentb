@@ -1,13 +1,16 @@
 __pycache__/
 *.pyc
 node_modules/
-package-lock.json
 .venv/
 mnemo_cortex.egg-info/
 dist/
 build/
 ~/
-tests/ongoing/
+# Only the harness OUTPUTS — a blanket tests/ongoing/ hid new harness
+# files from git add (two tracked files were already inside).
+tests/ongoing/feed-log.jsonl
+tests/ongoing/test-results.jsonl
+tests/ongoing/mnemo-test-results.md
 
 # Passport Lane — never track anyone's private deny/redaction maps.
 *.local.yaml

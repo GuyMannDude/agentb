@@ -4,8 +4,8 @@
 > `mnemo-cortex` package version step-for-step. That coupling loosened
 > once the main package added features the bridge didn't need to
 > change for — Phase 3 Facts wired through as a thin passthrough,
-> the Mem0 retirement was server-side only. Bridge currently at 2.10.0;
-> main package at 3.1.0. Versions between 2.0.1 and 2.6.4 shipped
+> the Mem0 retirement was server-side only. (The current bridge version
+> lives in `package.json` — a hardcoded number here went stale.) Versions between 2.0.1 and 2.6.4 shipped
 > server-side and tooling changes (Dreaming, WikAI, Sparks Bus,
 > Developer's Passport, new host integrations) that didn't materially
 > change bridge behavior — the bridge continued to work unchanged

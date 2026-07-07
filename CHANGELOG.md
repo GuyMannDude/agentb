@@ -1,5 +1,40 @@
 # Changelog
 
+## v4.9.15 (2026-07-07) — Scripts, installers, packaging: last M-group items (clean-room review M-group, part 3b)
+
+**Problem.** Ten findings across scripts/installers/packaging. (1) The bus watcher probed
+Mnemo once at boot — a 5-second startup outage locked it into standalone mode forever,
+stamping rows `mnemo_saved_at='standalone'` that never reached Mnemo and were never retried.
+(2) The bus body flowed verbatim into a tool-equipped `claude --print` — any writer to the bus
+SQLite could inject instructions into a Claude run with Bash access in `$HOME`.
+(3) `mnemo-wiki-compile.py` hard-imported `fcntl` — instant ImportError on Windows.
+(4) Root `install.sh` cloned the wrong repo (`agentb.git`), swallowed venv-creation failure
+with `|| true`, and installed from a stale requirements.txt. (5) `robot-install.sh` wrote
+the API key before `chmod 600` — a world-readable window. (6) `requirements.txt` was a
+hand-synced duplicate of pyproject (the manual-sync anti-pattern that has failed three times).
+(7) The npm bridges had no committed lockfile (`.gitignore` ignored `package-lock.json`) —
+every integration spawned an app with floating transitive deps. (8) The ongoing recall
+harness gave "partial" credit if ANY >2-char word from the expected answer appeared in
+context — common words made it unable to fail. (9) `corpus_score.py` died on ZeroDivisionError
+on a fresh clone (corpus YAMLs are deliberately local pending content review — bus #604).
+(10) llms.txt described a v3-era product; README H1 said v4.5.3; the MCP bridge carried three
+contradictory versions (package.json 4.1.1, server.js 2.15.1, CHANGELOG note 2.10.0).
+
+**Fix.** (1) `MnemoClient.reprobe()` on a 300s cadence while standalone; `'standalone'` rows
+are re-saved (stamp upgraded to a real timestamp) once Mnemo is back. (2) Bus body is
+delimited as untrusted data between `<<<BUS_BODY>>>` markers and the run gets
+`--disallowedTools Bash,Edit,Write,NotebookEdit`. (3) Portable lock (fcntl → msvcrt fallback,
+same pattern as passport/storage.py). (4) Root `install.sh` deleted — `robot-install.sh` is
+the installer. (5) `install -m 600 /dev/null "$ENV_FILE"` before writing. (6)
+`requirements.txt` deleted; pyproject.toml is the single dependency source (Docker already
+installs from it; the fastapi 0.136.3 malware pin lives there). (7) Lockfiles committed for
+both bridges; hermes installer and bridge README use `npm ci`. Also narrowed the blanket
+`tests/ongoing/` ignore to the three output files it actually meant. (8) Needle partial
+credit now requires the answer TOKEN (number/value, else a stop-word-filtered ≥4-char word).
+(9) Empty corpus prints an explicit SKIPPED message and exits cleanly. (10) llms.txt gained a
+v4 paragraph and lost its hardcoded bridge versions; README H1 de-versioned; bridge version
+single-sourced from package.json (now 2.15.1), which `server.js` reads at startup.
+
 ## v4.9.14 (2026-07-07) — Async offload: blocking disk I/O off the event loop (clean-room review M-group, part 3)
 
 **Problem.** Four hot paths did blocking disk I/O directly on the asyncio event loop, stalling
