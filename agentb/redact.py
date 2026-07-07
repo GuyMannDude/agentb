@@ -79,6 +79,23 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
         \s*[=:]\s*["']?
         (?P<val>[A-Za-z0-9_\-./+]{16,})["']?
         """)),
+    # Bare credential names the alternation above misses (DISCORD_TOKEN=…,
+    # SECRET: …, PRIVATE_KEY=…, MY_PASSPHRASE=…). Case-SENSITIVE uppercase on
+    # purpose: lowercase `token = self.access_token` is ordinary code —
+    # captured sessions are full of it — and redacting the right-hand side
+    # would corrupt legitimate code memories (review catch). Uppercase names
+    # are the env-var convention where real secrets actually live.
+    ("env-credential", re.compile(
+        r"""(?x)\b
+        [A-Z0-9_]*
+        (TOKEN|SECRET|PRIVATE[_-]?KEY|PASSPHRASE)
+        \s*[=:]\s*["']?
+        (?P<val>[A-Za-z0-9_\-./+]{16,})["']?
+        """)),
+    # Credentials embedded in connection URLs (postgres://user:pass@host,
+    # amqp/redis/mongodb/… — any scheme). Only the password is redacted.
+    ("url-credential", re.compile(
+        r"(?i)\b[a-z][a-z0-9+.-]{1,30}://[^\s/:@]{1,64}:(?P<val>[^\s/@]{4,})@")),
     # Authorization headers pasted from curl/log output.
     ("bearer-token", re.compile(
         r"(?i)\bBearer\s+(?P<val>[A-Za-z0-9_\-./+=]{20,})")),
