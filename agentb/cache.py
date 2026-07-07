@@ -185,6 +185,9 @@ class L2Index:
         self.index_dir = index_dir
         self.config = config
         self.entries: list[dict] = []
+        # Orders concurrent saves so a slower older write can't land on disk
+        # after a newer one.
+        self._save_lock = asyncio.Lock()
         self._load()
 
     def _load(self):
@@ -197,13 +200,22 @@ class L2Index:
             except Exception as e:
                 log.warning(f"L2 load error: {e}")
 
-    def _save(self):
+    def _write_snapshot(self, entries: list[dict]):
         # Atomic tmp+replace (same pattern as trajectory.py): truncate-then-
         # write here meant a crash mid-write wiped the whole L2 index.
         index_file = self.index_dir / "index.json"
         tmp = index_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self.entries, default=str))
+        tmp.write_text(json.dumps(entries, default=str))
         os.replace(tmp, index_file)
+
+    async def _save(self):
+        # Each entry carries a ~6 KB embedding, so dumps of the whole index
+        # can hold the event loop for hundreds of ms. Snapshot on the loop
+        # (under the lock, so a later save always carries newer state) and
+        # serialize+write in a worker thread.
+        async with self._save_lock:
+            snapshot = list(self.entries)
+            await asyncio.to_thread(self._write_snapshot, snapshot)
 
     def search(self, query_embedding: list[float], top_k: int = 5,
                persona: Optional[PersonaConfig] = None) -> list[ContextChunk]:
@@ -256,9 +268,13 @@ class L2Index:
         # write disk churn, and per-search scan time all degrade linearly.
         max_entries = self.config.l2_max_entries
         if max_entries > 0 and len(self.entries) > max_entries:
-            self.entries.sort(key=lambda e: e.get("created_at", 0))
-            self.entries = self.entries[len(self.entries) - max_entries:]
-        self._save()
+            # Reassign instead of sorting in place: _save snapshots the list
+            # on the loop, and a concurrent add() must never reorder a list a
+            # snapshot was just taken from.
+            self.entries = sorted(
+                self.entries, key=lambda e: e.get("created_at", 0)
+            )[-max_entries:]
+        await self._save()
         return entry_id
 
     @property
