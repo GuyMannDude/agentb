@@ -1518,15 +1518,16 @@ server.registerTool(
 
 } // end if (BRAIN_AVAILABLE)
 
-// ── WikAI tools (conditional) ──────────────────────────────────
-// Only register if WIKI_DIR exists.
+// ── Wiki tools (legacy WikAI static pages — conditional) ───────
+// Only register if WIKI_DIR exists. The wiki is no longer recompiled;
+// live document discovery moved to the Librarian (file_find, FrankenClaw).
 
 if (WIKI_AVAILABLE) {
 
 server.registerTool(
   "wiki_search",
   {
-    description: "Search the WikAI knowledge base — indexed project docs, session transcripts, entities, and concepts. Uses grep under the hood. Returns matching filenames and context lines. Use this to find information about projects, people, decisions, or any topic the Librarian has indexed.",
+    description: "Search the static wiki pages (legacy WikAI archive) — project docs, entities, and concepts compiled from Mnemo before the wiki was retired. Uses grep under the hood. Returns matching filenames and context lines. NOTE: pages are a snapshot, no longer recompiled nightly. For live document discovery, prefer the Librarian's file_find tool (FrankenClaw) if it's available to you.",
     inputSchema: {
     query: z.string().describe("Search term or phrase to find in the wiki"),
     section: z
@@ -1594,7 +1595,7 @@ server.registerTool(
 server.registerTool(
   "wiki_read",
   {
-    description: "Read a specific WikAI page by path (relative to ~/wiki/). Example: 'projects/peter-widget.md', 'entities/rocky.md'. Use wiki_search first to find the right page, then wiki_read to get the full content.",
+    description: "Read a specific static wiki page by path (relative to ~/wiki/). Example: 'projects/peter-widget.md', 'entities/rocky.md'. Use wiki_search first to find the right page, then wiki_read to get the full content. Pages are a legacy WikAI snapshot — no longer recompiled nightly.",
     inputSchema: {
     path: z
       .string()
@@ -1645,7 +1646,7 @@ server.registerTool(
 server.registerTool(
   "wiki_index",
   {
-    description: "Get the WikAI index — lists all projects, entities, and concepts in the wiki. Good starting point to see what knowledge is available.",
+    description: "Get the static wiki index — lists all projects, entities, and concepts in the legacy WikAI page set. Good starting point to see what the archive holds.",
     annotations: { "title": 'Read Wiki Index', "readOnlyHint": true, "idempotentHint": true },
   },
   async () => {

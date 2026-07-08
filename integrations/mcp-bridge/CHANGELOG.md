@@ -12,6 +12,20 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.15.2 — 2026-07-08 — Wiki tool descriptions relabeled as legacy; the Librarian is the discovery system
+
+**Problem:** The wiki tool descriptions still sold `wiki_search` as the primary way
+to find documents — "indexed project docs, session transcripts, entities, and
+concepts", implying a live, maintained knowledge base. The nightly wiki compile was
+retired 2026-07-07 when the Librarian (an SQLite FTS5 index over the whole
+workspace, queried via FrankenClaw's `file_find`) replaced it. Agents reading the
+old descriptions would reach for the wrong tool and trust stale pages as current.
+
+**Fix:** `wiki_search` / `wiki_read` / `wiki_index` descriptions now say what the
+pages actually are — a legacy WikAI snapshot, no longer recompiled — and point live
+document discovery at `file_find`. Tool behavior is unchanged; the static pages
+remain fully searchable.
+
 ## 2.15.1 — 2026-07-05 — Lane freshness on EVERY boot, not just past a threshold
 
 **Problem:** 2.15.0 only spoke up after 7 silent days. Guy, same evening: "Every agent

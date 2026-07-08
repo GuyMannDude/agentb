@@ -233,7 +233,7 @@ echo "  • Reconfigure / remove:      hermes mcp remove mnemo, then re-run this
 echo ""
 echo "Optional advanced env vars (edit ~/.hermes/config.yaml directly):"
 echo "  • BRAIN_DIR — point at a mnemo-plan brain checkout to enable read_brain_file etc."
-echo "  • WIKI_DIR  — point at a WikAI dir to enable wiki_search etc."
+echo "  • WIKI_DIR  — point at a static wiki dir (legacy WikAI) to enable wiki_search etc."
 echo ""
 echo "Full guide: https://github.com/GuyMannDude/mnemo-cortex/blob/master/integrations/hermes/README.md"
 echo ""

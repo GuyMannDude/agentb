@@ -40,7 +40,7 @@ Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures 
 | 🔥 **Active Memory** | Memory that works while you don't. Auto-capture, smart classification, overnight consolidation, trajectory learning. No "remember this" commands needed. |
 | 🧠 **Deep Recall** | Persistent memory across sessions. Semantic search. $0 to run. |
 | 🌙 **Dreaming** | Cross-agent overnight synthesis. Every agent wakes up knowing what the others did. |
-| 📚 **WikAI** | Auto-compiled knowledge base. The wiki is regenerated nightly from Mnemo. Never goes stale. |
+| 📚 **The Librarian** | Document discovery over your whole workspace. One SQLite FTS5 index (107K files in our deployment), rebuilt nightly. Ask for a file, find the file. |
 | 📬 **Sparks Bus** | Agent-to-agent messaging with delivery confirmation. A2A-compatible. |
 | 🪪 **Developer's Passport** | Safe behavioral-claim ingestion layer. Review queue + 32 detectors + provenance buckets. Dev-targeted beta. |
 | 🔩 **Structured Facts** | Key-value store with confidence tracking. When semantic search is the wrong tool — names, settings, entity attributes — facts give you sub-millisecond exact lookup with a three-state confidence ladder. |
@@ -134,15 +134,13 @@ Cloud memory services make you choose one shared store. Mnemo lets you architect
 
 ---
 
-### 📚 WikAI — Compiled Knowledge Base
+### 📚 The Librarian — Document Discovery
 
-A 3,000+ page wiki layer auto-compiled from Mnemo data. Organized into `projects/`, `entities/`, `concepts/`, and `sources/`. Searchable through three MCP tools: `wiki_search`, `wiki_read`, `wiki_index`.
+"The file about X" is a memory problem too. The Librarian is a single SQLite FTS5 index over the whole workspace — filenames, paths, and the first chunk of content (with PDF/DOCX text extraction) — so an agent can turn a fuzzy description into a real path in milliseconds. Our deployment covers ~107K files; a full rebuild takes ~17 seconds, the nightly incremental refresh ~2. Secrets (keys, `.env` files, credentials) are excluded from the index entirely.
 
-**The wiki is never edited directly.** It's recompiled nightly by [`mnemo-wiki-compile.py`](mnemo-wiki-compile.py) from Mnemo data. Mnemo is the source of truth. The wiki is the study guide. If a page is wrong, fix the source memories in Mnemo and recompile.
+Agents query it through the `file_find` tool in **[FrankenClaw](https://github.com/GuyMannDude/frankenclaw)**, our MCP tool chassis — same MCP config pattern as the Mnemo bridge, just a second `mcpServers` entry.
 
-The compiler clusters recent memories by topic, passes each cluster + the existing page to gemini-2.5-flash, and writes a fully-rewritten page that integrates the new information without bloating. Cross-references are validated against the live page set — no hallucinated wikilinks. Every page carries a provenance footer listing the Mnemo session IDs that fed it, so any claim is auditable. Per-page failures are isolated; one bad LLM call posts ⚠️ to `#alerts` and the run continues.
-
-This is the **Karpathy/Nate Jones hybrid** in production: query-time facts in Mnemo + write-time synthesis in WikAI. Neither Mem0, Zep, nor Letta offer this. See [Inspirations](#inspirations) below.
+The Librarian replaced **WikAI**, our earlier auto-compiled wiki layer. The lesson from running WikAI in production: compiling knowledge into pages is expensive to keep fresh, while indexing everything and finding it on demand is cheap and never stale. The static wiki pages still exist and remain searchable through the bridge's `wiki_search` / `wiki_read` / `wiki_index` tools, but they're no longer recompiled nightly — [`mnemo-wiki-compile.py`](mnemo-wiki-compile.py) stays in the repo for reference. See [Inspirations](#inspirations) below.
 
 ---
 
@@ -409,7 +407,7 @@ By default, **13 tools** that work for any user:
 The bridge also detects two optional dirs and registers more tools when present:
 
 - Set `BRAIN_DIR` to a brain-file checkout (use the [mnemo-plan template](https://github.com/GuyMannDude/mnemo-plan) for a clean starting point) → adds `agent_startup`, `opie_startup`, `read_brain_file`, `list_brain_files`, `write_brain_file`, `session_end`.
-- Set `WIKI_DIR` to a wiki dir → adds `wiki_search`, `wiki_read`, `wiki_index`.
+- Set `WIKI_DIR` to a static wiki dir → adds `wiki_search`, `wiki_read`, `wiki_index` (legacy WikAI pages — see **The Librarian** above for what replaced the wiki as the discovery system).
 
 If the directory doesn't exist, those tools simply don't register — the model never sees them. Most users stay on the 13-tool default and that's the right call.
 
@@ -441,10 +439,10 @@ For host-by-host pass/fail, model tool-calling test results, browser automation 
 | Layer | Role | Analogy |
 |---|---|---|
 | **Mnemo Cortex** | Source of truth. Raw facts, sessions, key events. Multi-agent, query-time. | The librarian's filing cabinet |
-| **WikAI** | Compiled view. Auto-generated from Mnemo. Cross-referenced, browsable. Write-time. | The study guide |
+| **The Librarian** | Discovery index. SQLite FTS5 over every file in the workspace. Turns "the file about X" into a path. | The card catalog |
 | **Brain files** | Live working memory. Current state, identity, active context per agent. | The sticky notes on your desk |
 
-**When they disagree, Mnemo wins.** WikAI is always regenerable from Mnemo. Brain files are ephemeral. This split is what lets the system scale: facts go where they're addressable (Mnemo), synthesis goes where it's browsable (WikAI), and active state stays where it can change at the speed of work (brain files).
+**When they disagree, Mnemo wins.** The Librarian's index is always rebuildable from the filesystem. Brain files are ephemeral. This split is what lets the system scale: facts go where they're addressable (Mnemo), documents go where they're findable (the Librarian), and active state stays where it can change at the speed of work (brain files).
 
 **Embedding fallback.** Embeddings default to local Ollama (`nomic-embed-text`) for zero-cost, zero-latency operation. If Ollama is unreachable, Mnemo falls back to hosted Google Gemini embeddings (Matryoshka-truncated to match the 768-dim store width). The free tier covers any plausible outage window, giving you graceful degradation at effectively zero cost.
 
@@ -454,8 +452,8 @@ For host-by-host pass/fail, model tool-calling test results, browser automation 
 
 We did not invent this. We adopted the best ideas in the air, credited them openly, and built on top.
 
-- **[Andrej Karpathy's LLM Wiki](https://gist.github.com/karpathy)** (April 2026, 41,000+ bookmarks) — the pattern of compiling AI understanding into navigable artifacts instead of rederiving from raw data on every query. WikAI is our implementation of this pattern. Also the "idea file as publishing format" approach we use in `SETUP-PROMPT.md`.
-- **Nate B Jones — [OpenBrain](https://github.com/NateBJones-Projects/OB1) and [the analysis video](https://youtu.be/dxq7WtWxi44)** ([Substack](https://natesnewsletter.substack.com/), [YouTube](https://www.youtube.com/@NateBJones)) — the write-time vs query-time fork, and the hybrid architecture: structured data as source of truth, compiled wiki as the browsable layer over the top. Our three-layer architecture maps directly to Nate's hybrid model.
+- **[Andrej Karpathy's LLM Wiki](https://gist.github.com/karpathy)** (April 2026, 41,000+ bookmarks) — the pattern of compiling AI understanding into navigable artifacts instead of rederiving from raw data on every query. WikAI was our implementation of this pattern — since retired in favor of the Librarian's index-don't-compile approach, but the credit stands. Also the "idea file as publishing format" approach we use in `SETUP-PROMPT.md`.
+- **Nate B Jones — [OpenBrain](https://github.com/NateBJones-Projects/OB1) and [the analysis video](https://youtu.be/dxq7WtWxi44)** ([Substack](https://natesnewsletter.substack.com/), [YouTube](https://www.youtube.com/@NateBJones)) — the write-time vs query-time fork, and the hybrid architecture: structured data as source of truth, compiled wiki as the browsable layer over the top. Our original three-layer architecture mapped directly to Nate's hybrid model; the compiled-wiki layer has since given way to the Librarian's index, but the source-of-truth-plus-browsable-layer split came from here.
 - **[Google A2A Protocol](https://github.com/google/A2A)** — agent-to-agent standard. Sparks Bus speaks A2A's data shapes today; transport is the v2 roadmap.
 - **[Mem0](https://mem0.ai)** — the first to make portable AI memory feel real. Inspired our early thinking about cross-session persistence.
 
@@ -463,7 +461,7 @@ We did not invent this. We adopted the best ideas in the air, credited them open
 
 ### *A Crustacean That Never Forgets* 🧠🦞
 
-The full v3.1 stack:
+The full stack:
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -480,14 +478,14 @@ The full v3.1 stack:
     ├── bus_send / bus_read / bus_reply ──▶ Sparks Bus ──▶ Discord (#dispatch)
     │                                      (SQLite)        📬 → ✅ → 🔄
     │
-    ├── wiki_search / wiki_read ─────────▶ WikAI (3,000+ .md pages)
+    ├── file_find (FrankenClaw) ─────────▶ Librarian (SQLite FTS5, 107K files)
     │                                       ▲
-    │                                       │ auto-compiled nightly
+    │                                       │ reindexed nightly
     │                                       │
     │                              ┌────────┴───────┐
-    │                              │  Dreaming      │ 3:15 AM → Dream Brief
-    │                              │  + Wiki        │ 3:30 AM → Wiki Pages
-    │                              │  Compiler      │
+    │                              │  Nightly jobs  │ 3:15 AM → Dream Brief
+    │                              │  Dreaming +    │ 3:40 AM → Reindex
+    │                              │  Librarian     │
     │                              └────────────────┘
     │
     └── passport_* ──────────────────────▶ Passport (user prefs)
@@ -889,7 +887,7 @@ Mnemo Cortex started as a memory system and evolved into a cognitive coprocessor
 - **Guy Hutchins** — Project lead, testing, design partner
 - **Opie** (Claude Opus 4.6 / 4.7) — Architecture design, schema design, compaction strategy
 - **AL** (ChatGPT) — Implementation, watcher/refresher daemons, test suite
-- **CC** (Claude Code) — Deployment, integration, live testing, bug fixes; built the WikAI compiler and the Sparks Bus integration
+- **CC** (Claude Code) — Deployment, integration, live testing, bug fixes; built the Librarian, the WikAI compiler it replaced, and the Sparks Bus integration
 - **Claude Fable 5** — the v4.1 review-and-improve pass: composite recall ranking, the Analyst, secret redaction at ingest, tier hygiene (built during Fable 5's brief availability)
 - **Rocky** and **Alice** (OpenClaw agents) — first production users + test subjects
 
