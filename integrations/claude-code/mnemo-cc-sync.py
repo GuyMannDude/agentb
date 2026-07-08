@@ -17,6 +17,9 @@ Configuration (all via env vars, all optional):
                            (default: ~/.claude/projects)
     MNEMO_CC_OFFSET_FILE   Sync offset state file
                            (default: ~/.mnemo-cc/cc-sync.offset.json)
+    MNEMO_AUTH_TOKEN       API token sent as X-API-KEY; falls back to
+                           ~/.mnemo-auth-token (needed when the server
+                           enforces auth, ignored otherwise)
 
 Run modes:
     python3 mnemo-cc-sync.py            # batched: post when >=6 new msgs
@@ -44,6 +47,22 @@ OFFSET_FILE = Path(os.environ.get(
     "MNEMO_CC_OFFSET_FILE",
     str(Path.home() / ".mnemo-cc/cc-sync.offset.json"),
 ))
+
+
+def _resolve_auth_token() -> str:
+    """Mnemo API token: env MNEMO_AUTH_TOKEN first, else ~/.mnemo-auth-token
+    (mode 0600). Sent as X-API-KEY so the sync authenticates against a server
+    with auth enforced; harmless (ignored) when the server doesn't check."""
+    tok = os.environ.get("MNEMO_AUTH_TOKEN", "").strip()
+    if tok:
+        return tok
+    try:
+        return (Path.home() / ".mnemo-auth-token").read_text().strip()
+    except OSError:
+        return ""
+
+
+AUTH_TOKEN = _resolve_auth_token()
 
 # One-time migration from the pre-rename default path. The script used to be
 # named mnemo-cc-artforge-sync.py and wrote its offset file to
@@ -249,10 +268,13 @@ def post_to_mnemo(session_id: str, summary: str, key_facts: list) -> dict:
         "decisions_made": [],
         "agent_id": AGENT_ID,
     }
+    headers = {"Content-Type": "application/json"}
+    if AUTH_TOKEN:
+        headers["X-API-KEY"] = AUTH_TOKEN
     req = urllib.request.Request(
         f"{MNEMO_URL}/writeback",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=15) as resp:

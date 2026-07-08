@@ -1,5 +1,17 @@
 # Changelog
 
+## mnemo-cc-sync gains auth (2026-07-08) — integration fix, no server change (server stays v4.9.16)
+
+**Problem.** `integrations/claude-code/mnemo-cc-sync.py` POSTed to `/writeback` with no
+credentials. Against a server with auth enforced (the fail-closed default since v4.9.5),
+every sync silently 401s — the integration only worked on unauthenticated servers.
+
+**Fix.** The sync now sends `X-API-KEY` from `MNEMO_AUTH_TOKEN` (env) or
+`~/.mnemo-auth-token` (file, 0600) — same convention as the rest of the stack. No token
+found = header omitted, unchanged behavior for unauthenticated setups. Docstring env
+table updated. Caught during a production cutover to this script: the first post against
+a fail-closed v4.9.16 server verified the fix live.
+
 ## librarian.py joins the repo (2026-07-08) — standalone tool, no server change (server stays v4.9.16)
 
 **Problem.** The README (rewritten this week to feature the Librarian as the discovery
