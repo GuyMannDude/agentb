@@ -1,5 +1,23 @@
 # Changelog
 
+## mnemo-cc-sync watchdog: backlog check replaces mtime heuristic (2026-07-08) — integration fix, no server change (server stays v4.9.16)
+
+**Problem.** The watchdog treated a fresh JSONL mtime as "session active" and then
+demanded a recent sync post. But an open-but-idle Claude Code terminal appends
+housekeeping lines hourly — the sync correctly consumes them and advances
+`byte_offset` without posting, so "mtime fresh + no recent post" is normal. Result:
+13 false CRON FAILURE pages to Discord in one day (2026-07-08, every :30/:45 while
+a terminal sat open).
+
+**Fix.** The watchdog now checks the thing that actually means "stuck": unsynced
+backlog. It compares the newest JSONL's size against its `byte_offset` in the offset
+file and fails only when backlog bytes survive past `MNEMO_CC_FLUSH_GRACE_S`
+(default 600s = idle-flush 300s + sync-cycle margin) of file idleness, or when an
+idle file has no offset entry at all. `MNEMO_CC_STALE_S` is retired with the mtime
+heuristic. Tradeoff accepted: a sync that wedges mid-session is flagged at the next
+600s lull rather than instantly. Verified with a 7-case fixture matrix (consumed /
+stuck / accumulating / unregistered × idle / fresh, plus live state).
+
 ## mnemo-cc-sync idle-flush implemented (2026-07-08) — integration fix, no server change (server stays v4.9.16)
 
 **Problem.** The sync's docstring promised "post when >=6 new msgs OR when the

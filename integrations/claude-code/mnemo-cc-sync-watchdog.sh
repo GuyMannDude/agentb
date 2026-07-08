@@ -3,25 +3,39 @@
 #
 # Verifies:
 #   1. The systemd service is active
-#   2. If the Claude Code session JSONL was written to in the last 30 min, the
-#      sync has posted within the last 30 min too (no stuck-offset condition)
+#   2. The newest Claude Code session JSONL has no unsynced backlog that the
+#      sync should already have flushed (byte_offset in the offset file has
+#      kept up with the file on disk)
+#
+# Why backlog instead of mtime/last-post: an open-but-idle Claude Code
+# terminal gets hourly housekeeping appends that bump the JSONL mtime without
+# producing anything postable. The sync correctly consumes those lines and
+# advances byte_offset WITHOUT posting, so "mtime fresh but no recent post"
+# is normal, not a failure (2026-07-08: 13 false Discord pages in one day).
+# A genuinely stuck sync shows up here as backlog bytes that survive past the
+# idle-flush window. Tradeoff: a sync that wedges mid-session isn't flagged
+# until the session next goes quiet for FLUSH_GRACE_S — acceptable, sessions
+# pause constantly and the old heuristic's false pages cost more than the
+# shorter detection gap bought.
 #
 # Exits non-zero on failure so cron / scheduler can alert. Designed to plug
 # into any monitoring tool that watches command exit codes — CronAlarm,
 # systemd OnFailure=, healthchecks.io, or a plain cron + email.
 #
 # Configuration (env vars, all optional):
-#   MNEMO_CC_SERVICE       systemd unit name (default: mnemo-cc-sync.service)
-#   MNEMO_CC_OFFSET_FILE   Sync offset state file (default: ~/.mnemo-cc/cc-sync.offset.json)
-#   MNEMO_CC_SESSIONS_DIR  Where Claude Code stores .jsonl files (default: ~/.claude/projects)
-#   MNEMO_CC_STALE_S       Seconds after which sync is considered stale (default: 1800 = 30 min)
+#   MNEMO_CC_SERVICE        systemd unit name (default: mnemo-cc-sync.service)
+#   MNEMO_CC_OFFSET_FILE    Sync offset state file (default: ~/.mnemo-cc/cc-sync.offset.json)
+#   MNEMO_CC_SESSIONS_DIR   Where Claude Code stores .jsonl files (default: ~/.claude/projects)
+#   MNEMO_CC_FLUSH_GRACE_S  Seconds an idle JSONL may hold unsynced bytes before
+#                           that counts as stuck (default: 600 = idle-flush 300s
+#                           + several 60s sync cycles of margin)
 
 set -e
 
 SERVICE=${MNEMO_CC_SERVICE:-mnemo-cc-sync.service}
 OFFSET=${MNEMO_CC_OFFSET_FILE:-$HOME/.mnemo-cc/cc-sync.offset.json}
 SESSIONS_DIR=${MNEMO_CC_SESSIONS_DIR:-$HOME/.claude/projects}
-THRESHOLD_S=${MNEMO_CC_STALE_S:-1800}
+FLUSH_GRACE_S=${MNEMO_CC_FLUSH_GRACE_S:-600}
 
 # 1) Service must be active
 if ! systemctl --user is-active --quiet "$SERVICE"; then
@@ -38,37 +52,51 @@ if [ -z "$LATEST_JSONL" ]; then
     exit 0
 fi
 
+if [ ! -f "$OFFSET" ]; then
+    echo "WATCHDOG FAIL: sessions exist but no offset file at $OFFSET — sync has never completed a cycle"
+    exit 1
+fi
+
 NOW=$(date +%s)
 JSONL_MTIME=$(stat -c %Y "$LATEST_JSONL")
 JSONL_AGE=$((NOW - JSONL_MTIME))
+JSONL_SIZE=$(stat -c %s "$LATEST_JSONL")
+REL_PATH=${LATEST_JSONL#"$SESSIONS_DIR"/}
 
-# Idle Claude Code — sync staleness doesn't matter
-if [ "$JSONL_AGE" -gt "$THRESHOLD_S" ]; then
-    echo "OK: $SERVICE active, Claude Code idle (no JSONL activity in last ${THRESHOLD_S}s)"
+SYNCED_OFFSET=$(python3 -c "
+import json, sys
+state = json.load(open('$OFFSET'))
+entry = state.get('files', {}).get('$REL_PATH')
+print(entry['byte_offset'] if entry else -1)
+")
+
+# Newest JSONL not registered yet: the sync scans every cycle, so a file this
+# old with no entry means the scanner isn't picking it up.
+if [ "$SYNCED_OFFSET" -lt 0 ]; then
+    if [ "$JSONL_AGE" -gt "$FLUSH_GRACE_S" ]; then
+        echo "WATCHDOG FAIL: $REL_PATH is ${JSONL_AGE}s old but has no offset entry — sync isn't scanning it"
+        exit 1
+    fi
+    echo "OK: $SERVICE active, $REL_PATH is new (${JSONL_AGE}s) — registration pending"
     exit 0
 fi
 
-# Active session — sync must also be recent
-if [ ! -f "$OFFSET" ]; then
-    echo "WATCHDOG FAIL: Claude Code active (JSONL touched ${JSONL_AGE}s ago) but no offset file — sync not running"
-    exit 1
+BACKLOG=$((JSONL_SIZE - SYNCED_OFFSET))
+
+# Fully consumed — sync has kept up, regardless of what last touched the file
+if [ "$BACKLOG" -le 0 ]; then
+    echo "OK: $SERVICE active, no unsynced backlog on $REL_PATH"
+    exit 0
 fi
 
-LAST_POST=$(python3 -c "import json; print(json.load(open('$OFFSET')).get('last_post_at',''))")
-if [ -z "$LAST_POST" ]; then
-    echo "WATCHDOG FAIL: offset file has no last_post_at — sync hasn't completed a cycle yet"
-    exit 1
+# Backlog on a recently-written file is normal: messages accumulate between
+# 60s sync cycles, and sub-minimum batches defer until the 300s idle-flush.
+if [ "$JSONL_AGE" -le "$FLUSH_GRACE_S" ]; then
+    echo "OK: $SERVICE active, ${BACKLOG}B pending on $REL_PATH (written ${JSONL_AGE}s ago — within flush grace)"
+    exit 0
 fi
 
-LAST_POST_EPOCH=$(date -d "$LAST_POST" +%s 2>/dev/null || echo 0)
-POST_AGE=$((NOW - LAST_POST_EPOCH))
-
-if [ "$POST_AGE" -gt "$THRESHOLD_S" ]; then
-    echo "WATCHDOG FAIL: Claude Code session active (JSONL touched ${JSONL_AGE}s ago) but last sync was ${POST_AGE}s ago"
-    echo "  service: $(systemctl --user is-active $SERVICE)"
-    echo "  offset:  $OFFSET"
-    echo "  last_post_at: $LAST_POST"
-    exit 1
-fi
-
-echo "OK: $SERVICE active, last sync ${POST_AGE}s ago (Claude Code active ${JSONL_AGE}s ago)"
+echo "WATCHDOG FAIL: ${BACKLOG}B unsynced on $REL_PATH despite ${JSONL_AGE}s of idle — sync is stuck"
+echo "  service: $(systemctl --user is-active $SERVICE)"
+echo "  offset:  $OFFSET (byte_offset=$SYNCED_OFFSET, file size=$JSONL_SIZE)"
+exit 1
