@@ -12,6 +12,25 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.16.0 — 2026-07-09 — Per-section byte budgets: the boot block lands inline again
+
+**Problem:** `agent_startup` capped each brain file at a flat 40KB but left the
+dream brief and Mnemo context uncapped and the TOTAL unbounded. CC's boot hit
+73KB on 2026-07-09 and diverted to a file instead of landing inline (the MCP
+host caps inline tool results at roughly 45KB) — every session started with a
+subagent digest instead of a readable boot block.
+
+**Fix:** New `boot-budget.js` gives every boot section its own byte budget
+(lane 11K, CLAUDE.md 6.5K, active.md 10K, people.md 2K, doctrines.md 5.5K,
+Mnemo context 2K, dream brief 3.5K), sized so the worst-case total — all
+sections maxed plus header/freshness/separator overhead — stays under the 45KB
+target. Files are newest-first/priority-first so the kept top slice is the
+right slice; every truncation notice names the tool that re-reads the full
+content (`read_brain_file`, `mnemo_recall`, `/dream/latest`). Unit tests in
+`boot-budget.test.js` include a budget-sum invariant so a future budget bump
+can't silently push the boot back over the inline cap. Verified end-to-end
+over real MCP stdio: CC's boot went 73,185 → 40,360 bytes, inline.
+
 ## 2.15.2 — 2026-07-08 — Wiki tool descriptions relabeled as legacy; the Librarian is the discovery system
 
 **Problem:** The wiki tool descriptions still sold `wiki_search` as the primary way

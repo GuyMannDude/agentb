@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execSync, execFileSync } from "node:child_process";
 import { DumpWriter } from "./dump.js";
+import { STARTUP_BUDGETS, capSection } from "./boot-budget.js";
 
 // ── Configuration ──────────────────────────────────────────────
 // MNEMO_URL: where your Mnemo Cortex API lives
@@ -978,18 +979,18 @@ if (BRAIN_AVAILABLE) {
 
 // Brain files (esp. the session lane + active.md) grow unbounded over time —
 // CC's lane hit ~572 KB / 4,656 lines, which blew past the MCP tool-result cap
-// and made agent_startup unreadable (audit finding 3.3). Cap each file in the
-// boot block to its most-recent slice (these files are newest-first), pointing
-// to read_brain_file for the full content.
-const STARTUP_FILE_CAP = 40_000;
+// and made agent_startup unreadable (audit finding 3.3). v2.16.0: each boot
+// section now carries its own byte budget (see boot-budget.js) so the TOTAL
+// boot block stays under ~45KB and lands inline. Files are newest-first /
+// priority-first, so the top slice is the right slice.
+const STARTUP_FILE_CAP = 40_000; // fallback for files without a named budget
 async function readBrainCapped(path, cap = STARTUP_FILE_CAP) {
   const content = await readFile(path, "utf-8");
-  if (content.length <= cap) return content;
-  return (
-    content.slice(0, cap) +
-    `\n\n…[truncated ${content.length - cap} of ${content.length} chars — ` +
-    `top of file kept (newest-first lanes → most-recent; active.md → highest-priority); ` +
-    `use read_brain_file for the full file]…\n`
+  return capSection(
+    content,
+    cap,
+    `newest-first lanes → most-recent kept; active.md → highest-priority kept; ` +
+      `use read_brain_file for the full file`
   );
 }
 
@@ -1042,7 +1043,7 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     let laneLoaded = null;
     for (const candidate of laneCandidates) {
       try {
-        const brain = await readBrainCapped(join(BRAIN_DIR, candidate));
+        const brain = await readBrainCapped(join(BRAIN_DIR, candidate), STARTUP_BUDGETS.lane);
         parts.push(`# YOUR BRAIN LANE (${candidate})\n\n` + brain);
         laneLoaded = candidate;
         break;
@@ -1103,7 +1104,7 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     // its session ritual frames everything else.
     for (const file of ["CLAUDE.md", "active.md", "people.md", "doctrines.md"]) {
       try {
-        const content = await readBrainCapped(join(BRAIN_DIR, file));
+        const content = await readBrainCapped(join(BRAIN_DIR, file), STARTUP_BUDGETS[file]);
         parts.push(`# ${file.toUpperCase()}\n\n` + content);
       } catch {
         // skip if missing
@@ -1124,7 +1125,10 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
             return `### [${tier}]\n${c.content}`;
           })
           .join("\n\n");
-        parts.push("# RECENT MNEMO CONTEXT\n\n" + mnemoText);
+        parts.push(
+          "# RECENT MNEMO CONTEXT\n\n" +
+            capSection(mnemoText, STARTUP_BUDGETS.mnemo, "use mnemo_recall to pull more")
+        );
       }
     } catch (e) {
       parts.push("# MNEMO ERROR\nCould not reach Mnemo Cortex: " + e.message);
@@ -1162,7 +1166,12 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
       }
       if (brief) {
         parts.push(
-          `# DREAM BRIEF (cross-agent overnight synthesis, ${brief.ageH}h ago)\n\n${brief.content}`
+          `# DREAM BRIEF (cross-agent overnight synthesis, ${brief.ageH}h ago)\n\n` +
+            capSection(
+              brief.content,
+              STARTUP_BUDGETS.dream,
+              "full brief via GET /dream/latest on the Cortex host"
+            )
         );
       }
     } catch {
