@@ -1,5 +1,23 @@
 # Changelog
 
+## CORTEX-OS.md: the agent operating manual (2026-07-09) — docs, no server change (server stays v4.9.16)
+
+**Problem.** The repo taught humans and agents how to *install* Mnemo but not
+how to *operate* it. An agent with the tools registered and no operating
+patterns improvises its boot, briefs from stale training data, saves noise,
+and re-proposes rejected ideas — memory installed, continuity absent.
+
+**Fix.** New root-level `CORTEX-OS.md`, written agent-to-agent: the startup
+ritual (first tool call, every session), brain-file discipline
+(replace-don't-accumulate; writes are not commits), what to save and what
+not to, recall-before-proposing, facts vs memories, session close-out,
+trajectories, and a field-observed common-mistakes list.
+`robot.install.md` section 4 now ends by sending the agent there, and the
+Windows install guide links it next to the Session Guide (human side).
+Same commit: the Windows guide gains the first-tool-use permission gotcha
+(Claude Desktop prompts per tool; a dismissed prompt looks exactly like
+broken memory), harvested from a live install test.
+
 ## claude-desktop bundle rebuilt on bridge 2.17.0: auth support + crash fix (2026-07-09) — no server change (server stays v4.9.16)
 
 **Problem.** The published `mnemo-cortex.mcpb` still contained bridge 2.6.5 (its

@@ -36,6 +36,8 @@ Open a second new chat and ask:
 
 > Use mnemo_recall to find what I asked you to remember about my Windows setup.
 
+Claude Desktop asks permission the first time it runs each new tool. Approve the prompt for `mnemo_save`, and again for `mnemo_recall` — a missed or dismissed prompt looks exactly like memory not working, because Claude quietly tries something else instead.
+
 You should see a Mnemo tool call, not only a promise from Claude. If the second chat recalls the sentence, the connection works.
 
 ## Step 2: If you need more control
@@ -237,8 +239,10 @@ Look for `Connected to Mnemo Cortex`, `401`, `unreachable`, `ERR_MODULE_NOT_FOUN
 
 A conversational promise is not persistent memory. Explicitly ask for `mnemo_save`, then use `mnemo_recall` in a new chat. If the tools are absent, restart Claude Desktop and inspect the log.
 
+Also check tool permissions: each tool starts as "ask" and Claude Desktop prompts on its first use. If a prompt was dismissed, Claude may route around the blocked tool without saying so. Review the extension's permission settings and approve the memory tools.
+
 ## What to do next
 
-Read the [Session Guide](../SESSION-GUIDE.md) for practical memory habits.
+Have your Claude read [CORTEX-OS.md](../CORTEX-OS.md) — the agent-side operating manual: the startup ritual, what to save, when to recall. Read the [Session Guide](../SESSION-GUIDE.md) for the human-side memory habits.
 
 See [Anthropic's local MCP server guide](https://support.anthropic.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) for Claude Desktop extension controls and the [MCP Bundle project](https://github.com/modelcontextprotocol/mcpb) for the bundle format.

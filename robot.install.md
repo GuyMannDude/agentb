@@ -185,6 +185,12 @@ walk back the chain:
 
 For deeper diagnostics: `mnemo-cortex doctor`.
 
+Install verified? One step left: **read [CORTEX-OS.md](CORTEX-OS.md)** — the
+operating manual that teaches you (the agent) how to actually use what you
+just installed: the startup ritual, what to save, when to recall, session
+discipline. Installing memory without adopting the operating patterns is
+how agents end up with a database they never think to read.
+
 ---
 
 ## 5. Related installs
