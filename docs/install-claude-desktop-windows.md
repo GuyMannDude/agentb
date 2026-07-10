@@ -24,7 +24,7 @@ The MCP Bundle works without cloning a repository, editing JSON, or installing N
 
 The bundle contains its own runtime and dependencies, so this path does not need Node.js.
 
-> Release note: the bundle must be rebuilt from the current bridge before this guide is linked publicly. Until that rebuild is published, use the manual path for an auth-enabled server.
+> The bundle ships the current bridge (2.17.0) and supports servers that require an API key: enter the key in the **API Key** setup field, or leave it empty and use the token file described in [Add authentication](#add-authentication).
 
 ## Prove that memory works
 

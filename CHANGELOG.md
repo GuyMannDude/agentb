@@ -1,5 +1,27 @@
 # Changelog
 
+## claude-desktop bundle rebuilt on bridge 2.17.0: auth support + crash fix (2026-07-09) — no server change (server stays v4.9.16)
+
+**Problem.** The published `mnemo-cortex.mcpb` still contained bridge 2.6.5 (its
+own manifest claimed 2.7.1) — roughly eleven releases stale. The bundled server
+had no `MNEMO_AUTH_TOKEN` / token-file / `X-API-KEY` logic at all, so the
+recommended one-click install could never connect to an auth-enabled server.
+The manifest also offered no place to enter an API key, and BUILD.md's staging
+step predated the bridge's sibling modules — a bundle built from it verbatim
+crashed on the first tool call (`package.json` ENOENT; the version string is
+read lazily at runtime).
+
+**Fix.** Bundle rebuilt from bridge 2.17.0 with all four modules plus
+`package.json` staged. Manifest: version now matches the bridge (2.17.0), new
+optional **API Key** user-config field (`sensitive`, maps to
+`MNEMO_AUTH_TOKEN`; token-file fallback still works when left empty), tool list
+refreshed to the real 2.17.0 surface (17 default + up to 9 conditional).
+BUILD.md staging list and smoke test corrected — the `Connected` startup line
+alone is a false pass on auth-enabled servers because `/health` is
+unauthenticated; the test now requires an authenticated `mnemo_recall` round
+trip plus a loud 401 without the token. Verified over real MCP stdio both ways.
+Found by the fleet's Windows coder while writing the install guide.
+
 ## mcp-bridge 2.17.0: enforce HARNESS_ENABLED_TOOLS at registration (2026-07-09)
 
 **Problem.** `HARNESS_ENABLED_TOOLS` described a harness-specific tool allow-list,

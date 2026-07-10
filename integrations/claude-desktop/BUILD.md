@@ -14,10 +14,18 @@ sudo npm install -g @anthropic-ai/mcpb
 cd mnemo-cortex
 BUILD=integrations/mcpb-build
 
-# Fresh stage from the canonical bridge
+# Fresh stage from the canonical bridge.
+# server.js imports sibling modules AND lazily reads ./package.json for its
+# version string — miss any of these and the bundle crashes at startup or on
+# the first tool call (package.json ENOENT found the hard way, 2026-07-09).
 rm -rf "$BUILD"
 mkdir -p "$BUILD/server"
-cp integrations/mcp-bridge/server.js     "$BUILD/server/"
+cp integrations/mcp-bridge/server.js \
+   integrations/mcp-bridge/boot-budget.js \
+   integrations/mcp-bridge/dump.js \
+   integrations/mcp-bridge/harness-tool-filter.js \
+   integrations/mcp-bridge/package.json \
+   "$BUILD/server/"
 cp -r integrations/mcp-bridge/node_modules "$BUILD/server/"
 
 # Icon (downscaled hero card)
@@ -52,6 +60,13 @@ MNEMO_URL=http://localhost:50001 MNEMO_AGENT_ID=test \
   timeout 3 node server/server.js < /dev/null
 # expect: [mnemo-mcp] Connected to Mnemo Cortex (...)
 ```
+
+The `Connected` line is NOT sufficient on an auth-enabled server — `/health` is
+unauthenticated, so a bundle with broken auth still prints it. Also exercise a
+real tool call over MCP stdio (initialize → `tools/call` `mnemo_recall`) both
+with and without `MNEMO_AUTH_TOKEN`: expect a result with the token and a loud
+`401: Unauthorized` error without it. A crash or hang here means a staging file
+is missing (see the `cp` list above).
 
 ## Notes
 
