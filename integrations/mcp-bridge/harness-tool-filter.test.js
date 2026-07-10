@@ -53,6 +53,14 @@ test("subset registers only allow-listed tools and lists skipped names", () => {
     throw new Error(`unexpected warning: ${out.notice}`);
 });
 
+test("typo among valid names still registers the valid ones and warns by name", () => {
+  const out = exercise("mnemo_save, tpyo_tool");
+  if (out.registered.join(",") !== "mnemo_save")
+    throw new Error(`registered: ${out.registered.join(",")}`);
+  if (!out.notice.includes("unknown tool names on allow-list: tpyo_tool"))
+    throw new Error(`typo warning missing: ${out.notice}`);
+});
+
 test("unknown-only allow-list registers nothing and warns without crashing", () => {
   const out = exercise("not_a_real_tool");
   if (out.registered.length !== 0)

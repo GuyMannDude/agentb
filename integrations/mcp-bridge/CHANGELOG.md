@@ -12,7 +12,7 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
-## 2.16.1 — 2026-07-09 — Harness tool allow-list is enforced at registration
+## 2.17.0 — 2026-07-09 — Harness tool allow-list is enforced at registration
 
 **Problem:** `HARNESS_ENABLED_TOOLS` was advisory: the bridge still registered
 every tool it discovered, so a harness configured for a narrow capability set

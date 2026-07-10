@@ -25,9 +25,14 @@ export function createHarnessToolGate(rawEnabledTools) {
 
     startupNotice() {
       if (!active) return null;
-      const warning = registered.length === 0
-        ? " WARNING: allow-list matched no known tools."
-        : "";
+      const unmatched = [...enabledTools].filter(
+        (name) => !registered.includes(name)
+      );
+      let warning = "";
+      if (registered.length === 0)
+        warning = " WARNING: allow-list matched no known tools.";
+      else if (unmatched.length > 0)
+        warning = ` WARNING: unknown tool names on allow-list: ${unmatched.join(", ")}.`;
       const skippedNames = skipped.length > 0 ? skipped.join(", ") : "(none)";
       return `[mnemo-mcp] HARNESS_ENABLED_TOOLS enforced — skipped tools: ${skippedNames}.${warning}\n`;
     },

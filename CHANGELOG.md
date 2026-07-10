@@ -1,6 +1,6 @@
 # Changelog
 
-## mcp-bridge 2.16.1: enforce HARNESS_ENABLED_TOOLS at registration (2026-07-09)
+## mcp-bridge 2.17.0: enforce HARNESS_ENABLED_TOOLS at registration (2026-07-09)
 
 **Problem.** `HARNESS_ENABLED_TOOLS` described a harness-specific tool allow-list,
 but the MCP bridge ignored it while registering tools. A supposedly scoped harness
