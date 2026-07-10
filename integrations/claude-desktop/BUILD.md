@@ -29,7 +29,7 @@ cp integrations/mcp-bridge/server.js \
 cp -r integrations/mcp-bridge/node_modules "$BUILD/server/"
 
 # Icon (downscaled hero card)
-convert docs/mnemo-cortex-card-v1.png -resize 512x512 "$BUILD/icon.png"
+convert docs/mnemo-cortex-eye.png -background black -gravity center -extent 760x760 -resize 512x512 "$BUILD/icon.png"
 
 # Manifest — copy from previous bundle and update version + tool list as needed
 cp integrations/claude-desktop/manifest.json "$BUILD/manifest.json"
