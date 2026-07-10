@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createHarnessToolGate } from "./harness-tool-filter.js";
 import { z } from "zod";
 import { readFile, readdir, writeFile, stat } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -471,9 +472,15 @@ const server = new McpServer({
 // existing and future tool registrations are covered with one diff.
 // Output: ~/.mnemo-cortex/dumps/<agent_id>/<YYYY-MM-DD>.jsonl
 const dump = new DumpWriter(AGENT_ID);
+const harnessToolGate = createHarnessToolGate(process.env.HARNESS_ENABLED_TOOLS);
 const _origRegisterTool = server.registerTool.bind(server);
 server.registerTool = (name, schema, handler) =>
-  _origRegisterTool(name, schema, dump.wrap(name, handler));
+  harnessToolGate.register(
+    _origRegisterTool,
+    name,
+    schema,
+    dump.wrap(name, handler)
+  );
 
 if (dump.enabled) {
   process.stderr.write(
@@ -2223,6 +2230,8 @@ server.registerTool(
 
 // ── Start ──────────────────────────────────────────────────────
 
+const harnessToolNotice = harnessToolGate.startupNotice();
+if (harnessToolNotice) process.stderr.write(harnessToolNotice);
 await checkHealth();
 const transport = new StdioServerTransport();
 await server.connect(transport);

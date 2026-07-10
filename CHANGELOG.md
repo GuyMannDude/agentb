@@ -1,5 +1,17 @@
 # Changelog
 
+## mcp-bridge 2.16.1: enforce HARNESS_ENABLED_TOOLS at registration (2026-07-09)
+
+**Problem.** `HARNESS_ENABLED_TOOLS` described a harness-specific tool allow-list,
+but the MCP bridge ignored it while registering tools. A supposedly scoped harness
+therefore received every tool the bridge discovered.
+
+**Fix.** The bridge's central `server.registerTool` wrapper now prevents tools
+outside the comma-separated allow-list from ever reaching the MCP SDK. Unset or
+empty configuration remains fully backward compatible. Filtered startups write one
+stderr notice with all skipped names and warn, rather than crash, when the list
+matches no known tool. New isolated unit tests cover all three behaviors.
+
 ## integrations/codex: Codex CLI integration + AGENTS.md standing-orders template (2026-07-09) — docs, no server change (server stays v4.9.16)
 
 **Problem.** MCP config alone gives a Codex agent *tools*, not a *routine*. A fresh

@@ -3,7 +3,7 @@
 //
 // Style matches test.js: homemade runner, plain console output.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, chmodSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DumpWriter, listDumps, DUMP_SCHEMA_VERSION } from "./dump.js";
@@ -146,9 +146,12 @@ test("day rollover: new date → new file with fresh header", () => {
 
 // 5. Write failure: unwritable dir → loud stderr, keeps running
 test("write failure: stderr message, no crash, second call still no-throw", () => {
-  const dir = freshDir();
-  // Make the dump dir unwritable so mkdir/appendFile fail
-  chmodSync(dir, 0o500);
+  const root = freshDir();
+  // A regular file cannot contain the per-agent directory on any platform.
+  // This reliably exercises the write-failure path on Windows too, where
+  // chmod does not make a directory unwritable.
+  const dir = join(root, "not-a-directory");
+  writeFileSync(dir, "blocker");
   const w = new DumpWriter("rocky", { enabled: true, dir, retentionDays: 0 });
 
   // Capture stderr
@@ -164,8 +167,7 @@ test("write failure: stderr message, no crash, second call still no-throw", () =
     w.write({ ts: "x", kind: "tool_call", tool: "bar" }); // second call must not throw
   } finally {
     process.stderr.write = original;
-    chmodSync(dir, 0o700); // restore so rmSync works
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 
   const msg = captured.join("");

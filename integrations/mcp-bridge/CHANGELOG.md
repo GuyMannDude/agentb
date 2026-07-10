@@ -12,6 +12,19 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.16.1 — 2026-07-09 — Harness tool allow-list is enforced at registration
+
+**Problem:** `HARNESS_ENABLED_TOOLS` was advisory: the bridge still registered
+every tool it discovered, so a harness configured for a narrow capability set
+received the full MCP surface.
+
+**Fix:** The existing `server.registerTool` wrapper now blocks every tool absent
+from the comma-separated allow-list before it reaches the MCP SDK. Unset or empty
+configuration retains the existing register-everything behavior. With filtering
+active, startup emits one stderr notice listing skipped tools and warns without
+crashing when no known tool matches. Registration-gate unit tests cover unfiltered,
+subset, and unknown-only configurations.
+
 ## 2.16.0 — 2026-07-09 — Per-section byte budgets: the boot block lands inline again
 
 **Problem:** `agent_startup` capped each brain file at a flat 40KB but left the
