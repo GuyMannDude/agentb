@@ -1,5 +1,21 @@
 # Changelog
 
+## Claude Desktop install guides complete: Linux twin ships (2026-07-09) — docs, no server change (server stays v4.9.16)
+
+**Problem.** The Windows install guide shipped earlier today with no Linux
+counterpart — half the Claude Desktop audience had only the README's terse
+wiring notes.
+
+**Fix.** `docs/install-claude-desktop-linux.md`, mirroring the Windows
+guide section-for-section (same `.mcpb`-first structure, proof test,
+manual path, troubleshooting) with the Linux-specific facts live-verified
+on a real install: `~/.config/Claude/claude_desktop_config.json`, the
+`mcp-server-<name>.log` naming, no-`~`-expansion in config JSON, the
+desktop-launch PATH gotcha (`which node` absolute path), `chmod 600`
+token file with a history-safe `read -rs` recipe. The twins cross-link
+each other, and both now carry the first-tool-use permission gotcha and
+link CORTEX-OS.md (agent side) beside SESSION-GUIDE.md (human side).
+
 ## CORTEX-OS.md: the agent operating manual (2026-07-09) — docs, no server change (server stays v4.9.16)
 
 **Problem.** The repo taught humans and agents how to *install* Mnemo but not

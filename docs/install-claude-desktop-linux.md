@@ -1,14 +1,14 @@
-# Install Mnemo Cortex for Claude Desktop on Windows
+# Install Mnemo Cortex for Claude Desktop on Linux
 
 Mnemo Cortex gives Claude a memory that can survive a closed chat. Claude can save useful facts, decisions, and preferences, then recall them in a later conversation.
 
 This guide connects Claude Desktop to a Mnemo Cortex server. It does not install the server. If you do not have one yet, begin with the [Mnemo Cortex install guide](../README.md#install-guide).
 
-(On Linux? Use the [Linux guide](install-claude-desktop-linux.md) instead.)
+(On Windows? Use the [Windows guide](install-claude-desktop-windows.md) instead.)
 
 You can ask the Claude Desktop app that is already open to help. Paste this into a chat:
 
-> Help me install Mnemo Cortex from this Windows guide, one step at a time. I will click buttons and enter private tokens myself. Do not ask me to paste a token into chat.
+> Help me install Mnemo Cortex from this Linux guide, one step at a time. I will click buttons and enter private tokens myself. Do not ask me to paste a token into chat.
 
 ## Step 1: The easy way
 
@@ -18,11 +18,11 @@ The MCP Bundle works without cloning a repository, editing JSON, or installing N
 2. Open **Settings > Extensions > Advanced settings** in Claude Desktop.
 3. Choose **Install Extension**, select `mnemo-cortex.mcpb`, and approve it.
 4. Complete the setup fields:
-   - **Mnemo Cortex Server URL**: keep `http://localhost:50001` if the server runs on this PC. For another computer, use its full address, such as `http://192.168.1.50:50001`.
+   - **Mnemo Cortex Server URL**: keep `http://localhost:50001` if the server runs on this machine. For another computer, use its full address, such as `http://192.168.1.50:50001`.
    - **Agent ID**: `claude-desktop` is a good default. Give each app or computer a different ID.
    - **Cross-Agent Sharing**: `separate` searches this agent's memories, `always` searches every agent, and `never` disables cross-agent search.
-5. If the server requires an API key, create the token file in [Add authentication](#add-authentication). Never put the key in chat.
-6. Quit Claude Desktop from its tray icon and reopen it. Closing only the window does not restart extensions.
+5. If the server requires an API key, enter it in the **API Key** field, or create the token file in [Add authentication](#add-authentication). Never put the key in chat.
+6. Quit Claude Desktop fully and reopen it. If your desktop has a tray/indicator icon, quit from there -- closing only the window does not restart extensions.
 
 The bundle contains its own runtime and dependencies, so this path does not need Node.js.
 
@@ -32,11 +32,11 @@ The bundle contains its own runtime and dependencies, so this path does not need
 
 In a new chat, ask:
 
-> Use mnemo_save to remember: My Mnemo Cortex Windows setup works.
+> Use mnemo_save to remember: My Mnemo Cortex Linux setup works.
 
 Open a second new chat and ask:
 
-> Use mnemo_recall to find what I asked you to remember about my Windows setup.
+> Use mnemo_recall to find what I asked you to remember about my Linux setup.
 
 Claude Desktop asks permission the first time it runs each new tool. Approve the prompt for `mnemo_save`, and again for `mnemo_recall` -- a missed or dismissed prompt looks exactly like memory not working, because Claude quietly tries something else instead.
 
@@ -50,52 +50,52 @@ Use the manual path to inspect the bridge, pin a Git commit, add optional direct
 
 You need Claude Desktop, a reachable Mnemo Cortex server, [Node.js](https://nodejs.org/) 18 or newer, and a local copy of the repository.
 
-Check Node.js in PowerShell:
+Check Node.js in a terminal:
 
-```powershell
+```bash
 node --version
 ```
 
-If `node` is not recognized, install the current Node.js LTS release and open a new PowerShell window.
+If `node` is not found, install it from your distribution's packages (`apt install nodejs npm`, `dnf install nodejs`, etc.) or with [nvm](https://github.com/nvm-sh/nvm), then open a new terminal.
 
 Clone and install:
 
-```powershell
-Set-Location $env:USERPROFILE
+```bash
+cd ~
 git clone https://github.com/GuyMannDude/mnemo-cortex.git
-Set-Location "$env:USERPROFILE\mnemo-cortex\integrations\mcp-bridge"
+cd ~/mnemo-cortex/integrations/mcp-bridge
 npm install
 ```
 
-If Git is unavailable, download the repository ZIP from GitHub and extract it as `%USERPROFILE%\mnemo-cortex`.
+If Git is unavailable, download the repository ZIP from GitHub and extract it as `~/mnemo-cortex`.
 
 Run `npm install` in the bridge directory. Skipping it causes `ERR_MODULE_NOT_FOUND` when Claude loads the bridge.
 
 ### Open the Claude Desktop config
 
-The Windows config is:
+The Linux config is:
 
 ```text
-%APPDATA%\Claude\claude_desktop_config.json
+~/.config/Claude/claude_desktop_config.json
 ```
 
 You can also use **Settings > Developer > Edit Config**.
 
 Make a backup first:
 
-```powershell
-Copy-Item "$env:APPDATA\Claude\claude_desktop_config.json" "$env:APPDATA\Claude\claude_desktop_config.json.backup"
+```bash
+cp ~/.config/Claude/claude_desktop_config.json ~/.config/Claude/claude_desktop_config.json.backup
 ```
 
 Preserve any existing entries under `mcpServers`. Add `mnemo-cortex` beside them rather than replacing the object.
 
 Paste this request to Claude if you want help merging JSON:
 
-> Merge the mnemo-cortex entry below into my Claude Desktop config. Preserve every existing mcpServers entry. Use my real Windows user-folder path, but do not ask me for an API key.
+> Merge the mnemo-cortex entry below into my Claude Desktop config. Preserve every existing mcpServers entry. Use my real home-directory path, but do not ask me for an API key.
 
 ### Add the bridge
 
-Replace `YOUR-NAME` with your Windows user-folder name:
+Replace `YOUR-NAME` with your username:
 
 ```json
 {
@@ -103,7 +103,7 @@ Replace `YOUR-NAME` with your Windows user-folder name:
     "mnemo-cortex": {
       "command": "node",
       "args": [
-        "C:/Users/YOUR-NAME/mnemo-cortex/integrations/mcp-bridge/server.js"
+        "/home/YOUR-NAME/mnemo-cortex/integrations/mcp-bridge/server.js"
       ],
       "env": {
         "MNEMO_URL": "http://localhost:50001",
@@ -115,17 +115,11 @@ Replace `YOUR-NAME` with your Windows user-folder name:
 }
 ```
 
-Point directly at `integrations/mcp-bridge/server.js`. Do not use the old `integrations/openclaw-mcp` path; Windows symlinks are unreliable.
-
-Forward slashes avoid JSON escaping. If you use backslashes, double each one:
-
-```json
-"C:\\Users\\YOUR-NAME\\mnemo-cortex\\integrations\\mcp-bridge\\server.js"
-```
+Point directly at `integrations/mcp-bridge/server.js`, and use the full absolute path -- `~` is not expanded inside the JSON config.
 
 | Setting | Meaning |
 |---|---|
-| `command` | Starts Node.js. Use the full path to `node.exe` if it is not on `PATH`. |
+| `command` | Starts Node.js. Use the full path to `node` (from `which node`) if Claude Desktop does not inherit your `PATH` -- common when Claude Desktop is launched from the desktop rather than a terminal. |
 | `args` | Points directly to the bridge server file. |
 | `MNEMO_URL` | The complete local or remote server URL. |
 | `MNEMO_AGENT_ID` | A unique name for this Claude Desktop installation. |
@@ -137,25 +131,25 @@ For a remote server, change the URL, for example:
 "MNEMO_URL": "http://192.168.1.50:50001"
 ```
 
-The remote computer must accept connections from this PC. Never expose an unauthenticated server directly to the public internet.
+The remote computer must accept connections from this machine. Never expose an unauthenticated server directly to the public internet.
 
 ### Add authentication
 
-For a server that requires an API key, the recommended Windows token file is:
+For a server that requires an API key, the recommended token file is:
 
 ```text
-%USERPROFILE%\.mnemo-auth-token
+~/.mnemo-auth-token
 ```
 
-Create it without putting the token in PowerShell history:
+Create it without putting the token in your shell history:
 
-```powershell
-$token = Read-Host "Paste the Mnemo Cortex API key"
-[IO.File]::WriteAllText("$env:USERPROFILE\.mnemo-auth-token", $token)
-Remove-Variable token
+```bash
+read -rs -p "Paste the Mnemo Cortex API key: " MNEMO_KEY && \
+  printf '%s' "$MNEMO_KEY" > ~/.mnemo-auth-token && \
+  chmod 600 ~/.mnemo-auth-token && unset MNEMO_KEY && echo " saved."
 ```
 
-The bridge reads `MNEMO_AUTH_TOKEN` first, then the token file. `HOME` is often unset on Windows, so it falls back to `USERPROFILE`.
+The bridge reads `MNEMO_AUTH_TOKEN` first, then the token file.
 
 You may instead add a managed token to the config's `env` object:
 
@@ -163,7 +157,7 @@ You may instead add a managed token to the config's `env` object:
 "MNEMO_AUTH_TOKEN": "YOUR-API-KEY"
 ```
 
-The file is usually safer because it keeps the secret out of the config. Never commit either secret to Git.
+The file is usually safer because it keeps the secret out of the config, and `chmod 600` keeps it readable by you alone. Never commit either secret to Git.
 
 ### Optional environment variables
 
@@ -174,28 +168,17 @@ The file is usually safer because it keeps the secret out of the config. Never c
 | `DREAM_DIR` | set explicitly | Supplies the latest dream brief when present. |
 | `HARNESS_ENABLED_TOOLS` | empty | Comma-separated tool allow-list. Empty registers all available tools. |
 
-Claude Desktop does not expand `%USERPROFILE%` inside arbitrary JSON strings. Use full paths such as `C:/Users/YOUR-NAME/my-brain`.
+Use full absolute paths such as `/home/YOUR-NAME/my-brain` -- the config does not expand `~` or environment variables.
 
-Save the config, quit Claude Desktop from the tray, reopen it, and run the [proof test](#prove-that-memory-works).
+Save the config, quit Claude Desktop fully, reopen it, and run the [proof test](#prove-that-memory-works).
 
-## Windows notes
+## Linux notes
 
-- Mnemo Cortex runs `node` directly. It does not need `npx`.
-- If another MCP server uses `npx`, Windows should launch it through `cmd /c`:
-
-```json
-{
-  "command": "cmd",
-  "args": ["/c", "npx", "-y", "PACKAGE-NAME"]
-}
-```
-
-A bare `"command": "npx"` commonly fails on Windows.
-
-- Use absolute paths.
-- Prefer forward slashes in JSON, or double every backslash.
+- Use full absolute paths everywhere in the config -- no `~`, no `$HOME`.
+- Claude Desktop launched from the desktop may not inherit your shell's `PATH` (nvm setups especially). If the bridge does not load, set `command` to the absolute path from `which node`.
+- Quit fully after config changes -- from the tray/indicator icon if your desktop shows one; closing the window alone does not restart MCP servers.
+- Keep `~/.mnemo-auth-token` at `chmod 600`.
 - Run `npm install` inside `integrations/mcp-bridge`.
-- Restart Claude Desktop from the tray after config changes.
 
 ## Troubleshooting
 
@@ -203,8 +186,8 @@ A bare `"command": "npx"` commonly fails on Windows.
 
 The server is stopped, the URL is wrong, or a firewall blocks it. Test the health endpoint:
 
-```powershell
-Invoke-RestMethod http://localhost:50001/health
+```bash
+curl http://localhost:50001/health
 ```
 
 Use the remote address instead of `localhost` when appropriate.
@@ -213,7 +196,7 @@ Use the remote address instead of `localhost` when appropriate.
 
 The key is missing or wrong.
 
-- Confirm `%USERPROFILE%\.mnemo-auth-token` exists and contains only the key.
+- Confirm `~/.mnemo-auth-token` exists and contains only the key.
 - A configured `MNEMO_AUTH_TOKEN` takes priority over the file.
 - Restart Claude Desktop after changing either source.
 - Never paste the key into chat or an issue report.
@@ -222,17 +205,17 @@ The key is missing or wrong.
 
 1. Run `node --version`. Manual installs need Node.js 18 or newer.
 2. Confirm the server file exists:
-   ```powershell
-   Test-Path "$env:USERPROFILE\mnemo-cortex\integrations\mcp-bridge\server.js"
+   ```bash
+   ls ~/mnemo-cortex/integrations/mcp-bridge/server.js
    ```
 3. Run `npm install` in `integrations/mcp-bridge`.
-4. Use the direct `mcp-bridge/server.js` path, not the legacy symlink.
-5. Quit Claude Desktop from the tray and reopen it.
+4. Check the `command` path -- desktop-launched Claude may not find `node` on `PATH`; use the absolute path from `which node`.
+5. Quit Claude Desktop fully and reopen it.
 
 The bridge log is:
 
 ```text
-%APPDATA%\Claude\logs\mcp-server-mnemo-cortex.log
+~/.config/Claude/logs/mcp-server-mnemo-cortex.log
 ```
 
 Look for `Connected to Mnemo Cortex`, `401`, `unreachable`, `ERR_MODULE_NOT_FOUND`, or a missing Node.js path.
