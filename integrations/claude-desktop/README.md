@@ -102,7 +102,7 @@ Eight more tools auto-enable when matching directories exist on your machine —
 
 ---
 
-## Privacy
+## Privacy Policy
 
 The bundle connects to **one server only** — the Mnemo Cortex URL you provide at install time. No telemetry, no analytics, no third-party services.
 

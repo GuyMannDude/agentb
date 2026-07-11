@@ -1,6 +1,6 @@
 # Privacy Policy — Mnemo Cortex
 
-**Last updated:** 2026-04-27
+**Last updated:** 2026-07-10
 
 Mnemo Cortex is a self-hosted, local-first persistent memory layer. We don't run a service, don't operate a backend, and don't collect telemetry. Your memory data lives on infrastructure you control.
 
@@ -20,6 +20,8 @@ The bridge sends:
 - `mnemo_recall` / `mnemo_search`: the search prompt you (or your AI agent) typed.
 - `passport_*`: the structured behavioral observations and promotion decisions you make.
 - `read_brain_file` / `wiki_*`: file paths you request reads from, when those tools are enabled.
+
+If you configure an API key at install time (the optional `API Key` field, or a `~/.mnemo-auth-token` file), the bridge sends it as an authentication header on every request — to your Mnemo Cortex server only, never anywhere else.
 
 The bridge does **not** send: telemetry, analytics, error reports, your machine identifiers, or any data unrelated to the explicit tool call.
 

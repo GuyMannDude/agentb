@@ -922,6 +922,10 @@ Built for [Project Sparks](https://projectsparks.ai).
 
 - **[ClaudePilot OpenClaw](https://github.com/GuyMannDude/claudepilot-openclaw)** — free AI-guided setup guide. Get an OpenClaw agent running with memory in one afternoon.
 
+## Privacy Policy
+
+Mnemo Cortex is self-hosted and local-first: no telemetry, no analytics, no third-party services. Your memory data lives in a SQLite DB on infrastructure you control, and you can read or delete it at any time. Full policy: [PRIVACY.md](PRIVACY.md).
+
 ## License
 
 MIT
