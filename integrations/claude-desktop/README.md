@@ -2,7 +2,7 @@
 
 Persistent memory for Claude Desktop on **Windows, macOS, and Linux**.
 
-> 📨 **Submitted to Anthropic's [Connectors Directory](https://claude.com/connectors/directory)** (2026-04-27) — once approved, you'll be able to install Mnemo Cortex directly from **Claude Desktop → Settings → Extensions → Browse extensions** without leaving the app. Until then, use one of the install paths below.
+> 📨 **Submitted to Anthropic's [Connectors Directory](https://claude.com/connectors/directory)** (resubmitted 2026-07-10 with the v2.17.0 auth-capable bundle; original submission 2026-04-27) — once approved, you'll be able to install Mnemo Cortex directly from **Claude Desktop → Settings → Extensions → Browse extensions** without leaving the app. Until then, use one of the install paths below.
 
 ## Two install paths
 
