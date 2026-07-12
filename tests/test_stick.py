@@ -273,6 +273,17 @@ def _git_commit(repo: Path, fname: str, text: str) -> None:
                    capture_output=True)
 
 
+def _git_clone(src: Path, dst: Path) -> Path:
+    """Clone + set a commit identity — CI runners have no global gitconfig,
+    so a clone without user.email can't commit and reads as dirty forever."""
+    import subprocess
+    subprocess.run(["git", "clone", str(src), str(dst)], capture_output=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(dst), "config", k, v],
+                       capture_output=True)
+    return dst
+
+
 def test_brain_travels_via_bare_repo(world, tmp_path):
     a, b, stick = world
     repo_a = _git_repo(tmp_path / "brain_a")
@@ -280,10 +291,7 @@ def test_brain_travels_via_bare_repo(world, tmp_path):
     r = sync(a, stick, host_id="host-a", pad=False, brain_repo=repo_a)
     assert r.brain == "pushed"
     # Second machine clones from the stick, then couriers normally.
-    import subprocess
-    repo_b = tmp_path / "brain_b"
-    subprocess.run(["git", "clone", str(stick / "brain" / "brain.git"),
-                    str(repo_b)], capture_output=True)
+    repo_b = _git_clone(stick / "brain" / "brain.git", tmp_path / "brain_b")
     _git_commit(repo_b, "active.md", "task list v2 from B")
     r = sync(b, stick, host_id="host-b", pad=False, brain_repo=repo_b)
     assert r.brain == "pushed"
@@ -298,13 +306,7 @@ def test_brain_conflict_aborts_loudly(world, tmp_path):
     repo_a = _git_repo(tmp_path / "brain_a")
     _git_commit(repo_a, "active.md", "base")
     sync(a, stick, host_id="host-a", pad=False, brain_repo=repo_a)
-    repo_b = tmp_path / "brain_b"
-    subprocess.run(["git", "clone", str(stick / "brain" / "brain.git"),
-                    str(repo_b)], capture_output=True)
-    subprocess.run(["git", "-C", str(repo_b), "config", "user.email", "t@t"],
-                   capture_output=True)
-    subprocess.run(["git", "-C", str(repo_b), "config", "user.name", "t"],
-                   capture_output=True)
+    repo_b = _git_clone(stick / "brain" / "brain.git", tmp_path / "brain_b")
     _git_commit(repo_a, "active.md", "A's version")
     _git_commit(repo_b, "active.md", "B's version")
     sync(b, stick, host_id="host-b", pad=False, brain_repo=repo_b)
