@@ -20,6 +20,7 @@ import json
 import time
 import hashlib
 import hmac
+import ipaddress
 import logging
 import asyncio
 import statistics
@@ -654,7 +655,12 @@ async def expand_query(prompt: str, cfg: ExpansionConfig, api_key: str, api_base
 
 
 def _is_loopback_host(host: str) -> bool:
-    return host in ("127.0.0.1", "localhost", "::1", "")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def auth_posture_is_open(config: AgentBConfig) -> bool:
@@ -749,6 +755,24 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     )
     app.add_middleware(CORSMiddleware, allow_origins=config.server.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
+
+    # The startup guard above checks the configured bind address, but ASGI
+    # launchers can override it (for example: a loopback config launched with
+    # ``uvicorn agentb.server:app --host 0.0.0.0``). Preserve the fail-closed
+    # guarantee at request time too: an unauthenticated deployment that has
+    # not explicitly opted open may serve loopback clients only, regardless
+    # of how the process was actually bound.
+    if not (config.server.auth_token or config.server.scoped_tokens or
+            config.server.allow_unauthenticated):
+        @app.middleware("http")
+        async def enforce_unauthenticated_loopback(request: Request, call_next):
+            client_host = request.client.host if request.client else ""
+            if not _is_loopback_host(client_host):
+                return Response(
+                    "Forbidden: unauthenticated access is loopback-only",
+                    status_code=403,
+                )
+            return await call_next(request)
 
     # ── Body-size guard (DoS) ──
     # Reject oversized payloads before they get embedded, indexed, or written

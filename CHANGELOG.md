@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.12.1 — close ASGI bind-override auth bypass (2026-07-12)
+
+An unauthenticated config declared as loopback-only could still be exposed by
+an ASGI launcher overriding the bind address (for example, Uvicorn's `--host`
+flag). The startup guard only saw the YAML value. Unauthenticated deployments
+without the explicit `allow_unauthenticated` opt-in now also reject every
+non-loopback client at request time, so launcher bind overrides fail closed.
+Loopback detection now covers the full IPv4/IPv6 loopback ranges.
+
 ## v4.12.0 — Cortex Stick facts channel: the last truth store travels (2026-07-12)
 
 **Problem.** The courier carried memories, trajectories, the brain, and the

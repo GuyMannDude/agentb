@@ -17,7 +17,9 @@ from agentb.config import (
     ResilientProviderConfig, ServerConfig, DEFAULT_PERSONAS, validate_agent_id,
     validate_session_id,
 )
-from agentb.server import auth_posture_is_open, assert_safe_auth_posture
+from agentb.server import (
+    _is_loopback_host, auth_posture_is_open, assert_safe_auth_posture,
+)
 
 MASTER = "master-secret"
 
@@ -170,9 +172,15 @@ def test_open_posture_detected_for_public_bind_no_auth():
     assert auth_posture_is_open(_cfg("0.0.0.0")) is True
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "localhost",
+                                  "::1", "0:0:0:0:0:0:0:1"])
 def test_loopback_is_safe(host):
     assert auth_posture_is_open(_cfg(host)) is False
+
+
+@pytest.mark.parametrize("host", ["", "testclient", "192.168.1.10", "::"])
+def test_non_loopback_host_is_not_safe(host):
+    assert _is_loopback_host(host) is False
 
 
 def test_auth_token_makes_posture_safe():
@@ -216,3 +224,57 @@ def test_open_posture_refuses_app_startup(tmp_path):
         with pytest.raises(RuntimeError, match="Refusing to start"):
             with TestClient(create_app(cfg)):
                 pass
+
+
+def test_bind_override_cannot_expose_unauthenticated_app(tmp_path):
+    """A launcher may bind publicly despite a loopback YAML host. Remote
+    requests must still fail unless allow_unauthenticated explicitly opts in."""
+    cfg = AgentBConfig(
+        reasoning=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="x")),
+        embedding=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="nomic-embed-text")),
+        cache=CacheConfig(),
+        server=ServerConfig(host="127.0.0.1", port=50096),
+        data_dir=str(tmp_path),
+        classification=ClassificationConfig(enabled=False),
+        personas=dict(DEFAULT_PERSONAS),
+    )
+    with patch("agentb.server.create_resilient_embedding", return_value=FakeEmbedding()), \
+         patch("agentb.server.create_resilient_reasoning", return_value=FakeReasoning()):
+        from agentb.server import create_app
+        with TestClient(create_app(cfg), client=("198.51.100.7", 50000)) as remote:
+            response = remote.get("/health")
+    assert response.status_code == 403
+    assert response.text == "Forbidden: unauthenticated access is loopback-only"
+
+
+def test_loopback_client_still_reaches_unauthenticated_app(tmp_path):
+    cfg = AgentBConfig(
+        reasoning=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="x")),
+        embedding=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="nomic-embed-text")),
+        cache=CacheConfig(), server=ServerConfig(host="127.0.0.1", port=50096),
+        data_dir=str(tmp_path), classification=ClassificationConfig(enabled=False),
+        personas=dict(DEFAULT_PERSONAS),
+    )
+    with patch("agentb.server.create_resilient_embedding", return_value=FakeEmbedding()), \
+         patch("agentb.server.create_resilient_reasoning", return_value=FakeReasoning()):
+        from agentb.server import create_app
+        with TestClient(create_app(cfg), client=("127.0.0.1", 50000)) as local:
+            response = local.get("/health")
+    assert response.status_code == 200
+
+
+def test_explicit_open_opt_in_allows_remote_client(tmp_path):
+    cfg = AgentBConfig(
+        reasoning=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="x")),
+        embedding=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="nomic-embed-text")),
+        cache=CacheConfig(),
+        server=ServerConfig(host="0.0.0.0", port=50096, allow_unauthenticated=True),
+        data_dir=str(tmp_path), classification=ClassificationConfig(enabled=False),
+        personas=dict(DEFAULT_PERSONAS),
+    )
+    with patch("agentb.server.create_resilient_embedding", return_value=FakeEmbedding()), \
+         patch("agentb.server.create_resilient_reasoning", return_value=FakeReasoning()):
+        from agentb.server import create_app
+        with TestClient(create_app(cfg), client=("198.51.100.7", 50000)) as remote:
+            response = remote.get("/health")
+    assert response.status_code == 200
