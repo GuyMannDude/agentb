@@ -763,6 +763,52 @@ def test_encrypt_migration_is_resumable(world):
         encrypt_stick(stick, PASS, kdf_params=FAST_KDF)
 
 
+def test_non_ascii_jsonl_union_travels(enc_world):
+    """The union-merge itself must carry non-ASCII trajectory lines intact."""
+    a, b, stick = enc_world
+    p = traj_path(a, "cc", "deploy")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"id": "r1", "note": "A → B"}\n', encoding="utf-8")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+    append_traj(a, "cc", "deploy", "r2")
+    append_traj(b, "cc", "deploy", "r3")
+    courier(b, stick, "host-b")
+    r = courier(a, stick, "host-a")   # union-merge rewrites the '→' line
+    assert "memories/cc/trajectories/deploy.jsonl" in r.merged_jsonl
+    merged = traj_path(a, "cc", "deploy").read_text(encoding="utf-8")
+    assert "A → B" in merged
+    ids = {json.loads(l)["id"] for l in merged.splitlines()}
+    assert ids == {"r1", "r2", "r3"}
+
+
+def test_atomic_write_text_pins_utf8_under_ascii_locale(tmp_path):
+    """Windows regression (IGOR-2, 2026-07-12): atomic_write_text used the
+    platform default encoding — cp1252 on Windows — and died on the first
+    '→' in a union-merged trajectory, aborting the sync mid-apply (torn
+    generation). The default encoding is resolved at C level, so this runs
+    a real subprocess under a non-UTF-8 locale to prove the pin."""
+    import os
+    import subprocess
+    import sys
+    target = tmp_path / "out.jsonl"
+    script = (
+        "from pathlib import Path\n"
+        "from agentb.fsutil import atomic_write_text\n"
+        f"atomic_write_text(Path({str(target)!r}), 'A \\u2192 B')\n"
+    )
+    env = dict(
+        os.environ,
+        LC_ALL="C", LANG="C",
+        PYTHONCOERCECLOCALE="0", PYTHONUTF8="0",
+    )
+    r = subprocess.run([sys.executable, "-c", script],
+                       capture_output=True, text=True, env=env,
+                       cwd=Path(__file__).resolve().parent.parent)
+    assert r.returncode == 0, f"write crashed under ASCII locale:\n{r.stderr}"
+    assert target.read_bytes() == "A → B".encode("utf-8")
+
+
 def test_repair_works_without_key(enc_world, tmp_path):
     """Torn-generation recovery must not require the key — repair hashes
     ciphertext. (A found stick can be made consistent but never read.)"""

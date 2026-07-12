@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.11.1 — Windows: JSONL union-merge died on '→' (2026-07-12)
+
+**Problem.** First real encrypted sync on a Windows host crashed mid-apply
+with `UnicodeEncodeError: 'charmap' codec can't encode '→'`, leaving
+the stick torn (recoverable via `stick repair`, but still). Cause:
+`atomic_write_text` used the platform default encoding — cp1252 on
+Windows — and the union-merged trajectory text contained a '→'. Latent
+since v4.10.0; every earlier Windows sync simply never hit a JSONL
+both-edit merge.
+
+**Fix.** `atomic_write_text` pins UTF-8 (JSON/JSONL are UTF-8 by spec;
+every existing caller wrote ASCII-escaped JSON, so no on-disk format
+change). Regression test runs a real subprocess under a non-UTF-8 locale —
+the default encoding resolves at C level, so an in-process monkeypatch
+can't reproduce the crash.
+
 ## v4.11.0 — Cortex Stick encryption: a lost stick is not a lost memory (2026-07-12)
 
 **Problem.** A Cortex Stick carries a fleet's entire working memory as
