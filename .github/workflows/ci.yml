@@ -34,7 +34,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Run test suite
-        run: pytest tests/ -v
+        # --timeout: a flaky suite hang (3.12) used to wedge the runner for
+        # hours; now the culprit test fails loudly by name with a stack dump.
+        run: pytest tests/ -v --timeout=180 --timeout-method=thread
 
   wheel-smoke:
     runs-on: ubuntu-latest
