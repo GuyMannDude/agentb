@@ -1,5 +1,52 @@
 # Changelog
 
+## v4.11.0 — Cortex Stick encryption: a lost stick is not a lost memory (2026-07-12)
+
+**Problem.** A Cortex Stick carries a fleet's entire working memory as
+plaintext files. Whoever holds the stick reads everything — the v1 docs
+said "treat it like a notebook", but a notebook you can lose in a parking
+lot shouldn't hold every decision your AI ever made.
+
+**Fix.** In-tool encryption, chosen over volume-level guidance (BitLocker
+To Go is unreadable on Linux, LUKS unreadable on Windows, VeraCrypt needs
+installs and manual mounts at both desks): the courier now encrypts every
+truth file it writes to the stick with **AES-256-SIV** — identical behavior
+on every OS Python runs on, stick stays FAT32/exFAT, no admin rights, and
+`stick watch` stays unattended.
+
+Design: SIV is a *deterministic* AEAD, so the same key + plaintext always
+produce the same ciphertext. That deliberately leaks content **equality**
+(a small leak next to the already-visible filenames) and in exchange the
+entire 3-way merge engine keeps working unchanged in ciphertext space — the
+host side hashes `encrypt(plaintext)` during scan, so base inventories, the
+manifest commit point, torn-generation detection, and `stick repair` all
+operate on ciphertext hashes. Repair never needs the key; content never
+decrypts without it, and a tampered file is a loud AEAD refusal even if an
+adversary "repairs" the manifest around it. The key derives from a
+passphrase (scrypt) and lives per-host under `{data_dir}/stick-keys/`
+(0600) — **never on the stick**; the passport carries only the KDF salt and
+a key-check fingerprint so a wrong passphrase fails loud before any bytes
+move. The couriered brain switches from a readable bare git repo to an
+encrypted full-history git bundle, same failure-domain isolation as v1.
+Conflict-loser backups on the stick are encrypted too.
+
+CLI: `stick init --encrypt` (born encrypted), `stick unlock` (enroll a
+host, once), `stick encrypt` (in-place migration of a plaintext stick —
+resumable after a crash, refuses a wrong passphrase mid-resume), `stick
+brain-clone` (bootstrap the brain repo from an encrypted bundle). `stick
+status` shows 🔒/⚠. Plaintext sticks keep working exactly as v1 — zero
+behavior change without an `enc` block. One honest caveat: replacing a
+plaintext file doesn't scrub its old flash clusters (wear leveling), so
+after migrating a stick that already carried plaintext, zero-fill the free
+space if the plaintext era matters.
+
+Needs the `cryptography` package for encrypted sticks only:
+`pip install 'mnemo-cortex[stick-crypto]'`. 14 new tests (39 total in the
+stick suite): opacity, full matrix through the codec, JSONL union, encrypted
+conflict archive, locked/wrong-key refusals, tamper-after-repair, bundle
+travel + conflict abort, in-place migration (+ brain conversion, +
+resumability), key-free repair.
+
 ## v4.10.0 — Cortex Stick: USB courier sync between two Mnemo installs (2026-07-12)
 
 **Problem.** A person who works from two desks (home + work) has two Mnemo

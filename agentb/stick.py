@@ -30,12 +30,13 @@ import os
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from agentb.fsutil import atomic_write_text
+from agentb.fsutil import atomic_write_bytes, atomic_write_text
 
 log = logging.getLogger("agentb.stick")
 
@@ -90,6 +91,177 @@ class StickError(RuntimeError):
     """Loud failure — sync refuses rather than guessing."""
 
 
+# ── encryption (v1.1) ──────────────────────────────────────────────────────
+#
+# A lost stick must not be a lost fleet memory. Encryption is IN-TOOL, not
+# volume-level: AES-256-SIV file crypto works identically on every OS Python
+# runs on, keeps the stick FAT32/exFAT, needs no admin rights or drivers,
+# and `stick watch` stays unattended. (BitLocker To Go can't be read on
+# Linux, LUKS can't be read on Windows, VeraCrypt needs installs + manual
+# mounts on both ends.)
+#
+# SIV mode is DETERMINISTIC: same key + same plaintext → same ciphertext.
+# That is a deliberate trade — it leaks content *equality* (an acceptable
+# leak next to the visible filenames), and in exchange the whole 3-way merge
+# engine keeps working unchanged in ciphertext space: the host side hashes
+# encrypt(plaintext) during scan, so host↔stick comparison, base inventories,
+# the manifest, torn-generation detection, and `stick repair` all operate on
+# ciphertext hashes. Repair and verify never need the key.
+#
+# The key is scrypt-derived from a passphrase and stored per-host under
+# {data_dir}/stick-keys/ (0600) — NEVER on the stick. The stick's passport
+# carries only the KDF salt/params and a key-check fingerprint so a wrong
+# passphrase fails loud instead of writing garbage.
+
+ENC_MAGIC = b"CSTK\x01"           # header on every encrypted stick file
+ENC_OVERHEAD = len(ENC_MAGIC) + 16  # magic + SIV synthetic-IV tag
+SCRYPT_PARAMS = {"name": "scrypt", "n": 1 << 15, "r": 8, "p": 1}
+
+
+class PlainCodec:
+    """v1 behavior: bytes pass through untouched."""
+    encrypted = False
+
+    def encode(self, data: bytes) -> bytes:
+        return data
+
+    def decode(self, data: bytes) -> bytes:
+        return data
+
+
+class SivCodec:
+    """AES-256-SIV, deterministic AEAD (RFC 5297) via `cryptography`."""
+    encrypted = True
+
+    def __init__(self, key: bytes):
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESSIV
+        except ImportError as e:
+            raise StickError(
+                "Encrypted stick support needs the 'cryptography' package — "
+                "pip install 'mnemo-cortex[stick-crypto]' (or: pip install "
+                "cryptography)."
+            ) from e
+        self._siv = AESSIV(key)
+
+    def encode(self, data: bytes) -> bytes:
+        return ENC_MAGIC + self._siv.encrypt(data, None)
+
+    def decode(self, data: bytes) -> bytes:
+        if not data.startswith(ENC_MAGIC):
+            raise StickError(
+                "Stick file is not encrypted (missing CSTK header) on an "
+                "encrypted stick — was a plaintext file dropped in by hand? "
+                "Run `stick encrypt` again to finish an interrupted migration."
+            )
+        from cryptography.exceptions import InvalidTag
+        try:
+            return self._siv.decrypt(data[len(ENC_MAGIC):], None)
+        except InvalidTag as e:
+            raise StickError(
+                "DECRYPT FAILED — wrong key or tampered stick file. "
+                "Nothing was written."
+            ) from e
+
+
+def _derive_key(passphrase: str, kdf: dict) -> bytes:
+    if kdf.get("name") != "scrypt":
+        raise StickError(f"Unsupported stick KDF: {kdf.get('name')!r} — "
+                         "update mnemo-cortex on this machine.")
+    return hashlib.scrypt(
+        passphrase.encode(), salt=bytes.fromhex(kdf["salt"]),
+        n=kdf["n"], r=kdf["r"], p=kdf["p"], dklen=64,
+        maxmem=256 * 1024 * 1024,
+    )
+
+
+def _key_check(key: bytes) -> str:
+    """Fingerprint stored in the passport so a wrong passphrase/key fails
+    loud before any decrypt is attempted. Domain-separated from the key."""
+    return hashlib.sha256(b"cortex-stick-key-check:" + key).hexdigest()[:16]
+
+
+def make_enc_block(passphrase: str, kdf_params: Optional[dict] = None) -> tuple[dict, bytes]:
+    """Fresh enc block for a passport + the derived key. kdf_params override
+    is for tests (small n) — production always uses SCRYPT_PARAMS."""
+    kdf = dict(kdf_params or SCRYPT_PARAMS, salt=os.urandom(16).hex())
+    key = _derive_key(passphrase, kdf)
+    return ({"alg": "aes-256-siv", "state": "ready", "kdf": kdf,
+             "key_check": _key_check(key)}, key)
+
+
+def stick_key_path(data_dir: Path, stick_id: str) -> Path:
+    return data_dir / "stick-keys" / f"{stick_id}.key"
+
+
+def save_stick_key(data_dir: Path, stick_id: str, key: bytes) -> Path:
+    p = stick_key_path(data_dir, stick_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # O_CREAT with 0600 from birth — create-then-chmod would leave a window
+    # where the key sits umask-readable. (Mode is advisory on Windows.)
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(key.hex() + "\n")
+    return p
+
+
+def load_stick_key(data_dir: Path, stick_id: str) -> Optional[bytes]:
+    p = stick_key_path(data_dir, stick_id)
+    try:
+        return bytes.fromhex(p.read_text().strip())
+    except FileNotFoundError:
+        return None
+    except ValueError as e:
+        raise StickError(f"Corrupt stick key file {p}: {e}") from e
+
+
+def codec_for_stick(stick: Path, data_dir: Path):
+    """Resolve the codec this host must use for this stick — loud when the
+    stick is encrypted and this host holds no (or the wrong) key."""
+    passport = _load_json(stick / "passport.json", {})
+    enc = passport.get("enc")
+    if not enc:
+        return PlainCodec()
+    if enc.get("alg") != "aes-256-siv":
+        raise StickError(f"Unsupported stick encryption {enc.get('alg')!r} — "
+                         "update mnemo-cortex on this machine.")
+    if enc.get("state") != "ready":
+        raise StickError(
+            "Stick encryption migration was interrupted — run "
+            "`mnemo-cortex stick encrypt` again (same passphrase) to finish "
+            "it. Sync is refused until then."
+        )
+    key = load_stick_key(data_dir, passport.get("stick_id", ""))
+    if key is None:
+        raise StickError(
+            "Stick is ENCRYPTED and this host holds no key for it — run "
+            "`mnemo-cortex stick unlock` and enter the stick passphrase "
+            "(one time per host)."
+        )
+    if _key_check(key) != enc.get("key_check"):
+        raise StickError(
+            "This host's stored key does not match the stick (key_check "
+            "mismatch) — re-run `mnemo-cortex stick unlock`."
+        )
+    return SivCodec(key)
+
+
+def unlock_stick(stick: Path, data_dir: Path, passphrase: str) -> Path:
+    """Enroll this host on an encrypted stick: derive the key from the
+    passphrase, verify it against the passport, persist it (0600)."""
+    passport = _load_json(stick / "passport.json", None)
+    if passport is None:
+        raise StickError(f"No passport.json at {stick} — not a Cortex Stick.")
+    enc = passport.get("enc")
+    if not enc:
+        raise StickError("This stick is not encrypted — nothing to unlock.")
+    key = _derive_key(passphrase, enc["kdf"])
+    if _key_check(key) != enc.get("key_check"):
+        raise StickError("Wrong passphrase for this stick.")
+    SivCodec(key)   # probe: surface a missing 'cryptography' now, not at sync
+    return save_stick_key(data_dir, passport.get("stick_id", ""), key)
+
+
 # ── stick discovery / provisioning ─────────────────────────────────────────
 
 def candidate_mount_roots(extra: Optional[list[str]] = None) -> list[Path]:
@@ -125,9 +297,15 @@ def find_stick(extra_roots: Optional[list[str]] = None) -> Optional[Path]:
     return None
 
 
-def init_stick(mount: Path, name: str = "cortex-stick") -> Path:
+def init_stick(mount: Path, name: str = "cortex-stick",
+               passphrase: Optional[str] = None,
+               kdf_params: Optional[dict] = None) -> Path:
     """Provision <mount>/cortex/. Idempotent-hostile on purpose: refuses to
-    re-init an existing stick (that would orphan host inventories)."""
+    re-init an existing stick (that would orphan host inventories).
+
+    With a passphrase the stick is born encrypted; enroll each host with
+    unlock_stick (the caller does this for the initializing host too — the
+    key itself never touches the stick)."""
     stick = mount / STICK_DIRNAME if mount.name != STICK_DIRNAME else mount
     if (stick / "passport.json").exists():
         raise StickError(f"Already a Cortex Stick: {stick}")
@@ -142,6 +320,10 @@ def init_stick(mount: Path, name: str = "cortex-stick") -> Path:
         "created_at": time.time(),
         "hosts": {},
     }
+    if passphrase is not None:
+        passport["enc"], key = make_enc_block(passphrase, kdf_params)
+        SivCodec(key)   # probe: missing 'cryptography' must fail HERE, not
+                        # at the first sync of an already-provisioned stick
     _write_json(stick / "passport.json", passport)
     _write_json(stick / "manifest.json",
                 {"schema_version": STICK_SCHEMA_VERSION, "generation": 0,
@@ -235,6 +417,97 @@ def repair_manifest(stick: Path) -> dict:
     return manifest
 
 
+def encrypt_stick(stick: Path, passphrase: str,
+                  kdf_params: Optional[dict] = None) -> dict:
+    """In-place upgrade of a PLAINTEXT stick to encrypted. Resumable.
+
+    Ordering is the design: the enc block (salt + key_check, state
+    'migrating') commits to the passport FIRST, so a crash mid-migration
+    can never strand files encrypted under a key that was never recorded.
+    Files already carrying the CSTK header are skipped, so re-running the
+    same command (same passphrase) finishes an interrupted run. state flips
+    to 'ready' LAST — sync refuses a 'migrating' stick.
+
+    The plaintext bytes are REPLACED, not scrubbed: on flash media the old
+    clusters may survive until overwritten (wear leveling makes true
+    scrubbing unreliable) — the caller should zero-fill the stick's free
+    space afterwards if the plaintext history matters.
+
+    Dropping the base inventories also forgets any host delete that hadn't
+    couriered yet — that file resurrects on the host's next sync. Under-
+    delete is the courier's one permitted failure direction; migrate from
+    a synced state to avoid even that."""
+    passport = _load_json(stick / "passport.json", None)
+    if passport is None:
+        raise StickError(f"No passport.json at {stick} — not a Cortex Stick.")
+    enc = passport.get("enc")
+    if enc and enc.get("state") == "ready":
+        raise StickError("Stick is already encrypted.")
+    resuming = bool(enc)
+    if resuming:                               # resume an interrupted run
+        key = _derive_key(passphrase, enc["kdf"])
+        if _key_check(key) != enc.get("key_check"):
+            raise StickError(
+                "Wrong passphrase for the interrupted migration on this "
+                "stick — use the one the migration started with.")
+    else:
+        enc, key = make_enc_block(passphrase, kdf_params)
+        enc["state"] = "migrating"
+    # Codec BEFORE the passport write: a host without 'cryptography' must
+    # refuse here, not strand the stick in 'migrating' (which locks out
+    # syncs on BOTH machines until someone finishes the job).
+    codec = SivCodec(key)
+    if not resuming:
+        passport["enc"] = enc
+        _write_json(stick / "passport.json", passport)
+
+    count = 0
+    roots = (stick / "memories", stick / "pad", stick / "state" / "conflicts")
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in sorted(root.rglob("*")):
+            if not p.is_file() or p.name.endswith(".tmp"):
+                continue
+            raw = p.read_bytes()
+            if raw.startswith(ENC_MAGIC):      # already done (resume)
+                continue
+            atomic_write_bytes(p, codec.encode(raw))
+            count += 1
+
+    # brain: bare repo → encrypted bundle. Bundling FROM the stick's bare
+    # repo (not the host's clone) preserves commits a host pushed but the
+    # other machine hasn't pulled yet.
+    bare = stick / "brain" / "brain.git"
+    if bare.is_dir():
+        has_refs = _git(bare, "for-each-ref").stdout.strip()
+        if has_refs:
+            branch = _git(bare, "symbolic-ref", "--short", "HEAD").stdout.strip()
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "brain.bundle"
+                r = _git(bare, "bundle", "create", str(out), branch or "--all")
+                if r.returncode != 0:
+                    raise StickError(
+                        f"brain: bundle from stick bare repo failed: "
+                        f"{r.stderr.strip()}")
+                atomic_write_bytes(stick / "brain" / "brain.bundle.enc",
+                                   codec.encode(out.read_bytes()))
+        shutil.rmtree(bare)
+
+    # Commit: manifest over the ciphertext, base inventories dropped (they
+    # hold plaintext-space hashes; identical content re-agrees on first sync,
+    # divergent files surface as conflicts — preserved, never lost), then
+    # state=ready as the final word.
+    manifest = repair_manifest(stick)
+    for inv in (stick / "state").glob("inventory-*.json"):
+        inv.unlink()
+    passport = _load_json(stick / "passport.json", {})
+    passport["enc"]["state"] = "ready"
+    _write_json(stick / "passport.json", passport)
+    return {"files_encrypted": count, "generation": manifest["generation"],
+            "key": key}
+
+
 # ── channels ───────────────────────────────────────────────────────────────
 
 @dataclass
@@ -266,16 +539,24 @@ class SyncReport:
                     or self.conflicts or self.brain in ("pushed", "merged"))
 
 
-def _scan(root: Path, pattern: str) -> dict[str, str]:
+def _scan(root: Path, pattern: str, transform=None) -> dict[str, str]:
     """relpath → sha256 for truth files directly under root (non-recursive
-    for globs; pad uses rglob via pattern '**/*')."""
+    for globs; pad uses rglob via pattern '**/*').
+
+    transform maps file bytes before hashing: on an encrypted stick the host
+    side scans with codec.encode so host and stick compare in ciphertext
+    space (SIV determinism is what makes this hash stable)."""
     if not root.is_dir():
         return {}
     out = {}
     it = root.rglob(pattern[3:]) if pattern.startswith("**/") else root.glob(pattern)
     for p in sorted(it):
         if p.is_file() and not p.name.endswith(".tmp"):
-            out[p.relative_to(root).as_posix()] = sha256_file(p)
+            rel = p.relative_to(root).as_posix()
+            if transform is None:
+                out[rel] = sha256_file(p)
+            else:
+                out[rel] = hashlib.sha256(transform(p.read_bytes())).hexdigest()
     return out
 
 
@@ -291,15 +572,58 @@ def _copy_verified(src: Path, dst: Path, expect_sha: str) -> None:
     os.replace(tmp, dst)
 
 
-def _jsonl_union(host_file: Path, stick_file: Path) -> str:
+def _transfer(src: Path, dst: Path, expect_sha: str, codec,
+              *, encrypting: bool) -> None:
+    """Move a truth file across the host↔stick boundary through the codec.
+
+    encrypting=True: host plaintext → stick ciphertext. expect_sha is the
+    ciphertext hash (precomputable because SIV is deterministic).
+    encrypting=False: stick ciphertext → host plaintext. src is verified
+    against expect_sha, then the AEAD tag authenticates the decrypt.
+    Plaintext codec degrades to the v1 copy+verify."""
+    if not codec.encrypted:
+        _copy_verified(src, dst, expect_sha)
+        return
+    raw = src.read_bytes()
+    if encrypting:
+        out = codec.encode(raw)
+        if hashlib.sha256(out).hexdigest() != expect_sha:
+            raise StickError(f"Encrypt-verify FAILED for {src} → {dst} "
+                             "(file changed mid-sync?)")
+    else:
+        if hashlib.sha256(raw).hexdigest() != expect_sha:
+            raise StickError(f"Source hash mismatch reading {src} — "
+                             "changed mid-sync?")
+        out = codec.decode(raw)
+    out_sha = hashlib.sha256(out).hexdigest()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(dst.suffix + ".tmp")
+    tmp.write_bytes(out)
+    if sha256_file(tmp) != out_sha:
+        tmp.unlink(missing_ok=True)
+        raise StickError(f"Readback verify FAILED copying {src} → {dst}")
+    os.replace(tmp, dst)
+    try:   # copy2 semantics: keep source mtime (the conflict tie-break reads it)
+        st = src.stat()
+        os.utime(dst, (st.st_atime, st.st_mtime))
+    except OSError:
+        pass
+
+
+def _jsonl_union(host_file: Path, stick_file: Path, codec=None) -> str:
     """Union-merge two versions of an append-only JSONL by record id
     (content-hash for id-less lines). Order: stick lines first (they're the
     older courier state), then host-only appends. Returns merged text."""
-    def parse(path: Path) -> list[tuple[str, str]]:
+    codec = codec or PlainCodec()
+
+    def parse(path: Path, decode: bool = False) -> list[tuple[str, str]]:
         pairs = []
         if not path.is_file():
             return pairs
-        for line in path.read_text().splitlines():
+        data = path.read_bytes()
+        if decode:
+            data = codec.decode(data)
+        for line in data.decode("utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -311,7 +635,7 @@ def _jsonl_union(host_file: Path, stick_file: Path) -> str:
         return pairs
 
     seen: dict[str, str] = {}
-    for key, line in parse(stick_file) + parse(host_file):
+    for key, line in parse(stick_file, decode=codec.encrypted) + parse(host_file):
         seen.setdefault(key, line)
     return "\n".join(seen.values()) + ("\n" if seen else "")
 
@@ -322,12 +646,19 @@ def sync_channel(
     manifest_files: dict[str, dict],
     report: SyncReport,
     *,
+    codec=None,
     force: bool = False,
     dry_run: bool = False,
 ) -> dict[str, dict]:
     """3-way merge of one channel. Returns the channel's new base inventory
-    and updates manifest_files (keyed by stick-relative path) in place."""
-    host = _scan(ch.host_dir, ch.glob)
+    and updates manifest_files (keyed by stick-relative path) in place.
+
+    On an encrypted stick every hash here — host scan, stick scan, base,
+    manifest — is a CIPHERTEXT hash; the host scan encrypts in memory to
+    compute its stick-shape hash (deterministic SIV makes that stable)."""
+    codec = codec or PlainCodec()
+    host = _scan(ch.host_dir, ch.glob,
+                 transform=codec.encode if codec.encrypted else None)
     stick_root = ch.stick_dir
     stick = _scan(stick_root, ch.glob)
 
@@ -361,13 +692,13 @@ def sync_channel(
                          "version", max(ver, 1))}
         elif h == b and s and s != b:                       # stick changed → host
             if not dry_run:
-                _copy_verified(sp, hp, s)
+                _transfer(sp, hp, s, codec, encrypting=False)
             report.to_host.append(f"{ch.name}/{rel}")
             entry = {"sha256": s,
                      "version": manifest_files.get(_mkey(ch, rel), {}).get("version", ver + 1)}
         elif s == b and h and h != b:                       # host changed → stick
             if not dry_run:
-                _copy_verified(hp, sp, h)
+                _transfer(hp, sp, h, codec, encrypting=True)
             report.to_stick.append(f"{ch.name}/{rel}")
             entry = {"sha256": h, "version": ver + 1}
         elif h is None and s == b and b is not None:        # host deleted → stick
@@ -382,7 +713,7 @@ def sync_channel(
             pass
         else:                                               # CONFLICT
             entry = _resolve_conflict(ch, rel, h, s, ver, manifest_files,
-                                      report, dry_run=dry_run)
+                                      report, codec=codec, dry_run=dry_run)
 
         if entry:
             new_base[rel] = entry
@@ -399,7 +730,7 @@ def _mkey(ch: Channel, rel: str) -> str:
 
 def _resolve_conflict(
     ch: Channel, rel: str, h: Optional[str], s: Optional[str], base_ver: int,
-    manifest_files: dict, report: SyncReport, *, dry_run: bool,
+    manifest_files: dict, report: SyncReport, *, codec=None, dry_run: bool,
 ) -> Optional[dict]:
     """Deterministic conflict resolution, loser preserved on the stick.
 
@@ -407,17 +738,18 @@ def _resolve_conflict(
     Both-edit: JSONL channels union-merge; file channels pick a winner by
     stick generation, then mtime, then hash — and the loser is copied to
     state/conflicts/ before being overwritten."""
+    codec = codec or PlainCodec()
     hp, sp = ch.host_dir / rel, ch.stick_dir / rel
     tag = f"{ch.name}/{rel}"
 
     if h and s is None:            # host edited, stick (other machine) deleted
         if not dry_run:
-            _copy_verified(hp, sp, h)
+            _transfer(hp, sp, h, codec, encrypting=True)
         report.conflicts.append(f"{tag}: edit-vs-delete — edit wins, restored")
         return {"sha256": h, "version": base_ver + 1}
     if s and h is None:            # other machine edited, this host deleted
         if not dry_run:
-            _copy_verified(sp, hp, s)
+            _transfer(sp, hp, s, codec, encrypting=False)
         report.conflicts.append(f"{tag}: delete-vs-edit — edit wins, restored")
         return {"sha256": s, "version": base_ver + 1}
 
@@ -425,13 +757,14 @@ def _resolve_conflict(
     assert h is not None and s is not None
 
     if ch.unit == "jsonl":         # append-only truth: union, nobody loses
-        merged = _jsonl_union(hp, sp)
-        sha = hashlib.sha256(merged.encode()).hexdigest()
+        merged = _jsonl_union(hp, sp, codec)
+        stick_bytes = codec.encode(merged.encode())
+        sha = hashlib.sha256(stick_bytes).hexdigest()
         if not dry_run:
             hp.parent.mkdir(parents=True, exist_ok=True)
             sp.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(hp, merged)
-            atomic_write_text(sp, merged)
+            atomic_write_bytes(sp, stick_bytes)
             if sha256_file(sp) != sha:
                 raise StickError(f"Readback verify FAILED on merged {sp}")
         report.merged_jsonl.append(tag)
@@ -457,15 +790,20 @@ def _resolve_conflict(
         # The loser backup is the last copy of a losing edit — it gets the
         # same tmp+rename+readback guard as every truth write, and a hash
         # uniquifier so two conflicts in the same second can't clobber it.
+        # It lives on the stick, so on an encrypted stick a losing HOST edit
+        # is encrypted on its way in; a losing stick copy is ciphertext already.
         conflicts_dir = _conflicts_dir(ch)
         dst = conflicts_dir / (f"{int(time.time())}-{loser_sha[:8]}-"
                                f"{rel.replace('/', '__')}")
         dst.parent.mkdir(parents=True, exist_ok=True)
-        _copy_verified(loser_path, dst, loser_sha)
-        if winner == "host":
-            _copy_verified(hp, sp, h)
+        if loser_path == hp:
+            _transfer(hp, dst, loser_sha, codec, encrypting=True)
         else:
-            _copy_verified(sp, hp, s)
+            _copy_verified(sp, dst, loser_sha)
+        if winner == "host":
+            _transfer(hp, sp, h, codec, encrypting=True)
+        else:
+            _transfer(sp, hp, s, codec, encrypting=False)
     report.conflicts.append(
         f"{tag}: both edited — {winner} wins, loser saved to state/conflicts/"
     )
@@ -553,6 +891,111 @@ def sync_brain(repo: Path, stick: Path, report: SyncReport, *,
         report.brain = "clean"
 
 
+def sync_brain_bundle(repo: Path, stick: Path, codec, report: SyncReport, *,
+                      dry_run: bool = False) -> None:
+    """Encrypted-stick brain channel: the courier is a full git bundle,
+    encrypted like every other stick file. (A bare repo would leak the whole
+    brain as readable zlib on a plaintext volume.)
+
+    decrypt bundle → fetch → ff/merge → re-bundle → encrypt. Full history
+    each time — brains are small; correctness over cleverness. Same failure
+    domain as v1: brain.bundle.enc is NOT manifest-covered, so its failures
+    can't tear a generation. Merge conflicts abort and report, human resolves.
+    The plaintext bundle only ever exists in a host tempdir."""
+    if not (repo / ".git").exists():
+        report.warnings.append(f"brain: {repo} is not a git repo — skipped")
+        report.brain = "skipped"
+        return
+    if _git(repo, "status", "--porcelain").stdout.strip():
+        report.warnings.append(
+            "brain: working tree dirty — commit first, brain channel skipped")
+        report.brain = "skipped-dirty"
+        return
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    enc_path = stick / "brain" / "brain.bundle.enc"
+    if dry_run:
+        report.brain = "dry-run"
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        ahead, behind = 1, 0
+        if enc_path.is_file():
+            plain = Path(td) / "in.bundle"
+            plain.write_bytes(codec.decode(enc_path.read_bytes()))
+            fetch = _git(repo, "fetch", str(plain), branch)
+            if fetch.returncode != 0:
+                raise StickError(
+                    f"brain: fetch from stick bundle failed (branch "
+                    f"{branch!r}): {fetch.stderr.strip()}")
+            counts = _git(repo, "rev-list", "--left-right", "--count",
+                          "HEAD...FETCH_HEAD").stdout.split()
+            ahead, behind = (int(counts[0]), int(counts[1])) if len(counts) == 2 else (1, 0)
+        if behind:
+            merge = _git(repo, "merge", "--no-edit", "FETCH_HEAD")
+            if merge.returncode != 0:
+                _git(repo, "merge", "--abort")
+                report.brain = "CONFLICT"
+                report.conflicts.append(
+                    "brain: git merge conflict — resolve by hand "
+                    "(mnemo-cortex stick brain-clone a copy, or decrypt the "
+                    "bundle via a second sync after committing)")
+                return
+            report.brain = "merged"
+            ahead = 1   # the merge commit itself must travel
+        if ahead:
+            out = Path(td) / "out.bundle"
+            r = _git(repo, "bundle", "create", str(out), branch)
+            if r.returncode != 0:
+                raise StickError(
+                    f"brain: bundle create failed: {r.stderr.strip()}")
+            atomic_write_bytes(enc_path, codec.encode(out.read_bytes()))
+            if report.brain != "merged":
+                report.brain = "pushed"
+        else:
+            report.brain = "clean"
+
+
+def clone_brain_from_stick(stick: Path, data_dir: Path, dest: Path) -> Path:
+    """Bootstrap the brain repo on a second machine from an encrypted stick
+    (the encrypted twin of `git clone <stick>/brain/brain.git`)."""
+    codec = codec_for_stick(stick, data_dir)
+    if dest.exists() and any(dest.iterdir()):
+        raise StickError(f"Refusing to clone into non-empty {dest}")
+    bare = stick / "brain" / "brain.git"
+    if not codec.encrypted:
+        src = bare if bare.is_dir() else None
+        if src is None:
+            raise StickError("No brain on this stick (brain/brain.git missing).")
+        r = subprocess.run(["git", "clone", str(src), str(dest)],
+                           capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise StickError(f"brain clone failed: {r.stderr.strip()}")
+        return dest
+    enc_path = stick / "brain" / "brain.bundle.enc"
+    if not enc_path.is_file():
+        raise StickError("No brain on this stick (brain/brain.bundle.enc "
+                         "missing) — sync from the machine that has the repo first.")
+    with tempfile.TemporaryDirectory() as td:
+        plain = Path(td) / "brain.bundle"
+        plain.write_bytes(codec.decode(enc_path.read_bytes()))
+        # A bundle carries no HEAD — name the branch explicitly or the clone
+        # checks out nothing ("remote HEAD refers to nonexistent ref").
+        heads = subprocess.run(
+            ["git", "bundle", "list-heads", str(plain)],
+            capture_output=True, text=True, timeout=60,
+        ).stdout.split()
+        branches = [h.removeprefix("refs/heads/") for h in heads
+                    if h.startswith("refs/heads/")]
+        if not branches:
+            raise StickError("brain bundle on stick carries no branches.")
+        r = subprocess.run(
+            ["git", "clone", "-b", branches[0], str(plain), str(dest)],
+            capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise StickError(f"brain clone from bundle failed: {r.stderr.strip()}")
+    return dest
+
+
 # ── host config + the full sync ────────────────────────────────────────────
 
 def load_host_config(data_dir: Path) -> dict:
@@ -620,10 +1063,12 @@ def build_channels(data_dir: Path, stick: Path, tenants: list[str],
     return chans
 
 
-def _plan_need_bytes(channels: list[Channel], plan: SyncReport) -> int:
+def _plan_need_bytes(channels: list[Channel], plan: SyncReport,
+                     encrypted: bool = False) -> int:
     """Bytes the apply pass will write to the stick, from the plan report:
     host→stick copies, union-merged JSONLs, and conflict-loser backups
-    (counted at host-file size — conservative)."""
+    (counted at host-file size — conservative). Encrypted sticks add the
+    per-file header+tag overhead."""
     by_name = sorted(channels, key=lambda c: len(c.name), reverse=True)
     need = 0
     entries = (plan.to_stick + plan.merged_jsonl
@@ -634,6 +1079,8 @@ def _plan_need_bytes(channels: list[Channel], plan: SyncReport) -> int:
                 p = ch.host_dir / entry[len(ch.name) + 1:]
                 try:
                     need += p.stat().st_size
+                    if encrypted:
+                        need += ENC_OVERHEAD
                 except OSError:
                     pass
                 break
@@ -650,6 +1097,7 @@ def sync(
     pad: bool = True,
     force: bool = False,
     dry_run: bool = False,
+    codec=None,
 ) -> SyncReport:
     """The courier sync.
 
@@ -680,6 +1128,10 @@ def sync(
                          "(see load_host_config).")
     report = SyncReport()
     hid = host_id
+    # Codec first: an encrypted stick this host can't unlock refuses before
+    # anything else is even read.
+    if codec is None:
+        codec = codec_for_stick(stick, data_dir)
     manifest = verify_manifest(stick)
 
     lock = stick / "state" / "lock"
@@ -708,18 +1160,26 @@ def sync(
         plan = SyncReport()
         for ch in channels:
             sync_channel(ch, base_all.get(ch.name, {}), dict(manifest_files),
-                         plan, force=force, dry_run=True)
+                         plan, codec=codec, force=force, dry_run=True)
+        def _brain(rep: SyncReport, dry: bool = False) -> None:
+            assert brain_repo is not None   # callers gate on `if brain_repo`
+            if codec.encrypted:
+                sync_brain_bundle(Path(brain_repo), stick, codec, rep,
+                                  dry_run=dry)
+            else:
+                sync_brain(Path(brain_repo), stick, rep, dry_run=dry)
+
         if dry_run:
             if brain_repo:
-                sync_brain(Path(brain_repo), stick, plan, dry_run=True)
+                _brain(plan, dry=True)
             return plan
 
         # ── 3. brain (outside the manifest's failure domain) ──
         if brain_repo:
-            sync_brain(Path(brain_repo), stick, report)
+            _brain(report)
 
         # ── 4. free-space, sized from the plan ──
-        need = _plan_need_bytes(channels, plan)
+        need = _plan_need_bytes(channels, plan, encrypted=codec.encrypted)
         free = shutil.disk_usage(stick).free
         if need + FREE_SPACE_MARGIN > free:
             raise StickError(
@@ -732,7 +1192,7 @@ def sync(
         for ch in channels:
             new_base_all[ch.name] = sync_channel(
                 ch, base_all.get(ch.name, {}), manifest_files, report,
-                force=force,
+                codec=codec, force=force,
             )
 
         # ── 6. commit: fsync data to media, then inventory, manifest LAST ──

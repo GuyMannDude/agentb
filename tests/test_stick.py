@@ -465,3 +465,311 @@ def test_engine_requires_host_id(world):
     a, _, stick = world
     with pytest.raises(StickError, match="host_id"):
         sync(a, stick, host_id="", pad=False)
+
+
+# ── encryption (v1.1) ──────────────────────────────────────────────────────
+#
+# The custody contract: a lost stick must leak structure at most (paths,
+# sizes, counts) — never content. The engine merges in ciphertext space via
+# deterministic AES-SIV; these tests pin the contract from both ends: content
+# travels correctly WITH the key, and is refused/unreadable WITHOUT it.
+
+from agentb.stick import (          # noqa: E402
+    ENC_MAGIC,
+    encrypt_stick,
+    init_stick as _init_stick,
+    unlock_stick,
+)
+
+PASS = "correct horse battery staple"
+# Tiny scrypt for tests — production uses SCRYPT_PARAMS (n=2^15).
+FAST_KDF = {"name": "scrypt", "n": 1 << 12, "r": 8, "p": 1}
+
+
+@pytest.fixture
+def enc_world(tmp_path):
+    """host_a, host_b + an ENCRYPTED stick, both hosts enrolled."""
+    a, b, mount = tmp_path / "host_a", tmp_path / "host_b", tmp_path / "usb"
+    a.mkdir(); b.mkdir(); mount.mkdir()
+    stick = _init_stick(mount, passphrase=PASS, kdf_params=FAST_KDF)
+    unlock_stick(stick, a, PASS)
+    unlock_stick(stick, b, PASS)
+    return a, b, stick
+
+
+def _stick_bytes(stick: Path, rel: str) -> bytes:
+    return (stick / rel).read_bytes()
+
+
+def test_encrypted_roundtrip_and_opacity(enc_world):
+    """Content travels A→B intact; the stick itself holds only ciphertext."""
+    a, b, stick = enc_world
+    write_mem(a, "cc", "m1", "the secret plan")
+    courier(a, stick, "host-a")
+    raw = _stick_bytes(stick, "memories/cc/memory/m1.json")
+    assert raw.startswith(ENC_MAGIC)
+    assert b"the secret plan" not in raw
+    courier(b, stick, "host-b")
+    assert read_mem(b, "cc", "m1")["summary"] == "the secret plan"
+
+
+def test_encrypted_edit_delete_matrix(enc_world):
+    """The core merge semantics survive the codec: edit propagates, delete
+    propagates, deleted files stay dead."""
+    a, b, stick = enc_world
+    write_mem(a, "cc", "m1", "v1")
+    write_mem(a, "cc", "m2", "doomed")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+    write_mem(b, "cc", "m1", "v2 from B")
+    mem_path(b, "cc", "m2").unlink()
+    courier(b, stick, "host-b")
+    r = courier(a, stick, "host-a")
+    assert read_mem(a, "cc", "m1")["summary"] == "v2 from B"
+    assert not mem_path(a, "cc", "m2").exists()
+    assert "memories/cc/memory/m2.json" in r.deleted_on_host
+    # idempotent after
+    assert not courier(a, stick, "host-a").changed
+
+
+def test_encrypted_jsonl_union(enc_world):
+    a, b, stick = enc_world
+    append_traj(a, "cc", "deploy", "r1")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+    append_traj(a, "cc", "deploy", "r2-from-a")
+    append_traj(b, "cc", "deploy", "r3-from-b")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+    courier(a, stick, "host-a")
+    ids_a = {json.loads(l)["id"] for l in
+             traj_path(a, "cc", "deploy").read_text().splitlines()}
+    assert ids_a == {"r1", "r2-from-a", "r3-from-b"}
+    raw = _stick_bytes(stick, "memories/cc/trajectories/deploy.jsonl")
+    assert raw.startswith(ENC_MAGIC) and b"r3-from-b" not in raw
+
+
+def test_encrypted_conflict_loser_is_ciphertext(enc_world):
+    """Conflict machinery works through the codec, and the loser backup on
+    the stick is encrypted too — the conflict archive is part of custody."""
+    a, b, stick = enc_world
+    write_mem(a, "cc", "m1", "base")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+    write_mem(a, "cc", "m1", "A's edit")
+    write_mem(b, "cc", "m1", "B's edit")
+    courier(b, stick, "host-b")
+    r = courier(a, stick, "host-a")
+    assert any("both edited" in c for c in r.conflicts)
+    courier(b, stick, "host-b")
+    assert read_mem(a, "cc", "m1") == read_mem(b, "cc", "m1")
+    saved = [p for p in (stick / "state" / "conflicts").rglob("*") if p.is_file()]
+    assert saved, "loser backup missing"
+    for p in saved:
+        raw = p.read_bytes()
+        assert raw.startswith(ENC_MAGIC)
+        assert b"edit" not in raw
+
+
+@pytest.mark.parametrize("winner_side", ["host", "stick"])
+def test_encrypted_conflict_both_winner_directions(enc_world, winner_side):
+    """Force each both-edit winner via the mtime tie-break so BOTH loser-
+    backup paths run: losing host edit (encrypted on its way to the stick)
+    and losing stick copy (already ciphertext, straight copy)."""
+    import os
+    a, b, stick = enc_world
+    write_mem(a, "cc", "m1", "base")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+    write_mem(a, "cc", "m1", "A's edit")
+    write_mem(b, "cc", "m1", "B's edit")
+    courier(b, stick, "host-b")
+    hp = mem_path(a, "cc", "m1")
+    sp = stick / "memories/cc/memory/m1.json"
+    now = hp.stat().st_mtime
+    if winner_side == "host":
+        os.utime(hp, (now + 60, now + 60)); os.utime(sp, (now, now))
+    else:
+        os.utime(hp, (now, now)); os.utime(sp, (now + 60, now + 60))
+    r = courier(a, stick, "host-a")
+    assert any(f"{winner_side} wins" in c for c in r.conflicts)
+    expected = "A's edit" if winner_side == "host" else "B's edit"
+    assert read_mem(a, "cc", "m1")["summary"] == expected
+    saved = [p for p in (stick / "state" / "conflicts").rglob("*") if p.is_file()]
+    assert len(saved) == 1
+    raw = saved[0].read_bytes()
+    assert raw.startswith(ENC_MAGIC) and b"edit" not in raw
+
+
+def test_locked_host_refuses_loudly(enc_world, tmp_path):
+    """A host with no key must be refused BEFORE anything is read or written."""
+    a, _, stick = enc_world
+    write_mem(a, "cc", "m1", "secret")
+    courier(a, stick, "host-a")
+    stranger = tmp_path / "host_c"
+    stranger.mkdir()
+    with pytest.raises(StickError, match="unlock"):
+        courier(stranger, stick, "host-c")
+
+
+def test_wrong_passphrase_refused(enc_world, tmp_path):
+    _, _, stick = enc_world
+    stranger = tmp_path / "host_c"
+    stranger.mkdir()
+    with pytest.raises(StickError, match="Wrong passphrase"):
+        unlock_stick(stick, stranger, "not the passphrase")
+
+
+def test_tampered_ciphertext_fails_loud_even_after_repair(enc_world):
+    """Defense in depth: a flipped byte is caught by the manifest first;
+    if an attacker also 'repairs' the manifest, the AEAD tag still refuses
+    the decrypt — tampered content can never reach a host as truth."""
+    from agentb.stick import repair_manifest
+    a, b, stick = enc_world
+    write_mem(a, "cc", "m1", "authentic")
+    courier(a, stick, "host-a")
+    p = stick / "memories/cc/memory/m1.json"
+    raw = bytearray(p.read_bytes())
+    raw[-1] ^= 0xFF
+    p.write_bytes(bytes(raw))
+    with pytest.raises(StickError, match="TORN GENERATION"):
+        courier(b, stick, "host-b")
+    repair_manifest(stick)          # adversary laundering the tamper
+    with pytest.raises(StickError, match="DECRYPT FAILED"):
+        courier(b, stick, "host-b")
+    assert not mem_path(b, "cc", "m1").exists()
+
+
+def test_encrypted_brain_bundle_travels(enc_world, tmp_path):
+    """Brain courier on an encrypted stick: bundle travels, merges, and the
+    on-stick artifact is ciphertext (no readable bare repo)."""
+    from agentb.stick import clone_brain_from_stick
+    a, b, stick = enc_world
+    repo_a = _git_repo(tmp_path / "brain_a")
+    _git_commit(repo_a, "active.md", "task list v1")
+    r = sync(a, stick, host_id="host-a", pad=False, brain_repo=repo_a)
+    assert r.brain == "pushed"
+    assert (stick / "brain" / "brain.bundle.enc").read_bytes().startswith(ENC_MAGIC)
+    assert not (stick / "brain" / "brain.git").exists()
+    # Second machine bootstraps via brain-clone, commits, couriers back.
+    repo_b = clone_brain_from_stick(stick, b, tmp_path / "brain_b")
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        import subprocess
+        subprocess.run(["git", "-C", str(repo_b), "config", k, v],
+                       capture_output=True)
+    assert (repo_b / "active.md").read_text() == "task list v1"
+    _git_commit(repo_b, "active.md", "task list v2 from B")
+    r = sync(b, stick, host_id="host-b", pad=False, brain_repo=repo_b)
+    assert r.brain == "pushed"
+    r = sync(a, stick, host_id="host-a", pad=False, brain_repo=repo_a)
+    assert r.brain == "merged"
+    assert (repo_a / "active.md").read_text() == "task list v2 from B"
+
+
+def test_encrypted_brain_conflict_aborts(enc_world, tmp_path):
+    from agentb.stick import clone_brain_from_stick
+    a, b, stick = enc_world
+    repo_a = _git_repo(tmp_path / "brain_a")
+    _git_commit(repo_a, "active.md", "base")
+    sync(a, stick, host_id="host-a", pad=False, brain_repo=repo_a)
+    repo_b = clone_brain_from_stick(stick, b, tmp_path / "brain_b")
+    import subprocess
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(repo_b), "config", k, v],
+                       capture_output=True)
+    _git_commit(repo_a, "active.md", "A's version")
+    _git_commit(repo_b, "active.md", "B's version")
+    sync(b, stick, host_id="host-b", pad=False, brain_repo=repo_b)
+    r = sync(a, stick, host_id="host-a", pad=False, brain_repo=repo_a)
+    assert r.brain == "CONFLICT"
+    assert (repo_a / "active.md").read_text() == "A's version"
+
+
+def test_encrypt_migration_in_place(world):
+    """A live plaintext stick upgrades in place: contents go dark, both
+    hosts keep syncing, and a post-migration edit still travels."""
+    a, b, stick = world
+    write_mem(a, "cc", "m1", "carried in the clear era")
+    append_traj(a, "cc", "deploy", "r1")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+
+    encrypt_stick(stick, PASS, kdf_params=FAST_KDF)
+    unlock_stick(stick, a, PASS)
+    unlock_stick(stick, b, PASS)
+
+    raw = _stick_bytes(stick, "memories/cc/memory/m1.json")
+    assert raw.startswith(ENC_MAGIC) and b"clear era" not in raw
+    # Inventories were dropped; identical content must re-agree, not conflict.
+    r = courier(a, stick, "host-a")
+    assert not r.conflicts
+    r = courier(b, stick, "host-b")
+    assert not r.conflicts
+    assert read_mem(b, "cc", "m1")["summary"] == "carried in the clear era"
+    # And the courier still works end-to-end.
+    write_mem(a, "cc", "m2", "born after the migration")
+    courier(a, stick, "host-a")
+    courier(b, stick, "host-b")
+    assert read_mem(b, "cc", "m2")["summary"] == "born after the migration"
+
+
+def test_encrypt_migration_converts_brain(world, tmp_path):
+    """brain.git (plaintext zlib) must become an encrypted bundle, preserving
+    commits a host pushed that the other machine hasn't pulled yet."""
+    a, b, stick = world
+    repo_a = _git_repo(tmp_path / "brain_a")
+    _git_commit(repo_a, "active.md", "not yet pulled by B")
+    sync(a, stick, host_id="host-a", pad=False, brain_repo=repo_a)
+
+    encrypt_stick(stick, PASS, kdf_params=FAST_KDF)
+    unlock_stick(stick, b, PASS)
+    assert not (stick / "brain" / "brain.git").exists()
+    from agentb.stick import clone_brain_from_stick
+    repo_b = clone_brain_from_stick(stick, b, tmp_path / "brain_b")
+    assert (repo_b / "active.md").read_text() == "not yet pulled by B"
+
+
+def test_encrypt_migration_is_resumable(world):
+    """A crash mid-migration must be finishable with the same command +
+    passphrase, and refused with a different passphrase."""
+    a, _, stick = world
+    write_mem(a, "cc", "m1", "one")
+    write_mem(a, "cc", "m2", "two")
+    courier(a, stick, "host-a")
+    # Simulate the crash: enc block committed, only one file encrypted.
+    from agentb.stick import SivCodec, make_enc_block
+    enc, key = make_enc_block(PASS, FAST_KDF)
+    enc["state"] = "migrating"
+    passport = json.loads((stick / "passport.json").read_text())
+    passport["enc"] = enc
+    (stick / "passport.json").write_text(json.dumps(passport))
+    p1 = stick / "memories/cc/memory/m1.json"
+    p1.write_bytes(SivCodec(key).encode(p1.read_bytes()))
+    # Sync refuses the half-migrated stick.
+    with pytest.raises(StickError, match="interrupted"):
+        courier(a, stick, "host-a")
+    # Wrong passphrase can't resume (it would fork the key).
+    with pytest.raises(StickError, match="Wrong passphrase"):
+        encrypt_stick(stick, "different words", kdf_params=FAST_KDF)
+    # Same passphrase finishes the job.
+    encrypt_stick(stick, PASS, kdf_params=FAST_KDF)
+    unlock_stick(stick, a, PASS)
+    for rel in ("memories/cc/memory/m1.json", "memories/cc/memory/m2.json"):
+        assert _stick_bytes(stick, rel).startswith(ENC_MAGIC)
+    r = courier(a, stick, "host-a")
+    assert not r.conflicts
+    # Double-encrypt is refused.
+    with pytest.raises(StickError, match="already encrypted"):
+        encrypt_stick(stick, PASS, kdf_params=FAST_KDF)
+
+
+def test_repair_works_without_key(enc_world, tmp_path):
+    """Torn-generation recovery must not require the key — repair hashes
+    ciphertext. (A found stick can be made consistent but never read.)"""
+    from agentb.stick import repair_manifest
+    a, _, stick = enc_world
+    write_mem(a, "cc", "m1", "v1")
+    courier(a, stick, "host-a")
+    (stick / "memories/cc/memory/junk.json").write_bytes(b"torn write")
+    manifest = repair_manifest(stick)     # no key, no passphrase
+    assert "memories/cc/memory/junk.json" in manifest["files"]

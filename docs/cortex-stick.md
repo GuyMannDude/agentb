@@ -25,7 +25,10 @@ catches up. No cloud, no VPN, no account.
 
 ```bash
 # once, on any machine, with the stick mounted:
-mnemo-cortex stick init /media/you/USB
+mnemo-cortex stick init --encrypt /media/you/USB   # prompts for a passphrase
+
+# once, on the OTHER machine, with the stick in:
+mnemo-cortex stick unlock     # same passphrase — enrolls this host
 
 # then, at each desk, whenever the stick is in:
 mnemo-cortex stick sync
@@ -35,7 +38,47 @@ mnemo-cortex stick watch      # syncs on plug-in, re-syncs while present
 ```
 
 `stick status` shows what would travel in each direction without changing
-anything, plus when each machine last synced.
+anything, plus when each machine last synced and whether the stick is
+encrypted.
+
+Encrypted sticks need one extra package on each host:
+`pip install 'mnemo-cortex[stick-crypto]'`.
+
+## Encryption
+
+A plaintext stick is a notebook full of your AI's working memory — lose it
+and whoever finds it reads everything. Encrypt it:
+
+- **What's protected.** Every truth file on the stick — memories,
+  trajectories, pad files, conflict backups — is AES-256-SIV ciphertext,
+  and the brain travels as an encrypted git bundle instead of a readable
+  repo. A found stick leaks *structure* (file names, sizes, counts, which
+  agents exist) but never content.
+- **Where the key lives.** On each host, at `{data_dir}/stick-keys/`
+  (0600) — **never on the stick**. It derives from your passphrase
+  (scrypt); the stick's passport holds only the salt and a fingerprint, so
+  a wrong passphrase fails loud instead of writing garbage. Enroll each
+  host once with `stick unlock`; after that sync and watch run unattended.
+- **Losing the passphrase** loses the courier, not your data — both
+  machines keep their full installs. Re-init a fresh stick.
+- **Already have a plaintext stick?** `mnemo-cortex stick encrypt` upgrades
+  it in place (resumable if interrupted — rerun with the same passphrase).
+  One honest caveat: replaced plaintext can linger in the stick's *free
+  space* (flash wear leveling defeats targeted scrubbing) — if the
+  plaintext era matters, zero-fill the free space afterwards, e.g. fill the
+  stick with a junk file and delete it.
+- **Tampering** (or bit rot) is caught twice: the manifest hash check
+  refuses the generation, and even after a `stick repair` the AEAD tag
+  refuses the decrypt. Tampered content can never reach a host as truth.
+- Repair works *without* the key — anyone can make a torn stick consistent
+  again; only key-holders can read it.
+- `stick brain-clone <dest>` bootstraps the brain repo on a new machine
+  from the encrypted bundle.
+
+Encryption is in-tool rather than volume-level (BitLocker/VeraCrypt/LUKS)
+so it behaves identically on Windows, macOS, and Linux with no drivers, no
+admin rights, and no per-plug-in mount step — but nothing stops you from
+running the stick on an encrypted volume *as well*.
 
 ## How it stays safe
 
@@ -65,13 +108,8 @@ anything, plus when each machine last synced.
   store (a wiped or replaced machine), it refuses and explains, and only
   proceeds with `--force`.
 
-## What v1 does not do
+## What it does not do (yet)
 
-- **No encryption.** The stick is plaintext by design in v1 — contents are
-  auditable by eye, and that cuts both ways: anyone holding the stick can
-  read everything on it. Treat it like a notebook full of your working
-  memory. (Filesystem-level encryption — BitLocker To Go, VeraCrypt, LUKS —
-  works fine underneath; the stick doesn't care what the volume is made of.)
 - **No session logs.** Raw session capture stays on each machine; the
   dreamer digests locally.
 - **No facts table sync** (`facts.sqlite`) yet.
@@ -82,13 +120,16 @@ anything, plus when each machine last synced.
 
 ```
 <mount>/cortex/
-  passport.json        which stick this is, which machines it has met
+  passport.json        which stick this is, which machines it has met,
+                       encryption salt + fingerprint (never the key)
   manifest.json        per-file SHA-256 of the current generation
   memories/<agent>/    memory JSONs + trajectory JSONLs, per agent
-  brain/brain.git      bare git repo (if you courier a brain)
+  brain/brain.git      bare git repo (plaintext stick)
+  brain/brain.bundle.enc   encrypted git bundle (encrypted stick)
   pad/                 yours — drag anything
   state/               per-machine inventories, conflict archive, lock
 ```
 
-Everything is a plain file. If you ever stop using the tool, your data is
-sitting right there, readable.
+Everything is a plain file. On a plaintext stick your data is sitting right
+there, readable; on an encrypted stick the same files are there, dark
+without the passphrase.

@@ -1364,16 +1364,32 @@ def stick():
     no VPN — plug in, sync, carry, plug in.
 
     \b
-      mnemo-cortex stick init /media/you/USB      # provision a stick
+      mnemo-cortex stick init --encrypt /media/you/USB   # provision, encrypted
+      mnemo-cortex stick unlock                   # enroll another host (passphrase)
       mnemo-cortex stick sync                     # locate the stick and sync
       mnemo-cortex stick status                   # what would sync, per side
       mnemo-cortex stick watch                    # sync automatically on plug-in
+      mnemo-cortex stick encrypt                  # upgrade a plaintext stick
 
     \b
-    v1 syncs PLAINTEXT. Anyone holding the stick can read everything on it —
-    treat it like a notebook full of your working memory.
+    Encrypt your stick (AES-256-SIV, passphrase-derived key). A plaintext
+    stick is a notebook full of your working memory — anyone holding it can
+    read everything. The key lives on each host, never on the stick.
     """
     pass
+
+
+def _stick_passphrase(passphrase_file, *, confirm: bool) -> str:
+    """Passphrase from --passphrase-file (first line; for automation) or an
+    interactive hidden prompt."""
+    if passphrase_file:
+        text = Path(passphrase_file).read_text().splitlines()
+        if not text or not text[0]:
+            console.print(f"[red]Empty passphrase file: {passphrase_file}[/]")
+            raise SystemExit(1)
+        return text[0]
+    return click.prompt("Stick passphrase", hide_input=True,
+                        confirmation_prompt=confirm)
 
 
 def _stick_locate(mount, host_cfg):
@@ -1457,17 +1473,132 @@ def _stick_run_sync(mount, tenants, brain, force, dry_run):
 @stick.command("init")
 @click.argument("mount", type=click.Path(exists=True, file_okay=False))
 @click.option("--name", default="cortex-stick", help="Human name for this stick.")
-def stick_init_cmd(mount, name):
+@click.option("--encrypt", is_flag=True,
+              help="Provision encrypted (AES-256-SIV; prompts for a passphrase).")
+@click.option("--passphrase-file", default=None, type=click.Path(exists=True),
+              help="Read the passphrase from a file's first line (automation).")
+def stick_init_cmd(mount, name, encrypt, passphrase_file):
     """Provision a Cortex Stick at MOUNT (creates <mount>/cortex/)."""
-    from agentb.stick import StickError, init_stick
+    from agentb.config import load_config
+    from agentb.stick import StickError, init_stick, unlock_stick
+    passphrase = None
+    if encrypt or passphrase_file:
+        passphrase = _stick_passphrase(passphrase_file, confirm=True)
     try:
-        stick_dir = init_stick(Path(mount), name=name)
+        stick_dir = init_stick(Path(mount), name=name, passphrase=passphrase)
+        if passphrase is not None:
+            unlock_stick(stick_dir, Path(load_config().data_dir), passphrase)
     except StickError as e:
         console.print(f"[red]{e}[/]")
         raise SystemExit(1)
     console.print(f"[green]✓[/] Provisioned Cortex Stick at [bold]{stick_dir}[/]")
-    console.print("[dim]v1 is plaintext — the stick holds readable memory. "
-                  "Now run: mnemo-cortex stick sync[/]")
+    if passphrase is not None:
+        console.print(
+            "[green]✓ encrypted[/] — this host is enrolled. On the other "
+            "machine, plug in and run: mnemo-cortex stick unlock")
+        console.print("[dim]The key never touches the stick. Losing the "
+                      "passphrase = losing the courier (your machines keep "
+                      "their data).[/]")
+    else:
+        console.print("[yellow]⚠ PLAINTEXT stick[/] — anyone holding it can "
+                      "read everything on it. Recommended: "
+                      "mnemo-cortex stick encrypt")
+    console.print("[dim]Now run: mnemo-cortex stick sync[/]")
+
+
+@stick.command("unlock")
+@click.argument("mount", required=False)
+@click.option("--passphrase-file", default=None, type=click.Path(exists=True),
+              help="Read the passphrase from a file's first line (automation).")
+def stick_unlock_cmd(mount, passphrase_file):
+    """Enroll THIS host on an encrypted stick (one time per host).
+
+    Prompts for the stick passphrase, derives the key, verifies it against
+    the stick's passport, and stores it under {data_dir}/stick-keys/ (0600).
+    After that, sync/watch on this host need no passphrase.
+    """
+    from agentb.config import load_config
+    from agentb.stick import StickError, load_host_config, unlock_stick
+    data_dir = Path(load_config().data_dir)
+    host_cfg = load_host_config(data_dir)
+    stick_dir = _stick_locate(mount, host_cfg)
+    if not stick_dir:
+        raise SystemExit(1)
+    passphrase = _stick_passphrase(passphrase_file, confirm=False)
+    try:
+        key_path = unlock_stick(stick_dir, data_dir, passphrase)
+    except StickError as e:
+        console.print(f"[red]{e}[/]")
+        raise SystemExit(1)
+    console.print(f"[green]✓ unlocked[/] — key stored at [bold]{key_path}[/]. "
+                  "Now run: mnemo-cortex stick sync")
+
+
+@stick.command("encrypt")
+@click.argument("mount", required=False)
+@click.option("--passphrase-file", default=None, type=click.Path(exists=True),
+              help="Read the passphrase from a file's first line (automation).")
+def stick_encrypt_cmd(mount, passphrase_file):
+    """Upgrade a PLAINTEXT stick to encrypted, in place.
+
+    Every truth file on the stick (memories, trajectories, pad, conflict
+    archive) is rewritten as AES-256-SIV ciphertext; a couriered brain
+    converts from a bare repo to an encrypted git bundle. Interrupted runs
+    are resumable — run the same command with the same passphrase.
+
+    Other hosts then enroll once with `stick unlock`. Note: replaced
+    plaintext may linger in the stick's free space (flash wear leveling) —
+    zero-fill the free space if the history matters.
+    """
+    from agentb.config import load_config
+    from agentb.stick import (StickError, encrypt_stick, load_host_config,
+                              save_stick_key)
+    data_dir = Path(load_config().data_dir)
+    host_cfg = load_host_config(data_dir)
+    stick_dir = _stick_locate(mount, host_cfg)
+    if not stick_dir:
+        raise SystemExit(1)
+    passphrase = _stick_passphrase(passphrase_file, confirm=True)
+    try:
+        result = encrypt_stick(stick_dir, passphrase)
+        import json as _json
+        stick_id = _json.loads(
+            (stick_dir / "passport.json").read_text()).get("stick_id", "")
+        key_path = save_stick_key(data_dir, stick_id, result["key"])
+    except StickError as e:
+        console.print(f"[bold red]ENCRYPT REFUSED[/] {e}")
+        raise SystemExit(1)
+    console.print(
+        f"[green]✓ encrypted[/] {result['files_encrypted']} file(s) on "
+        f"[bold]{stick_dir}[/] — this host's key stored at {key_path}.")
+    console.print("[dim]On the other machine: mnemo-cortex stick unlock. "
+                  "Then run a sync here to refresh inventories.[/]")
+
+
+@stick.command("brain-clone")
+@click.argument("dest", type=click.Path())
+@click.argument("mount", required=False)
+def stick_brain_clone_cmd(dest, mount):
+    """Bootstrap the couriered brain repo onto this machine at DEST.
+
+    The encrypted twin of `git clone <stick>/brain/brain.git` — decrypts the
+    stick's brain bundle in a temp dir and clones from it. Works on
+    plaintext sticks too (clones the bare repo directly).
+    """
+    from agentb.config import load_config
+    from agentb.stick import StickError, clone_brain_from_stick, load_host_config
+    data_dir = Path(load_config().data_dir)
+    host_cfg = load_host_config(data_dir)
+    stick_dir = _stick_locate(mount, host_cfg)
+    if not stick_dir:
+        raise SystemExit(1)
+    try:
+        cloned = clone_brain_from_stick(stick_dir, data_dir, Path(dest))
+    except StickError as e:
+        console.print(f"[red]{e}[/]")
+        raise SystemExit(1)
+    console.print(f"[green]✓[/] Brain cloned to [bold]{cloned}[/] — set it as "
+                  f"brain_repo in {data_dir / 'stick.json'} to courier it.")
 
 
 @stick.command("sync")
@@ -1501,6 +1632,15 @@ def stick_status_cmd(mount):
     console.print(f"[bold]{passport.get('name')}[/] "
                   f"(id {passport.get('stick_id')}, gen "
                   f"{_json.loads((stick_dir / 'manifest.json').read_text()).get('generation')})")
+    enc = passport.get("enc")
+    if enc:
+        state = enc.get("state", "?")
+        color = "green" if state == "ready" else "red"
+        console.print(f"  [{color}]🔒 encrypted[/] ({enc.get('alg')}, "
+                      f"state {state})")
+    else:
+        console.print("  [yellow]⚠ plaintext[/] — consider: "
+                      "mnemo-cortex stick encrypt")
     for hid, meta in sorted(passport.get("hosts", {}).items()):
         age_h = (time.time() - meta.get("last_sync", 0)) / 3600
         console.print(f"  host [bold]{hid}[/] — last sync {age_h:.1f}h ago "

@@ -9,3 +9,10 @@ def atomic_write_text(path: Path, text: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text)
     os.replace(tmp, path)
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Bytes twin of atomic_write_text — same tmp + os.replace guarantee."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
