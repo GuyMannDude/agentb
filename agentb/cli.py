@@ -1351,6 +1351,222 @@ def migrate_vec_backfill_cmd(agents, all_agents):
     migrate_vec_backfill(agent_ids, config=config)
 
 
+# ─────────────────────────────────────────────
+# Cortex Stick — USB courier between installs
+# ─────────────────────────────────────────────
+
+@main.group()
+def stick():
+    """Cortex Stick — USB courier sync between two full Mnemo installs.
+
+    Both machines run full Mnemo; the stick carries the delta between them:
+    memories, trajectories, the brain git repo, and a project pad. No cloud,
+    no VPN — plug in, sync, carry, plug in.
+
+    \b
+      mnemo-cortex stick init /media/you/USB      # provision a stick
+      mnemo-cortex stick sync                     # locate the stick and sync
+      mnemo-cortex stick status                   # what would sync, per side
+      mnemo-cortex stick watch                    # sync automatically on plug-in
+
+    \b
+    v1 syncs PLAINTEXT. Anyone holding the stick can read everything on it —
+    treat it like a notebook full of your working memory.
+    """
+    pass
+
+
+def _stick_locate(mount, host_cfg):
+    from agentb.stick import find_stick, STICK_DIRNAME
+    if mount:
+        p = Path(mount)
+        cand = p if p.name == STICK_DIRNAME else p / STICK_DIRNAME
+        if (cand / "passport.json").is_file():
+            return cand
+        console.print(f"[red]No Cortex Stick at {p} (missing passport.json).[/]")
+        return None
+    found = find_stick(host_cfg.get("mount_roots") or None)
+    if not found:
+        console.print("[red]No Cortex Stick found under any mount root. "
+                      "Plug it in, or pass the mount path explicitly.[/]")
+    return found
+
+
+def _stick_report(report) -> None:
+    rows = [
+        ("→ stick", report.to_stick), ("→ host", report.to_host),
+        ("deleted on stick", report.deleted_on_stick),
+        ("deleted on host", report.deleted_on_host),
+        ("union-merged", report.merged_jsonl),
+    ]
+    for label, items in rows:
+        if items:
+            console.print(f"  [bold]{label}[/]: {len(items)}")
+            for it in items[:8]:
+                console.print(f"    [dim]{it}[/]")
+            if len(items) > 8:
+                console.print(f"    [dim]… and {len(items) - 8} more[/]")
+    console.print(f"  [bold]brain[/]: {report.brain}")
+    for w in report.warnings:
+        console.print(f"  [yellow]⚠ {w}[/]")
+    for c in report.conflicts:
+        console.print(f"  [bold red]⚡ CONFLICT[/] {c}")
+    if not report.changed and not report.warnings:
+        console.print("  [dim]nothing to carry — already in sync[/]")
+
+
+def _stick_run_sync(mount, tenants, brain, force, dry_run):
+    """Shared by `stick sync` and `stick watch`. Returns True on success."""
+    from agentb.config import load_config
+    from agentb.stick import StickError, load_host_config, sync as stick_sync_run
+
+    config = load_config()
+    data_dir = Path(config.data_dir)
+    host_cfg = load_host_config(data_dir)
+    stick_dir = _stick_locate(mount, host_cfg)
+    if not stick_dir:
+        return False
+    brain_repo = brain or host_cfg.get("brain_repo")
+    try:
+        report = stick_sync_run(
+            data_dir, stick_dir,
+            tenants=list(tenants) or host_cfg.get("tenants"),
+            brain_repo=Path(brain_repo).expanduser() if brain_repo else None,
+            pad=host_cfg.get("pad", True),
+            host_id=host_cfg.get("host_id"),
+            force=force, dry_run=dry_run,
+        )
+    except StickError as e:
+        console.print(f"[bold red]SYNC REFUSED[/] {e}")
+        return False
+    verb = "[yellow]DRY RUN[/]" if dry_run else "[bold]Synced[/]"
+    console.print(f"{verb} {stick_dir}")
+    _stick_report(report)
+    imported = [p for p in report.to_host if "/memory/" in p]
+    if imported and not dry_run:
+        console.print(
+            f"  [dim]{len(imported)} new memories imported — recallable now "
+            "via disk truth; embeddings catch up on the server's next "
+            "backfill (or run: mnemo-cortex migrate reindex).[/]"
+        )
+    if not dry_run:
+        console.print("  [green]✓ safe to remove[/] (hashes readback-verified)")
+    return True
+
+
+@stick.command("init")
+@click.argument("mount", type=click.Path(exists=True, file_okay=False))
+@click.option("--name", default="cortex-stick", help="Human name for this stick.")
+def stick_init_cmd(mount, name):
+    """Provision a Cortex Stick at MOUNT (creates <mount>/cortex/)."""
+    from agentb.stick import StickError, init_stick
+    try:
+        stick_dir = init_stick(Path(mount), name=name)
+    except StickError as e:
+        console.print(f"[red]{e}[/]")
+        raise SystemExit(1)
+    console.print(f"[green]✓[/] Provisioned Cortex Stick at [bold]{stick_dir}[/]")
+    console.print("[dim]v1 is plaintext — the stick holds readable memory. "
+                  "Now run: mnemo-cortex stick sync[/]")
+
+
+@stick.command("sync")
+@click.argument("mount", required=False)
+@click.option("--agent", "-a", "tenants", multiple=True,
+              help="Tenant to sync (repeatable; default: all).")
+@click.option("--brain", default=None,
+              help="Brain git repo path (or set brain_repo in {data_dir}/stick.json).")
+@click.option("--force", is_flag=True,
+              help="Override the mass-delete guard. Read the refusal first.")
+@click.option("--dry-run", is_flag=True, help="Show the delta, change nothing.")
+def stick_sync_cmd(mount, tenants, brain, force, dry_run):
+    """Bidirectional courier sync with the stick (auto-located if no MOUNT)."""
+    if not _stick_run_sync(mount, tenants, brain, force, dry_run):
+        raise SystemExit(1)
+
+
+@stick.command("status")
+@click.argument("mount", required=False)
+def stick_status_cmd(mount):
+    """Pending delta in both directions (a dry-run sync) + stick passport."""
+    from agentb.config import load_config
+    from agentb.stick import load_host_config
+    config = load_config()
+    host_cfg = load_host_config(Path(config.data_dir))
+    stick_dir = _stick_locate(mount, host_cfg)
+    if not stick_dir:
+        raise SystemExit(1)
+    import json as _json
+    passport = _json.loads((stick_dir / "passport.json").read_text())
+    console.print(f"[bold]{passport.get('name')}[/] "
+                  f"(id {passport.get('stick_id')}, gen "
+                  f"{_json.loads((stick_dir / 'manifest.json').read_text()).get('generation')})")
+    for hid, meta in sorted(passport.get("hosts", {}).items()):
+        age_h = (time.time() - meta.get("last_sync", 0)) / 3600
+        console.print(f"  host [bold]{hid}[/] — last sync {age_h:.1f}h ago "
+                      f"(gen {meta.get('generation')})")
+    console.print("[bold]Pending delta:[/]")
+    _stick_run_sync(mount, (), None, False, True)
+
+
+@stick.command("repair")
+@click.argument("mount", required=False)
+def stick_repair_cmd(mount):
+    """Rebuild the stick's manifest from its actual contents.
+
+    The escape hatch after a mid-sync yank ("TORN GENERATION" refusal):
+    accepts what's on the stick as truth, re-hashes everything, clears a
+    stale lock. The next sync 3-way-merges from the repaired state — nothing
+    on either machine is deleted by the repair itself.
+    """
+    from agentb.config import load_config
+    from agentb.stick import StickError, load_host_config, repair_manifest
+    host_cfg = load_host_config(Path(load_config().data_dir))
+    stick_dir = _stick_locate(mount, host_cfg)
+    if not stick_dir:
+        raise SystemExit(1)
+    try:
+        manifest = repair_manifest(stick_dir)
+    except StickError as e:
+        console.print(f"[red]{e}[/]")
+        raise SystemExit(1)
+    console.print(f"[green]✓ repaired[/] — manifest rebuilt over "
+                  f"{len(manifest['files'])} file(s), "
+                  f"now generation {manifest['generation']}. "
+                  "Run: mnemo-cortex stick sync")
+
+
+@stick.command("watch")
+@click.option("--poll", default=15, help="Seconds between stick probes (default 15).")
+@click.option("--interval", default=600,
+              help="Re-sync period while the stick stays plugged in (default 600).")
+def stick_watch_cmd(poll, interval):
+    """Foreground watcher: sync on plug-in, re-sync while present.
+
+    Run it under a systemd user unit / Task Scheduler for background courier
+    behavior — plug in, it syncs; pull out, it waits for the next plug-in.
+    """
+    from agentb.config import load_config
+    from agentb.stick import find_stick, load_host_config
+    host_cfg = load_host_config(Path(load_config().data_dir))
+    console.print(f"[bold]Cortex Stick watch[/] — probing every {poll}s "
+                  f"(Ctrl-C to stop)")
+    present = False
+    last_sync = 0.0
+    while True:
+        stick_dir = find_stick(host_cfg.get("mount_roots") or None)
+        if stick_dir and (not present or time.time() - last_sync >= interval):
+            console.print(f"[dim]{time.strftime('%H:%M:%S')}[/] "
+                          f"stick {'present' if present else 'detected'} — syncing")
+            _stick_run_sync(str(stick_dir), (), None, False, False)
+            last_sync = time.time()
+        if not stick_dir and present:
+            console.print(f"[dim]{time.strftime('%H:%M:%S')}[/] "
+                          "stick removed — waiting for next plug-in")
+        present = bool(stick_dir)
+        time.sleep(poll)
+
+
 @main.command("muse")
 @click.option("--agent", "-a", "agents", multiple=True, required=True, help="Agent id (repeatable).")
 @click.option("--limit", default=30, help="Session logs to read per agent (default 30).")

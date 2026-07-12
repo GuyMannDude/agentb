@@ -1,6 +1,44 @@
 # Changelog
 
-## Claude Desktop install guides complete: Linux twin ships (2026-07-09) — docs, no server change (server stays v4.9.16)
+## v4.10.0 — Cortex Stick: USB courier sync between two Mnemo installs (2026-07-12)
+
+**Problem.** A person who works from two desks (home + work) has two Mnemo
+installs that drift apart — memories saved at one desk don't exist at the
+other, and the only fixes were cloud sync or a VPN, both of which put your
+AI's working memory on somebody else's wire.
+
+**Fix.** `mnemo-cortex stick` — a USB stick as a *courier* between two full
+installs. The stick is not a server: it carries the delta (memory JSONs,
+trajectory JSONLs, an optional brain git repo via a bare repo on the stick,
+and a free-form `pad/` for dragging in-flight work between desks). Plug in →
+sync → carry → plug in. No cloud, no VPN.
+
+Engine (`agentb/stick.py`): state-based 3-way merge with per-host base
+inventories on the stick — deletes propagate with **no tombstones and no
+record-schema changes**; trajectory JSONLs union-merge by record id so
+append-only truth never loses a row; both-edit file conflicts resolve
+deterministically with the loser preserved under `state/conflicts/`; edit
+beats delete. Safety rails: per-file SHA-256 manifest written LAST (torn
+generation = sync refused), readback-verified "safe to remove", free-space
+preflight, mass-delete guard (a wiped store can't massacre the other
+machine without `--force`), stick lock. Only truth files cross — vec
+indexes and sidecars are derived geometry, rebuilt per-host. Host identity
+is store-scoped (`{data_dir}/stick.json`, random-suffixed), not
+hostname-scoped: two desks named "ubuntu" — or a reinstall — stay distinct
+sync peers instead of reading each other's base as deletions.
+
+CLI: `stick init` / `stick sync` / `stick status` / `stick repair` /
+`stick watch` (plug-in-triggered foreground watcher). v1 is plaintext by
+design and says so at init and in `--help`.
+
+Post-build adversarial review hardened the transactional envelope: a sync
+now runs a **plan pass before any mutation** (every guard fires before a
+byte moves, so a refusal literally changes nothing), the brain git sync
+runs outside the manifest's failure domain, free-space preflight is sized
+from the plan (including merges and conflict backups), the conflict-loser
+backup gets the same verified tmp+rename write as every truth file, and
+`stick repair` gives torn generations an in-tool recovery path. 25 tests
+cover the merge matrix and the failure envelope end to end.
 
 **Problem.** The Windows install guide shipped earlier today with no Linux
 counterpart — half the Claude Desktop audience had only the README's terse
