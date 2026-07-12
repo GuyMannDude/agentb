@@ -1423,6 +1423,9 @@ def _stick_report(report) -> None:
             if len(items) > 8:
                 console.print(f"    [dim]… and {len(items) - 8} more[/]")
     console.print(f"  [bold]brain[/]: {report.brain}")
+    if report.facts_to_host or report.facts_to_stick:
+        console.print(f"  [bold]facts[/]: {report.facts_to_host} → host, "
+                      f"{report.facts_to_stick} → stick")
     for w in report.warnings:
         console.print(f"  [yellow]⚠ {w}[/]")
     for c in report.conflicts:
@@ -1449,6 +1452,7 @@ def _stick_run_sync(mount, tenants, brain, force, dry_run):
             tenants=list(tenants) or host_cfg.get("tenants"),
             brain_repo=Path(brain_repo).expanduser() if brain_repo else None,
             pad=host_cfg.get("pad", True),
+            facts=host_cfg.get("facts", True),
             host_id=host_cfg.get("host_id"),
             force=force, dry_run=dry_run,
         )

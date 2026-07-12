@@ -409,6 +409,8 @@ def repair_manifest(stick: Path) -> dict:
                     add(f"memories/{tenant.name}/{sub}/{rel}", sha)
     for rel, sha in _scan(stick / "pad", "**/*").items():
         add(f"pad/{rel}", sha)
+    for rel, sha in _scan(stick / "facts", "**/*").items():
+        add(f"facts/{rel}", sha)
 
     manifest["files"] = files
     manifest["generation"] = manifest.get("generation", 0) + 1
@@ -462,7 +464,8 @@ def encrypt_stick(stick: Path, passphrase: str,
         _write_json(stick / "passport.json", passport)
 
     count = 0
-    roots = (stick / "memories", stick / "pad", stick / "state" / "conflicts")
+    roots = (stick / "memories", stick / "pad", stick / "facts",
+             stick / "state" / "conflicts")
     for root in roots:
         if not root.is_dir():
             continue
@@ -531,12 +534,15 @@ class SyncReport:
     conflicts: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     brain: str = "skipped"
+    facts_to_host: int = 0
+    facts_to_stick: int = 0
 
     @property
     def changed(self) -> bool:
         return bool(self.to_stick or self.to_host or self.deleted_on_stick
                     or self.deleted_on_host or self.merged_jsonl
-                    or self.conflicts or self.brain in ("pushed", "merged"))
+                    or self.conflicts or self.brain in ("pushed", "merged")
+                    or self.facts_to_host or self.facts_to_stick)
 
 
 def _scan(root: Path, pattern: str, transform=None) -> dict[str, str]:
@@ -1016,6 +1022,7 @@ def load_host_config(data_dir: Path) -> dict:
     cfg.setdefault("tenants", None)       # None = every agent dir with memory/
     cfg.setdefault("mount_roots", [])
     cfg.setdefault("pad", True)
+    cfg.setdefault("facts", True)
     return cfg
 
 
@@ -1095,6 +1102,7 @@ def sync(
     tenants: Optional[list[str]] = None,
     brain_repo: Optional[Path] = None,
     pad: bool = True,
+    facts: bool = True,
     force: bool = False,
     dry_run: bool = False,
     codec=None,
@@ -1169,6 +1177,18 @@ def sync(
             else:
                 sync_brain(Path(brain_repo), stick, rep, dry_run=dry)
 
+        facts_bytes = 0
+
+        def _facts(rep: SyncReport, files: dict, dry: bool = False) -> None:
+            nonlocal facts_bytes
+            from agentb.stick_facts import sync_facts
+            stick_id = _load_json(stick / "passport.json", {}).get("stick_id", "")
+            rep.facts_to_host, rep.facts_to_stick, _, facts_bytes = sync_facts(
+                data_dir / "facts.sqlite", stick, codec, stick_id, files,
+                dry_run=dry)
+
+        if facts:                        # plan the facts merge dry, like channels
+            _facts(plan, dict(manifest_files), dry=True)
         if dry_run:
             if brain_repo:
                 _brain(plan, dry=True)
@@ -1178,8 +1198,10 @@ def sync(
         if brain_repo:
             _brain(report)
 
-        # ── 4. free-space, sized from the plan ──
+        # ── 4. free-space, sized from the plan (incl. the facts payload) ──
         need = _plan_need_bytes(channels, plan, encrypted=codec.encrypted)
+        if facts and (plan.facts_to_stick or plan.facts_to_host):
+            need += facts_bytes
         free = shutil.disk_usage(stick).free
         if need + FREE_SPACE_MARGIN > free:
             raise StickError(
@@ -1194,6 +1216,11 @@ def sync(
                 ch, base_all.get(ch.name, {}), manifest_files, report,
                 codec=codec, force=force,
             )
+
+        # facts ride inside the manifest commit like any truth file; the
+        # row-wise ladder merge needs no base inventory (see stick_facts.py)
+        if facts:
+            _facts(report, manifest_files)
 
         # ── 6. commit: fsync data to media, then inventory, manifest LAST ──
         if hasattr(os, "sync"):

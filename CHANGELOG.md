@@ -1,5 +1,41 @@
 # Changelog
 
+## v4.12.0 — Cortex Stick facts channel: the last truth store travels (2026-07-12)
+
+**Problem.** The courier carried memories, trajectories, the brain, and the
+pad — but not the structured Facts store. `facts.sqlite` is rows, not
+files, so it couldn't ride the file-unit 3-way merge, and facts have their
+own semantics (a confidence ladder, explicit demotion) that a hash
+comparison can't honor. Two desks meant two drifting facts tables.
+
+**Fix.** A dedicated facts channel (`agentb/stick_facts.py`). The stick
+carries a canonical JSONL export of the facts table (encrypted like every
+other stick file, manifest-covered); each host merges **row-wise** under
+rules that mirror the FactsStore promotion ladder:
+
+- same value on both sides → reassert: max confidence, newest timestamp
+- a **newer** `confidence='false'` row wins regardless of value — `demote()`
+  keeps the value and flips the state, so demotion is judged before value
+  equality (value-first would resurrect demoted facts as verified)
+- otherwise the higher confidence rank survives — verified beats a *newer*
+  high_probability contradiction, across machines exactly as within one
+- equal rank → newer `last_updated`, then a deterministic value tie-break
+
+Facts are never deleted (demotion IS the tombstone state), so there is no
+delete propagation and no base inventory: the rules form a total order per
+(entity, attribute), making the merge commutative and idempotent — the
+stick just holds the merged set. Every courier-applied change writes a
+`fact_history` audit row (`changed_by='stick:<id>'`); history itself stays
+local by design. Import preserves winners' timestamps via direct upsert
+(going through `save()` would re-stamp clocks and re-run the ladder,
+rejecting legitimate demotions). Settled syncs write nothing and don't
+version-churn the manifest.
+
+On by default when either side has facts; `"facts": false` in
+`{data_dir}/stick.json` opts out. 13 new tests including cross-machine
+ladder holds, demotion propagation vs. stale-demotion loss, audit rows,
+tamper refusal, and merge commutativity.
+
 ## v4.11.1 — Windows: JSONL union-merge died on '→' (2026-07-12)
 
 **Problem.** First real encrypted sync on a Windows host crashed mid-apply

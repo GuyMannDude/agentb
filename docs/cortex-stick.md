@@ -114,11 +114,23 @@ running the stick on an encrypted volume *as well*.
   store (a wiped or replaced machine), it refuses and explains, and only
   proceeds with `--force`.
 
+## Facts travel too
+
+The structured Facts store (`facts.sqlite`) syncs as its own channel: the
+stick carries a canonical JSONL export and each host merges row-wise under
+the same promotion-ladder rules the store enforces locally — a verified
+fact survives a newer lower-confidence contradiction from the other desk,
+a fresh demotion ("this is wrong") propagates, and a stale demotion loses
+to a later re-establishment. Every change the courier applies is recorded
+in the fact history with `changed_by='stick:<id>'`. Opt out with
+`"facts": false` in `{data_dir}/stick.json`.
+
 ## What it does not do (yet)
 
 - **No session logs.** Raw session capture stays on each machine; the
   dreamer digests locally.
-- **No facts table sync** (`facts.sqlite`) yet.
+- **No fact-history sync** — the audit log stays local by design; each
+  host's history describes what happened there.
 - **Two-desk, one-human.** Multi-user shared lanes are designed for
   (the merge machinery is already order-safe) but not shipped.
 
@@ -132,6 +144,7 @@ running the stick on an encrypted volume *as well*.
   memories/<agent>/    memory JSONs + trajectory JSONLs, per agent
   brain/brain.git      bare git repo (plaintext stick)
   brain/brain.bundle.enc   encrypted git bundle (encrypted stick)
+  facts/facts.jsonl    merged Facts-store export
   pad/                 yours — drag anything
   state/               per-machine inventories, conflict archive, lock
 ```
