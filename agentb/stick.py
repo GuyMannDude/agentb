@@ -577,14 +577,19 @@ def load_host_config(data_dir: Path) -> dict:
 
 
 def discover_tenants(data_dir: Path, explicit: Optional[list[str]]) -> list[str]:
+    """Tenant stores live at {data_dir}/agents/<id> (get_agent_data_dir's
+    layout) — NOT directly under data_dir. Archived agents (agents kept as
+    <id>.archived-YYYYMMDD) are skipped: validate_agent_id would reject the
+    dot anyway, and a courier must not resurrect an archived store."""
     if explicit:
         return list(explicit)
-    if not data_dir.is_dir():
+    agents_root = data_dir / "agents"
+    if not agents_root.is_dir():
         return []
     return sorted(
-        d.name for d in data_dir.iterdir()
-        if d.is_dir() and ((d / "memory").is_dir()
-                           or (d / "trajectories").is_dir())
+        d.name for d in agents_root.iterdir()
+        if d.is_dir() and "." not in d.name
+        and ((d / "memory").is_dir() or (d / "trajectories").is_dir())
     )
 
 
@@ -594,13 +599,13 @@ def build_channels(data_dir: Path, stick: Path, tenants: list[str],
     for t in tenants:
         chans.append(Channel(
             name=f"memories/{t}/memory",
-            host_dir=data_dir / t / "memory",
+            host_dir=data_dir / "agents" / t / "memory",
             stick_dir=stick / "memories" / t / "memory",
             glob=MEMORY_GLOB,
         ))
         chans.append(Channel(
             name=f"memories/{t}/trajectories",
-            host_dir=data_dir / t / "trajectories",
+            host_dir=data_dir / "agents" / t / "trajectories",
             stick_dir=stick / "memories" / t / "trajectories",
             glob=TRAJECTORY_GLOB,
             unit="jsonl",

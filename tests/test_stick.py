@@ -31,7 +31,7 @@ from agentb.stick import (
 # ── fixtures ───────────────────────────────────────────────────────────────
 
 def mem_path(host: Path, tenant: str, mem_id: str) -> Path:
-    return host / tenant / "memory" / f"{mem_id}.json"
+    return host / "agents" / tenant / "memory" / f"{mem_id}.json"
 
 
 def write_mem(host: Path, tenant: str, mem_id: str, summary: str) -> Path:
@@ -46,7 +46,7 @@ def read_mem(host: Path, tenant: str, mem_id: str) -> dict:
 
 
 def traj_path(host: Path, tenant: str, task: str) -> Path:
-    return host / tenant / "trajectories" / f"{task}.jsonl"
+    return host / "agents" / tenant / "trajectories" / f"{task}.jsonl"
 
 
 def append_traj(host: Path, tenant: str, task: str, rec_id: str) -> None:
@@ -180,12 +180,12 @@ def test_derived_sidecars_never_cross(world):
     """traj_index.sqlite / recall_stats.json are geometry, not facts (P2)."""
     a, b, stick = world
     append_traj(a, "cc", "deploy", "r1")
-    (a / "cc" / "trajectories" / "traj_index.sqlite").write_bytes(b"sqlite fake")
-    (a / "cc" / "trajectories" / "recall_stats.json").write_text("{}")
+    (a / "agents" / "cc" / "trajectories" / "traj_index.sqlite").write_bytes(b"sqlite fake")
+    (a / "agents" / "cc" / "trajectories" / "recall_stats.json").write_text("{}")
     courier(a, stick, "host-a")
     courier(b, stick, "host-b")
-    assert not (b / "cc" / "trajectories" / "traj_index.sqlite").exists()
-    assert not (b / "cc" / "trajectories" / "recall_stats.json").exists()
+    assert not (b / "agents" / "cc" / "trajectories" / "traj_index.sqlite").exists()
+    assert not (b / "agents" / "cc" / "trajectories" / "recall_stats.json").exists()
     assert traj_path(b, "cc", "deploy").exists()
 
 
@@ -446,6 +446,17 @@ def test_multi_tenant_sync(world):
     assert read_mem(b, "cc", "m1")["summary"] == "cc's memory"
     assert read_mem(b, "opie", "m1")["summary"] == "opie's memory"
     assert traj_path(b, "cc", "deploy").exists()
+
+
+def test_archived_agents_do_not_travel(world):
+    """<id>.archived-YYYYMMDD stores must not be discovered or couriered —
+    a stick must never resurrect an archived agent on another machine."""
+    a, _, stick = world
+    write_mem(a, "cc", "m1", "live")
+    write_mem(a, "cc.archived-20260101", "m1", "dead store")
+    courier(a, stick, "host-a")
+    assert (stick / "memories" / "cc" / "memory" / "m1.json").exists()
+    assert not (stick / "memories" / "cc.archived-20260101").exists()
 
 
 def test_engine_requires_host_id(world):
