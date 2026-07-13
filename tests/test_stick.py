@@ -825,3 +825,45 @@ def test_repair_works_without_key(enc_world, tmp_path):
     (stick / "memories/cc/memory/junk.json").write_bytes(b"torn write")
     manifest = repair_manifest(stick)     # no key, no passphrase
     assert "memories/cc/memory/junk.json" in manifest["files"]
+
+
+# ── v4.13.0 --notify: the toast layer must be unconditionally safe ──────────
+
+def test_notify_desktop_noop_without_binaries(monkeypatch):
+    """No notify-send, no osascript — must be a silent no-op, never a raise
+    (the watcher runs unattended; a missing binary can't kill a sync)."""
+    import shutil
+    from agentb import cli
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    cli._notify_desktop("title", "body")  # must not raise
+
+
+def test_notify_desktop_uses_notify_send_and_sanitizes(monkeypatch):
+    import shutil
+    import subprocess
+    from agentb import cli
+    calls = []
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: "/usr/bin/notify-send" if name == "notify-send" else None)
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: calls.append(argv))
+    cli._notify_desktop("Cortex Stick", 'refused: "torn" generation')
+    assert calls, "notify-send was not invoked"
+    argv = calls[0]
+    assert argv[0] == "notify-send"
+    assert argv[-1] == "refused: 'torn' generation"  # double quotes sanitized
+
+
+def test_notify_desktop_survives_subprocess_failure(monkeypatch):
+    import shutil
+    import subprocess
+    from agentb import cli
+
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="notify-send", timeout=10)
+
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: "/usr/bin/notify-send" if name == "notify-send" else None)
+    monkeypatch.setattr(subprocess, "run", boom)
+    cli._notify_desktop("t", "b")  # must not raise

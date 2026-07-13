@@ -1434,7 +1434,32 @@ def _stick_report(report) -> None:
         console.print("  [dim]nothing to carry — already in sync[/]")
 
 
-def _stick_run_sync(mount, tenants, brain, force, dry_run):
+def _notify_desktop(title: str, body: str) -> None:
+    """Best-effort desktop toast for unattended watch mode.
+
+    Linux notify-send or macOS osascript; silently a no-op when neither
+    exists (or the session bus is gone) — the console line remains the
+    source of truth, this is just the glanceable copy.
+    """
+    import shutil
+    import subprocess
+    body = body.replace('"', "'")
+    try:
+        if shutil.which("notify-send"):
+            subprocess.run(
+                ["notify-send", "--app-name=Cortex Stick",
+                 "--icon=drive-removable-media", title, body],
+                timeout=10, check=False, capture_output=True)
+        elif shutil.which("osascript"):
+            subprocess.run(
+                ["osascript", "-e",
+                 f'display notification "{body}" with title "{title}"'],
+                timeout=10, check=False, capture_output=True)
+    except Exception:
+        pass
+
+
+def _stick_run_sync(mount, tenants, brain, force, dry_run, notify=False):
     """Shared by `stick sync` and `stick watch`. Returns True on success."""
     from agentb.config import load_config
     from agentb.stick import StickError, load_host_config, sync as stick_sync_run
@@ -1458,6 +1483,10 @@ def _stick_run_sync(mount, tenants, brain, force, dry_run):
         )
     except StickError as e:
         console.print(f"[bold red]SYNC REFUSED[/] {e}")
+        if notify:
+            # a refusal in unattended mode MUST surface — it means the stick
+            # needs a human (torn generation, guard trip, wrong key)
+            _notify_desktop("Cortex Stick — SYNC REFUSED", str(e)[:180])
         return False
     verb = "[yellow]DRY RUN[/]" if dry_run else "[bold]Synced[/]"
     console.print(f"{verb} {stick_dir}")
@@ -1471,6 +1500,17 @@ def _stick_run_sync(mount, tenants, brain, force, dry_run):
         )
     if not dry_run:
         console.print("  [green]✓ safe to remove[/] (hashes readback-verified)")
+        if notify:
+            bits = [f"{len(report.to_host)} in, {len(report.to_stick)} out"]
+            if report.facts_to_host or report.facts_to_stick:
+                bits.append(f"facts {report.facts_to_host} in / "
+                            f"{report.facts_to_stick} out")
+            if report.brain not in ("skipped", "clean"):
+                bits.append(f"brain {report.brain}")
+            if report.conflicts:
+                bits.append(f"⚠ {len(report.conflicts)} conflict(s)")
+            _notify_desktop("Cortex Stick — synced, safe to remove",
+                            "; ".join(bits))
     return True
 
 
@@ -1684,11 +1724,16 @@ def stick_repair_cmd(mount):
 @click.option("--poll", default=15, help="Seconds between stick probes (default 15).")
 @click.option("--interval", default=600,
               help="Re-sync period while the stick stays plugged in (default 600).")
-def stick_watch_cmd(poll, interval):
+@click.option("--notify", is_flag=True,
+              help="Desktop toast on each sync and on SYNC REFUSED "
+                   "(notify-send / osascript; no-op where unavailable).")
+def stick_watch_cmd(poll, interval, notify):
     """Foreground watcher: sync on plug-in, re-sync while present.
 
     Run it under a systemd user unit / Task Scheduler for background courier
     behavior — plug in, it syncs; pull out, it waits for the next plug-in.
+    With --notify each sync (and any refusal) also raises a desktop toast,
+    so the courier is zero-terminal: plug in, watch the corner of the screen.
     """
     from agentb.config import load_config
     from agentb.stick import find_stick, load_host_config
@@ -1702,7 +1747,7 @@ def stick_watch_cmd(poll, interval):
         if stick_dir and (not present or time.time() - last_sync >= interval):
             console.print(f"[dim]{time.strftime('%H:%M:%S')}[/] "
                           f"stick {'present' if present else 'detected'} — syncing")
-            _stick_run_sync(str(stick_dir), (), None, False, False)
+            _stick_run_sync(str(stick_dir), (), None, False, False, notify=notify)
             last_sync = time.time()
         if not stick_dir and present:
             console.print(f"[dim]{time.strftime('%H:%M:%S')}[/] "

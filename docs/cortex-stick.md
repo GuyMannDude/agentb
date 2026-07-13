@@ -36,7 +36,39 @@ mnemo-cortex stick sync
 
 # or let it happen automatically while you work:
 mnemo-cortex stick watch      # syncs on plug-in, re-syncs while present
+mnemo-cortex stick watch --notify   # + desktop toast per sync / refusal
 ```
+
+### Zero-terminal courier (recommended)
+
+Run the watcher as a background unit and the stick becomes plug-and-walk-away:
+insert it, a toast tells you what traveled and that it's safe to remove, pull
+it out. A refusal (torn generation, guard trip, wrong key) also raises a
+toast — unattended mode never hides a stick that needs a human.
+
+Linux — systemd user unit (`~/.config/systemd/user/cortex-stick-watch.service`):
+
+```ini
+[Unit]
+Description=Cortex Stick courier — auto-sync on plug-in
+
+[Service]
+ExecStart=%h/.local/bin/mnemo-cortex stick watch --poll 5 --notify
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now cortex-stick-watch.service
+```
+
+Windows — Task Scheduler: an *At log on* task running
+`mnemo-cortex stick watch --poll 5 --notify` (start hidden). The watcher
+polls for the stick itself, so no drive-letter trigger plumbing is needed.
 
 Both modes are first-class and stay supported: plain sticks are
 human-auditable and zero-dependency; encrypted sticks survive being lost.

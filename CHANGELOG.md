@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.13.0 — Cortex Stick: zero-terminal courier (`stick watch --notify`) (2026-07-12)
+
+**Problem.** `stick watch` was built to run under a systemd user unit or
+Windows Task Scheduler, but its sync reports only went to a console nobody
+is looking at in that mode. Worse, a SYNC REFUSED (torn generation, guard
+trip, wrong key) — the one outcome that needs a human — was equally
+invisible.
+
+**Fix.** `stick watch --notify` raises a desktop toast on every completed
+sync (files in/out, facts counts, brain state, conflict count, "safe to
+remove") and on every refusal. Linux `notify-send`, macOS `osascript`,
+silent no-op where neither exists; failures in the toast layer can never
+affect the sync itself (guarded, timeout-bounded, output swallowed). The
+console line remains the source of truth — the toast is the glanceable copy.
+
 ## v4.12.1 — close ASGI bind-override auth bypass (2026-07-12)
 
 An unauthenticated config declared as loopback-only could still be exposed by
