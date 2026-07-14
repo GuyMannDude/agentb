@@ -82,6 +82,8 @@ Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures 
 
 🦣 **[Ollama Desktop → terminal `ollama launch openclaw`](integrations/ollama-desktop/)** — Ollama as the local LLM, OpenClaw as the MCP host. Note: Ollama Desktop's *own chat window* doesn't support MCP — use the terminal launcher.
 
+💬 **[ChatGPT → Custom GPT Actions gate](docs/install-chatgpt.md)** — Give a Custom GPT memory you own. Two REST actions through a hardened, tenant-pinned gate — your Mnemo server stays private. ⚠️ Check the [OpenAI plan disclaimer](docs/install-chatgpt.md#%EF%B8%8F-openai-plan-requirements-read-first) first.
+
 🦙 **[Any Local LLM → MCP setup](#use-with-any-local-llm)** — Open WebUI, llama.cpp, Ollama, LobeChat, Jan, and more
 
 🧭 **[How should my agent use it? → Session Guide](SESSION-GUIDE.md)** — Workflow patterns, per-platform boot snippets, common mistakes
@@ -90,7 +92,7 @@ Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures 
 
 **Supported:** Claude Code, Claude Desktop, OpenAI Codex CLI, and **any local MCP client that speaks stdio transport** — LM Studio, AnythingLLM, OpenClaw, Agent Zero, Hermes, Open WebUI, llama.cpp, LobeChat, Jan, and friends (see the integration links above).
 
-**Not supported (v1): ChatGPT Desktop.** It has no native MCP support — its connectors are reached from OpenAI's cloud, which would force your memory server onto a **publicly exposed HTTPS endpoint**. A public door into a personal memory store is a security cost that exceeds the value, so we won't ship it. When OpenAI adds native (local/stdio) MCP support, we'll revisit.
+**ChatGPT: supported via a gate, not MCP.** ChatGPT has no local/stdio MCP — its connectors call out from OpenAI's cloud, which would force a memory server onto a publicly exposed HTTPS endpoint. Rather than expose the server, the [ChatGPT integration](docs/install-chatgpt.md) ships a hardened two-route **gate** (bearer-authenticated, pinned to a single memory tenant, rate-limited, body-capped, audit-logged) that a Custom GPT calls via Actions. The Mnemo server and its API key never face the internet. Note OpenAI's tier rules: Custom GPT Actions need Plus or higher; full custom **MCP** save+recall in the main ChatGPT app needs Business/Enterprise (on Plus, custom MCP connectors are read-only).
 
 ---
 

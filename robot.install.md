@@ -113,6 +113,7 @@ Ask. Or check these tells:
 | Docker container; user mentions "Bullwinkle" / "Agent Zero" | **Agent Zero** |
 | User runs `hermes ...` in a terminal; mentions Nous Research | **Hermes Agent** |
 | User said `ollama launch openclaw` or `ollama run` | **Ollama Desktop** |
+| User's assistant is ChatGPT (chatgpt.com); mentions "Custom GPT" or "GPTs" | **ChatGPT** |
 | User runs `llama-server` directly | **llama.cpp** |
 | Browser-based, multi-model dashboard | **Open WebUI** |
 | Chinese-friendly UI, MIT-licensed clone of ChatGPT | **LobeChat** |
@@ -136,6 +137,7 @@ verified gotchas. Read the one that matches your user's host.
 | **Agent Zero** | [`integrations/agent-zero/`](./integrations/agent-zero/) | Autonomous Docker-based agent (the "Bullwinkle / BW" platform). In-container MCP setup. |
 | **Hermes Agent** | [`integrations/hermes/`](./integrations/hermes/) | Nous Research's open-weights agent framework (v0.12.0+). Config-only via `hermes mcp add`. |
 | **Ollama Desktop** | [`integrations/ollama-desktop/`](./integrations/ollama-desktop/) | Ollama as the local LLM, OpenClaw as the MCP host, terminal launcher (`ollama launch openclaw`). Note: Ollama Desktop's own chat window does **not** support MCP. |
+| **ChatGPT (Custom GPT)** | [`integrations/chatgpt/`](./integrations/chatgpt/) | OpenAI's ChatGPT via Custom GPT **Actions** (REST over public HTTPS, not MCP) — a small authenticated gate pins ChatGPT to one memory tenant. ⚠️ OpenAI tier rules apply: Custom GPT Actions need Plus+; full custom **MCP** save+recall in the main app needs Business/Enterprise (Plus MCP connectors are read-only). Guide: [docs/install-chatgpt.md](./docs/install-chatgpt.md). |
 | **Open WebUI / llama.cpp / LobeChat / Jan / other MCP host** | [README §Use With Any Local LLM](./README.md#-use-with-any-local-llm) | Generic MCP setup. Each has a short config snippet in the README. |
 
 ### 3c. Things to get right for every host

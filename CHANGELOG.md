@@ -1,5 +1,26 @@
 # Changelog
 
+## v4.14.0 — ChatGPT integration: Custom GPT Actions gate (2026-07-13)
+
+**Problem.** ChatGPT was the one major assistant Mnemo couldn't reach. It has
+no local/stdio MCP — OpenAI's cloud must call in over public HTTPS, and
+exposing a Mnemo server (whose API key grants full fleet-wide memory access)
+to the internet was a security cost we had refused to pay.
+
+**Fix.** Ship the door without exposing the house: `integrations/chatgpt/` is
+a two-route gate (`/recall`, `/save`) that a Custom GPT calls via Actions.
+The gate holds its own bearer token (the Mnemo key never leaves the gate
+process), pins every request to a single memory tenant regardless of what the
+caller claims, forces `source=user` + a `chatgpt-gate` tag on saves, rate
+limits (10/hour default), caps bodies at 8KB, restricts categories, audit-logs
+every request, and returns only generic errors. Includes an OpenAPI schema for
+one-paste Action import, Windows Task Scheduler + systemd run scripts, a full
+install guide (`docs/install-chatgpt.md`), and a 10-test suite. **Note
+OpenAI's tier rules** (as of July 2026): creating a Custom GPT requires Plus+;
+full custom MCP save+recall in the main ChatGPT app requires
+Business/Enterprise — Plus MCP connectors are read-only, which is why the
+supported route is Actions.
+
 ## v4.13.0 — Cortex Stick: zero-terminal courier (`stick watch --notify`) (2026-07-12)
 
 **Problem.** `stick watch` was built to run under a systemd user unit or
