@@ -174,8 +174,10 @@ mnemo-cortex health
 
 # Save a known string from the agent's perspective
 # (whatever syntax the host's MCP UI exposes — see integration doc)
-# Then in a shell:
-mnemo-cortex recall "the known string"
+# Then in a shell, query the server directly:
+curl -s -X POST http://localhost:50001/context \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "the known string", "agent_id": "YOUR-AGENT-ID", "max_results": 5}'
 ```
 
 If `recall` finds the string, the round-trip works. If it doesn't,

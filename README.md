@@ -602,9 +602,11 @@ Look for:
   Watcher:    running (PID 4521) — auto-capturing sessions
 ```
 
-Or check the database directly:
+Or query the server directly:
 ```bash
-mnemo-cortex recall "what happened today"
+curl -s -X POST http://localhost:50001/context \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "what happened today", "agent_id": "YOUR-AGENT-ID", "max_results": 5}'
 ```
 
 ---
