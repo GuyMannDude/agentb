@@ -57,7 +57,7 @@ def test_torn_line_not_consumed(tmp_path, ingest_log):
     f = tmp_path / "s.jsonl"
     complete = user_line("first question") + "\n" + assistant_line("first answer") + "\n"
     torn = user_line("second question")[:20]  # mid-append, no newline
-    f.write_text(complete + torn)
+    f.write_bytes((complete + torn).encode())
 
     pos, ingested = watcher.process_session_file(f, 0)
 
@@ -65,8 +65,9 @@ def test_torn_line_not_consumed(tmp_path, ingest_log):
     assert pos == len(complete.encode())  # stopped at the last newline
 
     # The append finishes; the once-torn exchange is picked up whole.
-    with open(f, "a") as fh:
-        fh.write(user_line("second question")[20:] + "\n" + assistant_line("second answer") + "\n")
+    with open(f, "ab") as fh:
+        fh.write((user_line("second question")[20:] + "\n" +
+                  assistant_line("second answer") + "\n").encode())
     pos, ingested = watcher.process_session_file(f, pos)
     assert ingested == 1
     assert ingest_log.calls == ["first question", "second question"]
@@ -85,7 +86,7 @@ def test_failed_ingest_does_not_advance(tmp_path, ingest_log):
     f = tmp_path / "s.jsonl"
     pair1 = user_line("q1") + "\n" + assistant_line("a1") + "\n"
     pair2 = user_line("q2") + "\n" + assistant_line("a2") + "\n"
-    f.write_text(pair1 + pair2)
+    f.write_bytes((pair1 + pair2).encode())
 
     ingest_log.fail_prompts = {"q2"}
     pos, ingested = watcher.process_session_file(f, 0)
@@ -113,14 +114,14 @@ def test_first_pair_failure_keeps_original_position(tmp_path, ingest_log):
 def test_trailing_unpaired_user_held_back(tmp_path, ingest_log):
     f = tmp_path / "s.jsonl"
     head = header_line() + "\n"
-    f.write_text(head + user_line("still thinking") + "\n")
+    f.write_bytes((head + user_line("still thinking") + "\n").encode())
 
     pos, ingested = watcher.process_session_file(f, 0)
     assert ingested == 0
     assert pos == len(head.encode())  # consumed the header, parked at the user line
 
-    with open(f, "a") as fh:
-        fh.write(assistant_line("the answer") + "\n")
+    with open(f, "ab") as fh:
+        fh.write((assistant_line("the answer") + "\n").encode())
     pos, ingested = watcher.process_session_file(f, pos)
     assert ingested == 1
     assert ingest_log.calls == ["still thinking"]

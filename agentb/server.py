@@ -26,7 +26,7 @@ import asyncio
 import statistics
 import httpx
 from collections import OrderedDict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Literal, Optional
@@ -375,6 +375,12 @@ class TenantManager:
     @property
     def active_tenants(self) -> list[str]:
         return list(self._tenants.keys())
+
+    def close(self) -> None:
+        """Release persistent SQLite handles owned by initialized tenants."""
+        for tenant in self._tenants.values():
+            tenant["trajectories"].close()
+            tenant["vec"].close()
 
 
 # ─────────────────────────────────────────────
@@ -732,7 +738,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # `python -m agentb.server`. Refuses to serve a non-loopback bind with
         # no auth unless server.allow_unauthenticated is set.
         assert_safe_auth_posture(config)
-        log.info(f"⚡ Mnemo Cortex v4.5.0 — I remember everything so your agent doesn't have to.")
+        log.info(f"⚡ Mnemo Cortex v{__version__} — I remember everything so your agent doesn't have to.")
         log.info(f"  Reasoning: {reasoner.status}")
         log.info(f"  Embedding: {embedder.status}")
         log.info(f"  Data dir:  {config.data_dir}")
@@ -744,8 +750,15 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # dreamer-reclassify, Analyst, and Muse passes all die with it.
         maintenance_task = asyncio.create_task(maintenance_loop())
         maintenance_task.add_done_callback(_log_maintenance_exit)
-        yield
-        maintenance_task.cancel()
+        try:
+            yield
+        finally:
+            maintenance_task.cancel()
+            try:
+                with suppress(asyncio.CancelledError):
+                    await maintenance_task
+            finally:
+                tenants.close()
 
     app = FastAPI(
         title="Mnemo Cortex",

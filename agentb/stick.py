@@ -29,6 +29,7 @@ import logging
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import tempfile
 import time
@@ -89,6 +90,19 @@ def default_host_id() -> str:
 
 class StickError(RuntimeError):
     """Loud failure — sync refuses rather than guessing."""
+
+
+def _rmtree_writable(path: Path) -> None:
+    """Remove a tree even when Windows Git objects are read-only."""
+    def _clear_readonly_and_retry(func, failed_path, exc_info):
+        exc = exc_info[1]
+        if not isinstance(exc, PermissionError):
+            raise exc
+        os.chmod(failed_path, stat.S_IWRITE)
+        func(failed_path)
+
+    # onerror works on every supported Python (3.10+); onexc arrived in 3.12.
+    shutil.rmtree(path, onerror=_clear_readonly_and_retry)
 
 
 # ── encryption (v1.1) ──────────────────────────────────────────────────────
@@ -495,7 +509,7 @@ def encrypt_stick(stick: Path, passphrase: str,
                         f"{r.stderr.strip()}")
                 atomic_write_bytes(stick / "brain" / "brain.bundle.enc",
                                    codec.encode(out.read_bytes()))
-        shutil.rmtree(bare)
+        _rmtree_writable(bare)
 
     # Commit: manifest over the ciphertext, base inventories dropped (they
     # hold plaintext-space hashes; identical content re-agrees on first sync,
