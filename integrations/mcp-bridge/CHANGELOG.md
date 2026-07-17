@@ -12,6 +12,23 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.18.1 — 2026-07-17 — an agent can write its own protected lane again
+
+**Problem:** `write_brain_file` refused `cc-session.md` for *every* agent —
+including the `cc` agent whose lane it is. The hardcoded blocklist
+(`["cc-session.md", "CLAUDE.md"]`) dates from the bridge's OpenClaw-only era,
+when protecting another agent's lane from its callers was the right shape.
+Once the same bridge served all agents, the owner was locked out of its own
+lane through the tool — surfaced by the first real post-2.18.0 lane write,
+which auto-commit made the preferred path.
+
+**Fix:** New `lane-guard.js`: lane-protected files are allowed when the
+filename matches the calling agent's own lane candidates (`<agent>.md` /
+`<agent>-session.md` — the same convention startup uses); every other agent
+stays refused. `CLAUDE.md` is refused unconditionally (so a spoofy
+`MNEMO_AGENT_ID=CLAUDE` can't unlock the operating doc — edit it deliberately
+on disk instead). Five-test suite (`lane-guard.test.js`).
+
 ## 2.18.0 — 2026-07-17 — write_brain_file auto-commits and pushes
 
 **Problem:** A lane file written via `write_brain_file` was invisible to the

@@ -9,6 +9,7 @@ import { execSync, execFileSync } from "node:child_process";
 import { DumpWriter } from "./dump.js";
 import { STARTUP_BUDGETS, capSection } from "./boot-budget.js";
 import { autoCommitBrainFile } from "./brain-git.js";
+import { refusesBrainWrite } from "./lane-guard.js";
 
 // ── Configuration ──────────────────────────────────────────────
 // MNEMO_URL: where your Mnemo Cortex API lives
@@ -1389,7 +1390,7 @@ server.registerTool(
     );
     try {
       const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "");
-      if (["cc-session.md", "CLAUDE.md"].includes(safe)) {
+      if (refusesBrainWrite(safe, AGENT_ID)) {
         return {
           content: [
             { type: "text", text: `Refused: ${safe} is not yours to write.` },
