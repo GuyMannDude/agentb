@@ -12,6 +12,23 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.18.2 — 2026-07-17 — boot no longer trips the Thesaurus Loop
+
+**Problem:** The `agent_startup` boot block's "recent Mnemo context" section
+timed out three sessions in a row. The boot's `/context` query ("recent
+session summary, current projects, what happened last") is deliberately
+broad, so as the agent's corpus grows its top hits score flat — exactly the
+escalation condition for Thesaurus Loop query expansion (server v4.2).
+Expansion turns one retrieval pass into an LLM call plus several extra
+passes with L3 disk walks: 25s measured against the live Cortex, vs the
+bridge's 10s `FETCH_TIMEOUT_MS`. Once the corpus crossed the flatness
+threshold, every boot lost its memories section.
+
+**Fix:** The boot call now passes `expand: false` — the server API's own
+contract says expansion is live-path only and background loads should opt
+out. Interactive recall (`mnemo_recall`, `mnemo_search`) keeps expansion.
+Same query measured at 0.37s with expansion off.
+
 ## 2.18.1 — 2026-07-17 — an agent can write its own protected lane again
 
 **Problem:** `write_brain_file` refused `cc-session.md` for *every* agent —

@@ -1125,6 +1125,10 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
         prompt: "recent session summary, current projects, what happened last",
         agent_id: effectiveAgentId,
         max_results: 3,
+        // Thesaurus Loop is live-path only: the boot query's broad phrasing
+        // scores flat as the corpus grows, so expansion fires ~every boot and
+        // blows past FETCH_TIMEOUT_MS (25s observed vs 10s budget).
+        expand: false,
       });
       const chunks = data.chunks || [];
       if (chunks.length > 0) {
