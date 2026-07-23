@@ -1,5 +1,19 @@
 # Changelog
 
+## README overhaul + release catch-up (2026-07-23) — docs/repo only, no server change (server stays v4.14.0)
+
+**Problem:** the repo undersold the project. Latest GitHub Release said v2.12.0 (May) while the
+code was at v4.14.0; the README had no demo, no story, no production numbers, and carried ~300
+lines of host-specific local-LLM setup in the middle; no SECURITY.md; community health 57%.
+
+**Fix:** published catch-up releases (v3.0.0, v4.0.0, v4.8.0, v4.8.1, v4.12.0, v4.13.0, v4.14.0 =
+latest) with CHANGELOG-derived notes; added a real terminal demo GIF (docs/mnemo-demo.gif —
+recorded live against the production server, save → semantic recall in 262ms); added "Why this
+exists" (the one-maker story) with live production stats (~10,000 memories, ~7,000 verified facts,
+5 agents, 2 machines, since March 2026); refreshed the Battle-Tested table with real per-agent
+counts; moved the local-LLM host guide to docs/local-llm-hosts.md; added release/last-commit/MCP
+badges; added SECURITY.md and enabled GitHub private vulnerability reporting.
+
 ## v4.14.0 — ChatGPT integration: Custom GPT Actions gate (2026-07-13)
 
 **Problem.** ChatGPT was the one major assistant Mnemo couldn't reach. It has
