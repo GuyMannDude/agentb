@@ -240,9 +240,17 @@ def harvest_agentb(since: datetime) -> list[dict]:
 def harvest_mnemo_sqlite(since: datetime) -> list[dict]:
     """Read summaries and recent messages from the Mnemo v2 database."""
     if not MNEMO_DB_PATH.exists():
-        log.warning(f"Mnemo DB not found at {MNEMO_DB_PATH}")
+        # A v3+ install has no legacy v2 database — the AgentB writeback harvest
+        # is the live source, so its absence is the normal case and logging it
+        # every night is pure noise. Still warn if the operator explicitly
+        # pointed MNEMO_DB_PATH at something that isn't there.
+        if os.getenv("MNEMO_DB_PATH"):
+            log.warning(f"MNEMO_DB_PATH is set but no database exists at {MNEMO_DB_PATH}")
+        else:
+            log.debug(f"No legacy Mnemo v2 database at {MNEMO_DB_PATH} — skipping")
         return []
 
+    log.info("Harvesting Mnemo v2 SQLite (messages + summaries)...")
     conn = sqlite3.connect(str(MNEMO_DB_PATH))
     conn.row_factory = sqlite3.Row
     memories = []
@@ -294,6 +302,7 @@ def harvest_mnemo_sqlite(since: datetime) -> list[dict]:
             })
 
     conn.close()
+    log.info(f"  Found {len(memories)} Mnemo v2 entries")
     return memories
 
 
@@ -1453,9 +1462,8 @@ def main():
     agentb_memories = harvest_agentb(since)
     log.info(f"  Found {len(agentb_memories)} AgentB writebacks")
 
-    log.info("Harvesting Mnemo v2 SQLite (messages + summaries)...")
+    # Announces itself only when a legacy v2 database actually exists.
     sqlite_memories = harvest_mnemo_sqlite(since)
-    log.info(f"  Found {len(sqlite_memories)} Mnemo v2 entries")
 
     all_memories = agentb_memories + sqlite_memories
 

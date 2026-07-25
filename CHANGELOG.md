@@ -1,5 +1,18 @@
 # Changelog
 
+## Dreamer log noise: stop warning about an absent legacy v2 database (2026-07-24) — no server change (stays v4.14.0)
+
+**Problem:** every nightly dream logged `WARNING Mnemo DB not found at ~/.mnemo-v2/mnemo.sqlite3`
+followed by `Found 0 Mnemo v2 entries`. On any v3+ install there is no v2 database — AgentB
+writebacks are the live source — so the warning fired every single night for a condition that is
+entirely normal. Noise in a nightly log is how real warnings get ignored.
+
+**Fix:** `harvest_mnemo_sqlite()` now stays silent when the legacy database simply isn't there
+(debug-level only), and announces the harvest and its entry count only when a v2 database actually
+exists. A missing database is still a real WARNING when the operator has explicitly set
+`MNEMO_DB_PATH` — that case is a misconfiguration, not an absent legacy store. Harvest behaviour
+for installs that do have a v2 database is unchanged.
+
 ## README overhaul + release catch-up (2026-07-23) — docs/repo only, no server change (server stays v4.14.0)
 
 **Problem:** the repo undersold the project. Latest GitHub Release said v2.12.0 (May) while the
