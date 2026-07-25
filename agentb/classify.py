@@ -21,6 +21,7 @@ This module is the single source of truth, reused by the /writeback hook
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -193,12 +194,26 @@ async def reclassify_memory_dir(
     files = sorted(memory_dir.glob("*.json"))
     total = len(files)
     for i, path in enumerate(files):
+        # Yield to the event loop on every file. Without this the sweep is a
+        # tight synchronous read loop over the whole corpus — non-candidate
+        # files never hit the `await` further down, so nothing else gets
+        # scheduled. On IGOR-2 that starved /health for >50s, the watchdog
+        # concluded the server was hung and SIGKILLed it mid-sweep, roughly
+        # daily. The server was never dead; it just could not answer.
+        # sleep(0) is the cheap yield — it does not add latency, it only lets
+        # pending callbacks (like a health response) run between files.
+        await asyncio.sleep(0)
         if on_progress:
             on_progress(i, total)
         if limit is not None and stats["reclassified"] >= limit:
             break
         try:
-            entry = json.loads(path.read_text())
+            # encoding is explicit: atomic_write_text() writes UTF-8, but
+            # read_text() defaults to the platform encoding — cp1252 on
+            # Windows. That asymmetry made every memory containing a non-cp1252
+            # byte permanently unreadable HERE while being perfectly valid on
+            # disk, so it was skipped by every sweep and never classified.
+            entry = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             stats["failed"] += 1
             log.warning(f"Skipping unreadable memory {path}: {e}")
@@ -232,7 +247,7 @@ async def reclassify_memory_dir(
         # Analyst/Muse processed markers, a manual edit). Patch only the
         # fields this pass owns.
         try:
-            entry = json.loads(path.read_text())
+            entry = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             stats["failed"] += 1
             log.warning(f"Re-read before reclassify write failed for {path}: {e}")

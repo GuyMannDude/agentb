@@ -1,5 +1,47 @@
 # Changelog
 
+## v4.14.1 — Classify sweep no longer starves the health endpoint, and reads UTF-8 (2026-07-25)
+
+Two bugs in `reclassify_memory_dir()`, found by auditing a Discord channel nobody was watching.
+They are independent — one caused a recurring outage, the other quietly lost work — and they
+happened to sit three lines apart.
+
+**Problem 1 — the server was being killed roughly daily, and looked healthy every time.**
+On IGOR-2 the watchdog logged 21 `server DOWN ~50s -> killed wedged PID -> task restarted` events,
+six days consecutively. The server was never dead. The sweep is `async`, but a *non-candidate*
+memory (already classified — i.e. most of the corpus) never reaches the `await classify_category(...)`
+call, so the loop was a tight synchronous read over every file with no yield anywhere. Nothing else
+could be scheduled, `/health` went unanswered through all five 10-second watchdog probes, and the
+watchdog correctly concluded "hung" and SIGKILLed a process that was mid-sweep. Evidence, from
+`server.log`: last answered `/health` at 00:24:16, two classify warnings at 00:25:07 and 00:25:29,
+kill at 00:25:52. Every point-in-time check found the server healthy because it was resurrected
+within ~16 seconds — the watchdog turned a recurring outage into an invisible one.
+
+**Fix 1:** `await asyncio.sleep(0)` at the top of each file iteration. It adds no latency; it only
+lets pending callbacks — like a health response — run between files.
+
+**Problem 2 — memories containing non-cp1252 bytes were skipped forever.** `atomic_write_text()`
+writes UTF-8 (deliberately, and its docstring says why), but the two reads in the sweep called
+`read_text()` with no encoding, which uses the *platform* default — cp1252 on Windows. Any memory
+holding a `→`, an emoji or a smart quote raised `UnicodeDecodeError`, was counted as `failed`, and
+was skipped on that sweep and every future one. The live IGOR-2 log carried **706** such warnings.
+This is a data-completeness bug, not a crash: those memories were valid on disk the whole time and
+simply never got classified.
+
+**Fix 2:** both reads now pass `encoding="utf-8"` explicitly, matching the writer.
+
+**Tests:** two regressions added, both verified to FAIL against the previous code — a starvation
+test asserting a concurrently-scheduled task actually runs before the sweep completes, and an
+encoding test that models an encoding-less read as cp1252 (CI is Linux, where the platform default
+is already UTF-8, so a naive test would have passed against the bug and proven nothing). The
+encoding fixture uses 🐐 (U+1F410) because its UTF-8 bytes include `0x90`, undefined in cp1252 and
+the exact byte the live server reported; a `→` would mojibake silently rather than raise. Full
+suite 643 passed.
+
+**Not addressed here:** ~18 other `read_text()` calls across `agentb/` share the same missing
+encoding (`cache.py`, `analyst.py`, `sessions.py`, `migrate.py`, `server.py`). Only the two proven
+to be biting are fixed; the rest are logged for a deliberate audit rather than swept up untested.
+
 ## Dreamer log noise: stop warning about an absent legacy v2 database (2026-07-24) — no server change (stays v4.14.0)
 
 **Problem:** every nightly dream logged `WARNING Mnemo DB not found at ~/.mnemo-v2/mnemo.sqlite3`
