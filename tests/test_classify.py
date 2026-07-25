@@ -1,6 +1,7 @@
 """Tests for Smart Ingestion classification (Mnemo v4.0)."""
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -146,3 +147,96 @@ async def test_reclassify_unknown_only_leaves_routine_logs(tmp_path: Path):
 
     assert stats["reclassified"] == 1  # only the unknown; the tagged log is left alone
     assert json.loads((md / "d.json").read_text())["category"] == "doctrine"
+
+
+# ── S166 regressions: the two bugs that wedged the IGOR-2 server daily ────────
+# Root cause writeup: brain/snag-list.md 2026-07-25. Server log showed the last
+# answered /health, then two classify cp1252 warnings, then a watchdog SIGKILL.
+
+
+@pytest.mark.asyncio
+async def test_reclassify_reads_utf8_not_platform_encoding(tmp_path: Path, monkeypatch):
+    """A memory containing non-cp1252 bytes must classify, not be skipped.
+
+    atomic_write_text() writes UTF-8; read_text() used to default to the
+    platform encoding (cp1252 on Windows), so any memory with a '→', an emoji
+    or a smart quote raised UnicodeDecodeError and was silently counted as
+    'failed' — forever, on every sweep. 706 such warnings were in the live
+    IGOR-2 log.
+
+    CI runs on Linux, where the platform default is already UTF-8 — so this
+    test would pass against the BROKEN code and catch nothing. We therefore
+    model the bug directly: an encoding-less read_text() behaves like a cp1252
+    platform, exactly as it does on IGOR-2. An explicit encoding= still reads
+    normally, so only the unfixed call site trips.
+
+    The payload uses 🐐 (U+1F410), whose UTF-8 bytes include 0x90 — an
+    UNDEFINED byte in cp1252, and the very byte the live server reported.
+    A '→' would not do: 0xE2 0x86 0x92 are all defined in cp1252, so it would
+    mojibake silently instead of raising, and the test would prove nothing.
+    """
+    real_read_text = Path.read_text
+
+    def platform_default_is_cp1252(self, encoding=None, errors=None):
+        if encoding is None:
+            return self.read_bytes().decode("cp1252")
+        return real_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", platform_default_is_cp1252)
+
+    md = tmp_path / "memory"
+    md.mkdir(parents=True, exist_ok=True)
+    (md / "u.json").write_bytes(json.dumps({
+        "id": "u",
+        "summary": "Rocky → Hermes migration: 90% done, “quoted”, goat 🐐",
+        "key_facts": [], "category": "unknown", "source": "tool",
+        "created_at": 1.0, "schema_version": 3,
+    }, ensure_ascii=False).encode("utf-8"))
+    r = FakeReasoner(reply="topology")
+
+    stats = await reclassify_memory_dir(md, r, use_breaker=False)
+
+    assert stats["failed"] == 0, "non-cp1252 memory was skipped as unreadable"
+    assert stats["scanned"] == 1
+    assert stats["reclassified"] == 1
+    written = json.loads((md / "u.json").read_text(encoding="utf-8"))
+    assert written["category"] == "topology"
+    assert "🐐" in written["summary"], "re-read/write round trip mangled the text"
+
+
+@pytest.mark.asyncio
+async def test_reclassify_yields_to_event_loop_while_scanning(tmp_path: Path):
+    """The sweep must not starve the event loop.
+
+    Non-candidate files skip the `await classify_category(...)` path entirely,
+    so before the fix a corpus of already-classified memories was a tight
+    synchronous loop — nothing else got scheduled. On IGOR-2 that meant
+    /health went unanswered through all five 10s watchdog probes and the
+    server was killed mid-sweep, roughly daily.
+
+    We assert a concurrently-scheduled task actually runs BEFORE the sweep
+    finishes. Without the yield it cannot run until the loop is free.
+    """
+    md = tmp_path / "memory"
+    for i in range(60):
+        _write(md, f"m{i}", "topology", f"already classified {i}")  # all non-candidates
+
+    ticks = []
+
+    async def health_probe():
+        # Stands in for the /health handler waiting for loop time.
+        for _ in range(5):
+            await asyncio.sleep(0)
+            ticks.append(len(ticks))
+
+    r = FakeReasoner(reply="topology")
+    probe = asyncio.create_task(health_probe())
+    stats = await reclassify_memory_dir(md, r, use_breaker=False)
+    swept_with = len(ticks)
+    await probe
+
+    assert stats["skipped"] == 60, "fixture should be all non-candidates"
+    assert swept_with > 0, (
+        "event loop was starved for the whole sweep — a health probe could not "
+        "have been answered, which is exactly what got the server SIGKILLed"
+    )
