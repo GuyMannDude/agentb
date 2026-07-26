@@ -212,3 +212,55 @@ def test_deterministic_note_id_prevents_duplicates(tmp_path):
                      if json.loads(p.read_text()).get("classified_by") == "analyst"]
     assert len(analyst_notes) == 1, "same note text must collapse to one memory"
     store.close()
+
+
+def test_candidate_scan_does_not_block_the_event_loop(tmp_path, monkeypatch):
+    """The candidate scan must not run on the event loop.
+
+    The 2026-07-26 wedge: the scan read every unprocessed log with a blocking
+    `read_text` on the loop thread, so for its whole duration the server
+    answered nothing at all — /health included — and the watchdog restarted a
+    process that had never crashed. Slow the read down and prove a concurrent
+    heartbeat still ticks.
+    """
+    memory_dir = tmp_path / "memory"
+    for i in range(10):
+        _seed_log(memory_dir, f"log{i}", "some session chatter")
+    store = VecStore(tmp_path / "vec.sqlite")
+
+    real_read_text = Path.read_text
+
+    def slow_read_text(self, *args, **kwargs):
+        time.sleep(0.02)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", slow_read_text)
+
+    async def scenario():
+        ticks = 0
+
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.005)
+                ticks += 1
+
+        hb = asyncio.create_task(heartbeat())
+        # The LLM raises, so the pass returns immediately after the scan and
+        # the heartbeat is measuring the scan alone.
+        stats = await analyze_tenant(
+            "cc", memory_dir, store,
+            ScriptedReasoner(error=RuntimeError("no LLM in this test")),
+            ScriptedEmbedder(VEC_A), config=AnalysisConfig(),
+        )
+        hb.cancel()
+        try:
+            await hb
+        except asyncio.CancelledError:
+            pass
+        return stats, ticks
+
+    stats, ticks = asyncio.run(scenario())
+    store.close()
+    assert stats["scanned"] == 10, "the scan must actually have read the logs"
+    assert ticks >= 5, f"event loop starved for the whole scan ({ticks} heartbeats)"
