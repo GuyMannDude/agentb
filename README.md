@@ -28,7 +28,7 @@ day since March 2026:
 
 - **~10,000 memories** ingested, compacted and recalled across agents
 - **~7,000 verified facts** with confidence laddering and a full audit history
-- **84 shipped versions** in five months ([CHANGELOG](CHANGELOG.md)) — currently v4.14.0
+- **84 shipped versions** in five months — the current one is in the release badge above ([CHANGELOG](CHANGELOG.md))
 - Overnight dreaming, USB courier sync with encryption, agent-to-agent sharing — each built
   because the fleet actually needed it
 
@@ -83,7 +83,7 @@ Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures 
 | 🧠 **Deep Recall** | Persistent memory across sessions. Semantic search. $0 to run. |
 | 🌙 **Dreaming** | Cross-agent overnight synthesis. Every agent wakes up knowing what the others did. |
 | 📚 **The Librarian** | Document discovery over your whole workspace. One SQLite FTS5 index (107K files in our deployment), rebuilt nightly. Ask for a file, find the file. |
-| 📬 **Sparks Bus** | Agent-to-agent messaging with delivery confirmation. A2A-compatible. |
+| 📬 **[Disco-Bus](https://github.com/GuyMannDude/disco-bus)** | Agent-to-agent messaging with delivery confirmation. A2A-compatible. Standalone — no Mnemo required. It's what carries traffic between our own agents. |
 | 💾 **[Cortex Stick](docs/cortex-stick.md)** | Sneakernet for AI memory. A USB stick couriers memories, trajectories and facts between two desks — no cloud, no VPN, no account. Optional AES-256; the key never lives on the stick. |
 | 🪪 **Developer's Passport** | Safe behavioral-claim ingestion layer. Review queue + 32 detectors + provenance buckets. Dev-targeted beta. |
 | 🔩 **Structured Facts** | Key-value store with confidence tracking. When semantic search is the wrong tool — names, settings, entity attributes — facts give you sub-millisecond exact lookup with a three-state confidence ladder. |
@@ -207,27 +207,21 @@ Encryption is optional AES-256 and the key never lives on the stick, so a lost s
 
 ---
 
-### 📬 Sparks Bus — Agent-to-Agent Messaging
+### 📬 Disco-Bus — Agent-to-Agent Messaging
 
-A delivery-confirmed messaging system for multi-agent communication. Lives as a module inside Mnemo Cortex at [`sparks_bus/`](sparks_bus/) AND ships standalone at [github.com/GuyMannDude/sparks-bus](https://github.com/GuyMannDude/sparks-bus).
+**[Disco-Bus](https://github.com/GuyMannDude/disco-bus) is the bus we run.** A push-based agent mesh with delivery confirmation: agents wake instantly on inbound messages (no polling), and the whole conversation stays visible to a human. ~1000 LOC, local SQLite, **no Mnemo coupling** — bring your own agents, memory optional. One-command install (`./install.sh`), or hand `./robot-install.sh` to an AI agent and let it do the whole thing.
 
-> **Looking for the simplest possible version, with no Mnemo coupling?** See **[Disco-Bus](https://github.com/GuyMannDude/disco-bus)** — generic standalone push-based agent mesh. Same "agents wake instantly on inbound, humans watch in Discord" idea, distilled to ~1000 LOC. Bring your own agents, install in one command (`./install.sh`), no infrastructure dependencies beyond Python + Node.
+**Doctrine:** the bus is the mailbox. The tracking ID is the receipt.
 
-**Doctrine:** Discord is the doorbell. Mnemo is the mailbox. The tracking ID is the receipt.
-
-**Lifecycle visible in `#dispatch`:**
+**Lifecycle, visible end to end:**
 ```
 📬 DELIVERED  →  ✅ PICKED UP  →  🔄 LOOP CLOSED
 ```
-Plus one-shot ⚠️ alerts in `#alerts` for delivery failures and stale messages. No retry storms.
+Plus one-shot ⚠️ alerts for delivery failures and stale messages. No retry storms, no silent drops.
 
-**Two install modes auto-detected at startup:**
-- **Full** — Mnemo reachable. Payload saved to Mnemo by tracking ID. Discord notifications carry just the receipt.
-- **Standalone** — No Mnemo. Payload travels in the Discord notification itself. Same lifecycle, no semantic recall.
+**A2A compatible.** Each message maps to an A2A Task: `tracking_id → task.id`, `subject → task.name`, `body → task.input`, lifecycle → A2A `TaskState`, per [Google's A2A spec](https://github.com/google/A2A). Data-shape compatibility is in now; HTTPS / JSON-RPC transport is the v2 roadmap.
 
-**A2A compatible.** Agent Cards live in [`sparks_bus/agent-cards/`](sparks_bus/agent-cards/) for every agent in the deployment, formatted to [Google's A2A spec](https://github.com/google/A2A). Each bus message maps to an A2A Task: `tracking_id → task.id`, `subject → task.name`, `body → task.input`, lifecycle → A2A `TaskState`. Transport (HTTPS / JSON-RPC) is the v2 roadmap; data shape compatibility is in now. See [`sparks_bus/A2A.md`](sparks_bus/A2A.md).
-
-**Includes [`SETUP-PROMPT.md`](sparks_bus/SETUP-PROMPT.md)** — a self-contained prompt any AI agent can read to bootstrap the entire bus on a fresh deployment. Karpathy's "idea file as publishing format" pattern.
+> **A note on the older one.** [`sparks_bus/`](sparks_bus/) in this repo is **Sparks Bus**, the earlier Mnemo-coupled version, kept in-tree for anyone already running it and no longer developed — its last release was v0.5.0 in May 2026. Disco-Bus is where it went: same idea, standalone, actively maintained. **If you're starting fresh, start there.** Sparks Bus ships an [AI-agent setup prompt](sparks_bus/SETUP-PROMPT.md) in Karpathy's "idea file as publishing format" style; Disco-Bus does the same job with `robot.install` + `robot-install.sh`.
 
 ---
 
@@ -681,7 +675,7 @@ Mnemo Cortex started as a memory system and evolved into a cognitive coprocessor
 **External inspirations** (the Clapton Method — adopt the best ideas, credit openly, build on top):
 - **Andrej Karpathy** — [LLM Wiki pattern](https://gist.github.com/karpathy), April 2026. Inspired WikAI's compile-don't-rederive design and the "idea file as publishing format" pattern used in `SETUP-PROMPT.md`.
 - **Nate B Jones** — [OpenBrain](https://github.com/NateBJones-Projects/OB1) + ["Your AI Does the Hard Work Then Deletes It" (YouTube)](https://youtu.be/dxq7WtWxi44) + [Substack](https://natesnewsletter.substack.com/). Inspired our three-layer memory architecture (structured store + compiled wiki + ephemeral brain files).
-- **Google A2A Protocol** — [github.com/google/A2A](https://github.com/google/A2A). Sparks Bus speaks A2A data shapes; transport is v2 roadmap.
+- **Google A2A Protocol** — [github.com/google/A2A](https://github.com/google/A2A). Disco-Bus speaks A2A data shapes; transport is v2 roadmap.
 - **Mem0** — [mem0.ai](https://mem0.ai). The first to make portable AI memory feel real; inspired our early thinking on cross-session persistence. (The optional Mem0 cloud-deep bridge was retired in v3.1.0 — local recall performance made the fallback unnecessary.)
 - **[Lossless Claw](https://github.com/Martian-Engineering/lossless-claw)** by Martian Engineering — early exploration of lossless conversation logging that informed the v1 capture pattern.
 
