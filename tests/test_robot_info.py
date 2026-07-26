@@ -44,6 +44,23 @@ def test_robot_info_version_matches_release():
     )
 
 
+def test_changelog_documents_the_current_version():
+    """Every version bump ships a CHANGELOG entry — enforced, not remembered.
+
+    Guy's standing rule. Left to discipline it fails the way robot.info did:
+    silently, and only noticed when someone goes looking. The newest `## vX.Y.Z`
+    heading must be the version being released.
+    """
+    raw = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    m = re.search(r"^##\s*v(\d+\.\d+\.\d+)", raw, flags=re.M)
+    assert m, "CHANGELOG.md has no '## vX.Y.Z' heading"
+    assert m.group(1) == _pyproject_version(), (
+        f"CHANGELOG.md's newest entry is v{m.group(1)} but pyproject.toml says "
+        f"v{_pyproject_version()} — a version bump without a changelog entry is "
+        "a release nobody can read. Add the entry (problem + fix) before shipping."
+    )
+
+
 def test_dunder_version_matches_release():
     # v4.9.11 (H11): server.py and cli.py now serve agentb.__version__, which
     # resolves from pyproject.toml (checkout) or dist metadata (wheel install).
