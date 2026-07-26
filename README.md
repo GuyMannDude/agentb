@@ -84,6 +84,7 @@ Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures 
 | 🌙 **Dreaming** | Cross-agent overnight synthesis. Every agent wakes up knowing what the others did. |
 | 📚 **The Librarian** | Document discovery over your whole workspace. One SQLite FTS5 index (107K files in our deployment), rebuilt nightly. Ask for a file, find the file. |
 | 📬 **Sparks Bus** | Agent-to-agent messaging with delivery confirmation. A2A-compatible. |
+| 💾 **[Cortex Stick](docs/cortex-stick.md)** | Sneakernet for AI memory. A USB stick couriers memories, trajectories and facts between two desks — no cloud, no VPN, no account. Optional AES-256; the key never lives on the stick. |
 | 🪪 **Developer's Passport** | Safe behavioral-claim ingestion layer. Review queue + 32 detectors + provenance buckets. Dev-targeted beta. |
 | 🔩 **Structured Facts** | Key-value store with confidence tracking. When semantic search is the wrong tool — names, settings, entity attributes — facts give you sub-millisecond exact lookup with a three-state confidence ladder. |
 
@@ -187,6 +188,22 @@ The indexer ships in this repo: **[`librarian.py`](librarian.py)** — a single 
 Agents query it through the `file_find` tool in **[FrankenClaw](https://github.com/GuyMannDude/frankenclaw)** (bundled on the default branch since v0.5.0), our MCP tool chassis — same MCP config pattern as the Mnemo bridge, just a second `mcpServers` entry. `file_find` only reads; the index it opens is the one `librarian.py` maintains.
 
 The Librarian replaced **WikAI**, our earlier auto-compiled wiki layer. The lesson from running WikAI in production: compiling knowledge into pages is expensive to keep fresh, while indexing everything and finding it on demand is cheap and never stale. The static wiki pages still exist and remain searchable through the bridge's `wiki_search` / `wiki_read` / `wiki_index` tools, but they're no longer recompiled nightly — [`mnemo-wiki-compile.py`](mnemo-wiki-compile.py) stays in the repo for reference. See [Inspirations](#inspirations) below.
+
+---
+
+### 💾 Cortex Stick — Sneakernet for AI Memory
+
+You work from two desks and both machines run Mnemo, so they drift: the decision you saved at one desk doesn't exist at the other. The usual fixes put your AI's working memory on somebody else's wire, or need infrastructure you don't want to run.
+
+The Cortex Stick is a **USB courier between two full Mnemo installations** — not a portable server. Nothing runs on the stick; it carries the delta. Memories, trajectories, facts, optionally your brain repo, and a free-form `pad/` for dragging in-flight work between desks. Plug in, sync, carry, plug in. No cloud, no VPN, no account.
+
+```bash
+mnemo-cortex stick init --encrypt /media/you/USB   # or plain, your call
+mnemo-cortex stick sync                            # at each desk
+mnemo-cortex stick watch --notify                  # or never touch a terminal
+```
+
+Encryption is optional AES-256 and the key never lives on the stick, so a lost stick is a lost stick rather than a breach. Every sync plans the whole run before a byte moves — a refusal changes nothing — and the manifest is written last, so a yanked stick refuses loudly instead of merging from a torn state. Conflicts are preserved, never destroyed. Full guide: **[`docs/cortex-stick.md`](docs/cortex-stick.md)**.
 
 ---
 
