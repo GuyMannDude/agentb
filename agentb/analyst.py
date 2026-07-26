@@ -41,6 +41,7 @@ every note must point at material actually voiced in the log.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -148,26 +149,35 @@ def _parse_notes(raw: str, max_notes: int, allowed: set[str] = ALLOWED_CATEGORIE
     return notes
 
 
-def _gather_candidates(
+async def _gather_candidates(
     memory_dir: Path, limit: int, marker: str = "analyst_processed"
 ) -> list[tuple[Path, dict]]:
     """Oldest-first unprocessed session_log memories (each is read once, ever).
 
     `marker` scopes the read-once bookkeeping per lens: the Analyst and the
-    Muse each read every log exactly once, independently."""
-    candidates = []
-    for path in memory_dir.glob("*.json"):
-        try:
-            entry = json.loads(path.read_text())
-        except Exception:
-            continue
-        if entry.get("category") != "session_log":
-            continue
-        if entry.get(marker):
-            continue
-        candidates.append((path, entry))
-    candidates.sort(key=lambda pe: pe[1].get("created_at") or 0)
-    return candidates[:limit]
+    Muse each read every log exactly once, independently.
+
+    The scan reads every unprocessed log off disk, so it runs in the executor.
+    Inline it is a blocking read per file on the event loop, and for as long as
+    it lasts the server answers nothing at all — /health included, which had
+    the watchdog restarting a process that was alive and simply unable to
+    reply (2026-07-26). The executor threads are idle while this runs."""
+    def _scan() -> list[tuple[Path, dict]]:
+        candidates = []
+        for path in memory_dir.glob("*.json"):
+            try:
+                entry = json.loads(path.read_text())
+            except Exception:
+                continue
+            if entry.get("category") != "session_log":
+                continue
+            if entry.get(marker):
+                continue
+            candidates.append((path, entry))
+        candidates.sort(key=lambda pe: pe[1].get("created_at") or 0)
+        return candidates[:limit]
+
+    return await asyncio.to_thread(_scan)
 
 
 async def analyze_tenant(
@@ -238,8 +248,8 @@ async def _lens_pass(
     label = lens.capitalize()
     stats: dict = {"scanned": 0, "batches": 0, "notes_extracted": 0,
                    "notes_deduped": 0, "notes_saved": 0, "failed": 0}
-    candidates = _gather_candidates(memory_dir, config.max_memories_per_cycle,
-                                    marker=marker)
+    candidates = await _gather_candidates(memory_dir, config.max_memories_per_cycle,
+                                          marker=marker)
     if not candidates:
         return stats
 

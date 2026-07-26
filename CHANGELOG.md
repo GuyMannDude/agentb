@@ -1,5 +1,45 @@
 # Changelog
 
+## v4.14.2 — The Analyst's candidate scan moves off the event loop (2026-07-26)
+
+**The same defect class as v4.14.1, in the path that was actually causing the wedges.**
+
+v4.14.1 fixed a synchronous sweep in `reclassify_memory_dir()` and did not move the restart rate.
+A watchdog-side probe deployed on IGOR-2 caught the server *mid-hang while still alive* at
+2026-07-26 06:01:13 PDT and named the real path. The `py-spy` stack:
+
+```
+maintenance_loop → maintenance_cycle (server.py:1963/1925) → analyze_tenant
+  → _lens_pass → _gather_candidates (analyst.py:161) → Path.read_text
+```
+
+running directly on the asyncio event loop (`_run` at `asyncio/events.py:89` — a `call_soon`
+callback, not a thread). The Analyst's candidate scan reads *every unprocessed session log* off
+disk, one blocking read per file, with nothing awaited anywhere in the loop. While it blocks,
+nothing is served — including `GET /health`. The process never crashed, never OOMed and never
+deadlocked: it was **alive and unable to answer**, so the watchdog SIGKILLed a healthy server.
+
+**One cause, both observed modes.** A short scan recovers before the watchdog's five probes expire
+(the transients); a long one outlives all five and becomes a hard restart. This retires the
+"second wedge mode" framing from 2026-07-25 — there is one mode with a duration distribution.
+
+**The fix:** hand the scan to the default executor via `asyncio.to_thread`, matching the existing
+idiom in `cache.py`. The `asyncio_0`/`asyncio_1` worker threads were sitting **idle** in the same
+capture — the pool already existed and the work simply was not being given to it. The regression
+test slows `read_text` down, runs a heartbeat coroutine alongside the pass, and asserts the loop
+still ticks; against the pre-fix code it records **0 heartbeats**.
+
+⚠️ **Caveat, deliberately loud: this is ONE specimen.** It proves the mechanism of *that* hang, not
+that all ~21 hard restarts shared it. Rate comparison needs 3–4 days of the daily wedge watch
+before anything is declared solved.
+
+Deliberately **not** bundled, though both are wanted: excluding Analyst-derived files from
+candidate discovery, and bounding the scan by index/mtime. Both change *what gets scanned*, which
+changes the shape of the thing being measured — ship them together and a rate drop names no cause.
+
+Also: `robot.info` still read 4.14.0 (missed in the v4.14.1 bump), which its own release test
+catches. Corrected to 4.14.2.
+
 ## v4.14.1 — Classify sweep no longer starves the health endpoint, and reads UTF-8 (2026-07-25)
 
 Two bugs in `reclassify_memory_dir()`, found by auditing a Discord channel nobody was watching.
