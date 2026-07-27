@@ -1,4 +1,15 @@
 {
+  // ┌───────────────────────────────────────────────────────────────┐
+  // │  THIS IS A SETTINGS FILE, NOT INSTALL INSTRUCTIONS.           │
+  // │                                                               │
+  // │  Looking for how to install Mnemo Cortex?  ->  ./INSTALL.md   │
+  // │                                                               │
+  // │  You do not need to edit this file to install Mnemo. The      │
+  // │  defaults below already produce a working local install.      │
+  // │  Change something here only if you want a different port,     │
+  // │  data directory, or provider.                                 │
+  // └───────────────────────────────────────────────────────────────┘
+  //
   // Mnemo Cortex — robot.install manifest
   //
   // Non-interactive install recipe for AI agents and CI. Pair with

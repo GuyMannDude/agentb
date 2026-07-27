@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — docs: one obvious door for installing (2026-07-26)
+
+**Docs only. No code, no version bump, nothing to redeploy.**
+
+`robot.install.md` is now **`INSTALL.md`**.
+
+The old name was one character away from `robot.install`, and the two files do completely
+different jobs: `robot.install.md` was the install *instructions*, `robot.install` is the JSON
+*settings file* the installer reads. Guy had been sending people to `robot.install` — landing
+them on a wall of JSON instead of a guide — which is the whole reason this changed.
+
+**`robot.info` and `robot.install` keep their names.** They are the published convention from
+[ROBOT-INFO-SPEC.md](ROBOT-INFO-SPEC.md), deliberately extensionless and fetched at a well-known
+path, mirrored across seven Project Sparks repos and cross-linked from the site's `llms.txt`.
+Renaming them would break the standard. The guide was the file out of place, not the manifests.
+
+Alongside the rename:
+
+- Both manifests now open with a header saying **what they are and where the instructions are** —
+  anyone who lands on one gets redirected in a line instead of puzzling over JSON.
+- `INSTALL.md` opens with a **which-file-is-which table** covering the whole `robot.*` family.
+- `robot.info` gains `install.guide` → `./INSTALL.md`, and its `install.manual_docs` now points at
+  the guide instead of a README anchor.
+- `INSTALL.md` is listed in `llms.txt`, so an agent arriving via the docs index finds the
+  instructions and not only the data files.
+
+Comment headers are full-line `//` and strip cleanly under the installer's existing parser; both
+manifests verified to still parse, and the full suite is green (645 passed).
+
 ## v4.14.2 — The Analyst's candidate scan moves off the event loop (2026-07-26)
 
 **The same defect class as v4.14.1, in the path that was actually causing the wedges.**
