@@ -1,4 +1,15 @@
 {
+  // ┌───────────────────────────────────────────────────────────────┐
+  // │  THIS IS A DATA FILE, NOT DOCUMENTATION.                      │
+  // │                                                               │
+  // │  How do I install Mnemo Cortex?   ->  ./INSTALL.md            │
+  // │  What IS Mnemo Cortex?            ->  ./README.md             │
+  // │                                                               │
+  // │  This file exists so an AI agent can answer questions about   │
+  // │  Mnemo without scraping the repo. It is meant to be parsed,   │
+  // │  not read.                                                    │
+  // └───────────────────────────────────────────────────────────────┘
+  //
   // robot.info v0.1 — Mnemo Cortex
   //
   // Structured product manifest for AI agents. Paired with robot.install
@@ -108,9 +119,12 @@
   },
 
   "install": {
+    // Start here. Plain-English instructions that work for a person
+    // reading along or an agent doing the install.
+    "guide": "./INSTALL.md",
     "robot_install": "./robot.install",
     "robot_install_sh": "./robot-install.sh",
-    "manual_docs": "https://github.com/GuyMannDude/mnemo-cortex#install-guide",
+    "manual_docs": "https://github.com/GuyMannDude/mnemo-cortex/blob/master/INSTALL.md",
     "platforms": ["linux", "macos", "windows-wsl2"],
     "runtime": "python>=3.11",
     "dependencies": ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2.8", "numpy>=1.24", "httpx>=0.25", "pyyaml>=6.0"],

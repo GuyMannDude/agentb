@@ -33,7 +33,7 @@ than one that says "let me check."
 
 If `agent_startup` isn't registered in your tool list, the install is
 incomplete — tell your user, pointing them at
-[robot.install.md](robot.install.md) section 4.
+[INSTALL.md](INSTALL.md) section 4.
 
 ## 2. Brain files — your working memory
 

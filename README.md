@@ -49,6 +49,11 @@ jar above is the entire funding round. If not — use it, share it, and make som
 >   setup. Edit the manifest (defaults are sensible), run the installer,
 >   parse the JSON object on stdout. Zero prompts, exit `0` on success.
 >   Full schema below in "Non-interactive install."
+>
+> **Note the difference, because the names are one character apart:**
+> [`INSTALL.md`](./INSTALL.md) is the install **instructions**, in English.
+> `robot.install` is a **settings file** the installer reads. If you want
+> to know how to install Mnemo, you want `INSTALL.md`.
 
 ## Get started
 
@@ -56,7 +61,9 @@ jar above is the entire funding round. If not — use it, share it, and make som
 Read this README, or point your agent at [robot.info](./robot.info).
 
 **Want to install it?**
-Point your agent at [robot.install.md](./robot.install.md) and let it handle the rest.
+Point your agent at **[INSTALL.md](./INSTALL.md)** — or just say *"Install Mnemo Cortex,
+follow INSTALL.md."* That one file is the whole install story; it works whether you read
+it yourself or hand it to an assistant.
 The install guide links to everything the agent needs — server setup, per-host wiring
 (Claude Desktop on [Windows](docs/install-claude-desktop-windows.md) /
 [Linux](docs/install-claude-desktop-linux.md), OpenClaw, LM Studio, and more), and

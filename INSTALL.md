@@ -1,24 +1,36 @@
-# `robot.install.md` — Install guide for AI agents
+# `INSTALL.md` — Install guide for Mnemo Cortex (humans and AI agents)
 
-> You are reading this because you are an AI agent installing Mnemo
-> Cortex for your user. This page assumes you know **nothing** about
-> the AI host platforms Mnemo integrates with — Claude Desktop,
-> Claude Code, OpenClaw, LM Studio, AnythingLLM, Agent Zero, Hermes
-> Agent, Ollama Desktop, and the generic MCP hosts (Open WebUI,
-> llama.cpp, LobeChat, Jan). Each gets a one-paragraph orientation
-> below, then a link to its full integration doc.
+> **This is the install guide. If you only open one file, open this one.**
+>
+> It works for a person reading along *and* for an AI agent doing the
+> install for you. If you are handing this to an assistant, the whole
+> instruction is: **"Install Mnemo Cortex — follow INSTALL.md."**
 
-Companion files:
+This page assumes you know **nothing** about the AI host platforms Mnemo
+integrates with — Claude Desktop, Claude Code, OpenClaw, LM Studio,
+AnythingLLM, Agent Zero, Hermes Agent, Ollama Desktop, and the generic
+MCP hosts (Open WebUI, llama.cpp, LobeChat, Jan). Each gets a
+one-paragraph orientation below, then a link to its full integration doc.
 
-- **[`robot.info`](./robot.info)** — structured JSON manifest of what
-  Mnemo Cortex is and what it exposes. Read this first if you need
-  to *describe* the product before installing it.
-- **[`robot.install`](./robot.install)** — the JSON config manifest
-  the installer script reads. Edit values here, then run the script.
-- **[`robot-install.sh`](./robot-install.sh)** — the non-interactive
-  installer. Emits a single JSON object on stdout; exit code 0 = success.
-- **[`README.md`](./README.md)** — human-readable overview. Source of
-  truth for the long-form story.
+---
+
+### Which file is which
+
+The repo root has several `robot.*` files. They have similar names and
+very different jobs, so here is the whole family in one place:
+
+| File | What it is | Do you read it? |
+|---|---|---|
+| **`INSTALL.md`** ← you are here | The install **instructions**, in English | **Yes — start here** |
+| [`README.md`](./README.md) | What Mnemo Cortex is and why. The long-form story | Yes, if you want the overview |
+| [`robot.info`](./robot.info) | A **data file**. Structured JSON describing the product, so an AI can answer questions about Mnemo without scraping this repo | No — it is for machines |
+| [`robot.install`](./robot.install) | A **data file**. The JSON settings the installer reads. Edit it *only* if you want to change a default like the port | No — it is for machines |
+| [`robot-install.sh`](./robot-install.sh) | The installer program itself | No — you run it, §2a |
+
+**In one line:** `INSTALL.md` tells you *how*. `robot.install` is a
+*settings file* the installer reads. They are one character apart and
+they are not the same thing — if you landed on a wall of JSON, you
+wanted this page.
 
 ---
 

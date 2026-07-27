@@ -55,6 +55,7 @@ MIT licensed, $0 to run with Ollama, cloud providers (OpenRouter, OpenAI, Google
 
 ## Agent Manifests
 
+- [INSTALL.md](https://github.com/GuyMannDude/mnemo-cortex/blob/master/INSTALL.md): The install guide, in plain English — server setup plus per-host wiring for Claude Desktop, Claude Code, OpenClaw, LM Studio and the rest. Start here to install. Not to be confused with `robot.install`, which is the settings file the installer reads.
 - [robot.info](https://github.com/GuyMannDude/mnemo-cortex/blob/master/robot.info): Structured product manifest (JSON). Identity, capabilities, exposed APIs + MCP tools, install pointer, compatibility matrix, common-question/answer pairs. Read this first if you're an agent trying to answer a user's question about Mnemo Cortex.
 - [robot.install](https://github.com/GuyMannDude/mnemo-cortex/blob/master/robot.install): Non-interactive install manifest. Pair with `./robot-install.sh` for a JSON-stdout install flow that takes zero prompts.
 - [ROBOT-INFO-SPEC.md](https://github.com/GuyMannDude/mnemo-cortex/blob/master/ROBOT-INFO-SPEC.md): Specification for the robot.info convention.
