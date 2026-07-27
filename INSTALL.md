@@ -216,7 +216,8 @@ how agents end up with a database they never think to read.
   browser, Shopify, NotebookLM, Google Drive. Same `robot.install`
   pattern in its own repo. If your user wants Mnemo + Franky
   together, install Mnemo first (this guide), then follow
-  Franky's `robot.install.md` in that repo. Both register as
+  Franky's [`INSTALL.md`](https://github.com/GuyMannDude/frankenclaw/blob/master/INSTALL.md)
+  in that repo. Both register as
   separate `mcpServers` entries in the host's MCP config — they
   don't conflict.
 
