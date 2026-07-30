@@ -286,7 +286,17 @@ function formatTrajectory(t) {
 // responses until the agent calls mnemo_save.
 
 const SAVE_REMINDER_THRESHOLD = 20;
+// Calls SINCE THE LAST SAVE. Drives the memory nudge, and is reset by every
+// mnemo_save — which is correct for a nudge and wrong for anything else.
 let toolCallCount = 0;
+// Calls THIS SESSION. Never reset by a save; only by a new session.
+// session_end used to report toolCallCount under the label "Total tool calls
+// this session", and because session_end performs a save before printing, it
+// reported 0 on essentially every session — deterministically, not
+// intermittently. Found by Opie 2026-07-30 reading his own exit message: 0
+// reported against ~25 real calls. A counter that returns a plausible wrong
+// number is worse than one that errors, because nothing can tell it is wrong.
+let sessionToolCalls = 0;
 let sessionStartTime = null;
 let sessionId = null;
 
@@ -317,9 +327,12 @@ function nudgeCheck() {
 
 function trackCall() {
   toolCallCount++;
+  sessionToolCalls++;
 }
 
 function trackSave() {
+  // Only the nudge counter resets. sessionToolCalls is a session total and a
+  // save is not the end of a session.
   toolCallCount = 0;
 }
 
@@ -1007,6 +1020,7 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
   sessionStartTime = new Date().toISOString();
   sessionId = `${effectiveAgentId}-${localTimestamp()}`;
   toolCallCount = 0;
+  sessionToolCalls = 0;
   captureBuffer.length = 0;
   if (flushTimer) clearTimeout(flushTimer);
   flushTimer = null;
@@ -1542,7 +1556,7 @@ server.registerTool(
       content: [
         {
           type: "text",
-          text: `Session end complete.\n${results.join("\n")}\n${elapsed}\nTotal tool calls this session: ${toolCallCount}`,
+          text: `Session end complete.\n${results.join("\n")}\n${elapsed}\nTotal tool calls this session: ${sessionToolCalls}`,
         },
       ],
     };
