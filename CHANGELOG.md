@@ -1,5 +1,44 @@
 # Changelog
 
+## mcp-bridge 2.19.0 — nothing gets cut silently (2026-07-30)
+
+**Guy's rule, verbatim:** *"Nothing gets cut! New rule. If something is going to be cut then I am notified before any more."*
+
+**The problem.** `capSection` announced a truncation at the END of the section it
+truncated — inside the payload, ~11,000 chars into a lane, in the one place a
+reader skims past. CC and Opie each received those notices on every boot for
+20+ days and neither ever acted on one. Measured on IGOR the day this shipped:
+**235,684 of 270,538 chars (87%) of the five brain files were being dropped from
+every boot, silently.** Guy's own 2026-07-28 lane-ownership ruling had been
+outside the delivered slice all day while CC reported it as restored.
+
+**The fix.**
+- Cuts are collected per boot and reported in a **manifest at the TOP of the
+  block**, where it cannot itself be truncated, naming each section with
+  actual/delivered/withheld and an instruction to tell Guy.
+- The manifest is emitted **whether or not anything was cut** — a clean boot says
+  so. A report that only appears when something is wrong is indistinguishable
+  from a reporter that has died.
+- Every boot appends a row to `~/.mnemo-cortex/boot-cuts.jsonl`, so "did this get
+  worse since last boot" is answerable from data instead of re-derived each
+  session. What was missing at S137 was never a size ceiling — it was anyone
+  watching the slope.
+- `capSection(text, budget, hint, label)` — the 4th arg attributes a cut. An
+  unlabelled cut records as `"unnamed section"` rather than vanishing.
+
+**`BOOT_OVERHEAD` 2,000 → 2,900.** The manifest ships on every boot, so it is
+counted in the inline-fit invariant. Leaving it out would have let the block
+exceed `BOOT_TARGET` while the test written to prevent exactly that kept
+passing. ⚠️ Worst-case boot is now **44,800 of 45,000** — 200 chars of headroom.
+Anything further added to the boot needs a budget cut somewhere first.
+
+**Not fixed here, and it is the bigger half:** this makes the loss *visible*, it
+does not make it *stop*. 87% is still cut. The files are 270KB against a 45KB
+host ceiling on inline tool results, so no arrangement of budgets delivers them
+all — that needs a write-time gate and a rule for what belongs in a boot at all.
+
+6 new tests (12 total, all passing).
+
 ## Unreleased — docs: one obvious door for installing (2026-07-26)
 
 **Docs only. No code, no version bump, nothing to redeploy.**
