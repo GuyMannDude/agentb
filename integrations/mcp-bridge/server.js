@@ -3,11 +3,18 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createHarnessToolGate } from "./harness-tool-filter.js";
 import { z } from "zod";
 import { readFile, readdir, writeFile, stat } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { execSync, execFileSync } from "node:child_process";
 import { DumpWriter } from "./dump.js";
-import { STARTUP_BUDGETS, capSection } from "./boot-budget.js";
+import {
+  STARTUP_BUDGETS,
+  capSection,
+  beginBootAudit,
+  getBootCuts,
+  formatCutManifest,
+} from "./boot-budget.js";
 import { autoCommitBrainFile } from "./brain-git.js";
 import { refusesBrainWrite } from "./lane-guard.js";
 
@@ -1006,17 +1013,52 @@ if (BRAIN_AVAILABLE) {
 // boot block stays under ~45KB and lands inline. Files are newest-first /
 // priority-first, so the top slice is the right slice.
 const STARTUP_FILE_CAP = 40_000; // fallback for files without a named budget
-async function readBrainCapped(path, cap = STARTUP_FILE_CAP) {
+// Append this boot's cut record to ~/.mnemo-cortex/boot-cuts.jsonl.
+//
+// The manifest tells the agent reading THIS boot what it is missing. The log
+// is what makes "did it get worse since last time" answerable at all — the
+// failure behind S137 was never a missing size ceiling, it was that nobody
+// was watching the slope. A row is written on every boot, including clean
+// ones: a file that only gets rows when something is wrong cannot be
+// distinguished from a logger that has stopped working.
+function recordBootCuts(agentId, cuts) {
+  try {
+    const dir = join(process.env.HOME || homedir(), ".mnemo-cortex");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(
+      join(dir, "boot-cuts.jsonl"),
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        agent_id: agentId,
+        total_dropped: cuts.reduce((n, c) => n + c.dropped, 0),
+        sections: cuts.map(({ section, actual, delivered, dropped }) => ({
+          section,
+          actual,
+          delivered,
+          dropped,
+        })),
+      }) + "\n"
+    );
+  } catch (e) {
+    // Never fail a boot over telemetry — but never swallow it either, or
+    // this becomes the exact defect it exists to catch.
+    process.stderr.write(`[mnemo-mcp] boot-cut log FAILED: ${e.message}\n`);
+  }
+}
+
+async function readBrainCapped(path, cap = STARTUP_FILE_CAP, label) {
   const content = await readFile(path, "utf-8");
   return capSection(
     content,
     cap,
     `newest-first lanes → most-recent kept; active.md → highest-priority kept; ` +
-      `use read_brain_file for the full file`
+      `use read_brain_file for the full file`,
+    label || path.split("/").pop()
   );
 }
 
 async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates }) {
+  beginBootAudit();
   sessionStartTime = new Date().toISOString();
   sessionId = `${effectiveAgentId}-${localTimestamp()}`;
   toolCallCount = 0;
@@ -1066,7 +1108,11 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     let laneLoaded = null;
     for (const candidate of laneCandidates) {
       try {
-        const brain = await readBrainCapped(join(BRAIN_DIR, candidate), STARTUP_BUDGETS.lane);
+        const brain = await readBrainCapped(
+          join(BRAIN_DIR, candidate),
+          STARTUP_BUDGETS.lane,
+          `${candidate} (your lane)`
+        );
         parts.push(`# YOUR BRAIN LANE (${candidate})\n\n` + brain);
         laneLoaded = candidate;
         break;
@@ -1127,7 +1173,7 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     // its session ritual frames everything else.
     for (const file of ["CLAUDE.md", "active.md", "people.md", "doctrines.md"]) {
       try {
-        const content = await readBrainCapped(join(BRAIN_DIR, file), STARTUP_BUDGETS[file]);
+        const content = await readBrainCapped(join(BRAIN_DIR, file), STARTUP_BUDGETS[file], file);
         parts.push(`# ${file.toUpperCase()}\n\n` + content);
       } catch {
         // skip if missing
@@ -1154,7 +1200,12 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
           .join("\n\n");
         parts.push(
           "# RECENT MNEMO CONTEXT\n\n" +
-            capSection(mnemoText, STARTUP_BUDGETS.mnemo, "use mnemo_recall to pull more")
+            capSection(
+            mnemoText,
+            STARTUP_BUDGETS.mnemo,
+            "use mnemo_recall to pull more",
+            "recent Mnemo context"
+          )
         );
       }
     } catch (e) {
@@ -1197,7 +1248,8 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
             capSection(
               brief.content,
               STARTUP_BUDGETS.dream,
-              "full brief via GET /dream/latest on the Cortex host"
+              "full brief via GET /dream/latest on the Cortex host",
+              "dream brief"
             )
         );
       }
@@ -1224,8 +1276,20 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
 
     const header = identityHeader({ pullStatus, laneLoaded, sessionId });
 
+    // Guy's rule (2026-07-30): nothing gets cut silently — he is notified
+    // BEFORE any more is. The manifest leads the block so it cannot itself
+    // be truncated, and is written to a log so growth is diffable across
+    // boots rather than re-observed from scratch every session.
+    const manifest = formatCutManifest();
+    recordBootCuts(effectiveAgentId, getBootCuts());
+
     return {
-      content: [{ type: "text", text: header + parts.join("\n\n---\n\n") }],
+      content: [
+        {
+          type: "text",
+          text: header + manifest + "\n\n---\n\n" + parts.join("\n\n---\n\n"),
+        },
+      ],
     };
   } catch (err) {
     return {

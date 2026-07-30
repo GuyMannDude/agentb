@@ -8,6 +8,9 @@ import {
   BOOT_OVERHEAD,
   STARTUP_BUDGETS,
   capSection,
+  beginBootAudit,
+  getBootCuts,
+  formatCutManifest,
 } from "./boot-budget.js";
 
 let passed = 0;
@@ -75,6 +78,65 @@ test("every boot section has a budget", () => {
     if (!(key in STARTUP_BUDGETS)) throw new Error(`missing budget: ${key}`);
     if (!(STARTUP_BUDGETS[key] > 0)) throw new Error(`non-positive budget: ${key}`);
   }
+});
+
+
+// ── cut audit (Guy's rule, 2026-07-30: nothing gets cut silently) ──
+
+console.log("\n── cut audit ──\n");
+
+test("clean boot reports explicitly, not by silence", () => {
+  beginBootAudit();
+  capSection("tiny", 1000, "hint", "a.md");
+  if (getBootCuts().length !== 0) throw new Error("recorded a cut that did not happen");
+  const m = formatCutManifest();
+  if (!m.includes("nothing was withheld"))
+    throw new Error("a clean boot must SAY it is clean: " + m);
+});
+
+test("a cut is recorded with true numbers and attributed to its section", () => {
+  beginBootAudit();
+  capSection("x".repeat(5000), 1000, "hint", "active.md");
+  const cuts = getBootCuts();
+  if (cuts.length !== 1) throw new Error("expected exactly 1 cut, got " + cuts.length);
+  const c = cuts[0];
+  if (c.section !== "active.md") throw new Error("section not attributed: " + c.section);
+  if (c.actual !== 5000 || c.delivered !== 1000 || c.dropped !== 4000)
+    throw new Error("wrong arithmetic: " + JSON.stringify(c));
+});
+
+test("an unlabelled cut is visible as a defect, not silently anonymous", () => {
+  beginBootAudit();
+  capSection("x".repeat(3000), 100, "hint");
+  if (getBootCuts()[0].section !== "unnamed section")
+    throw new Error("unlabelled cuts must be identifiable");
+});
+
+test("beginBootAudit clears the previous boot (no cross-boot leakage)", () => {
+  beginBootAudit();
+  capSection("x".repeat(3000), 100, "hint", "one.md");
+  beginBootAudit();
+  if (getBootCuts().length !== 0) throw new Error("cuts leaked across boots");
+});
+
+test("manifest names every cut section and the true total", () => {
+  beginBootAudit();
+  capSection("x".repeat(3000), 1000, "hint", "lane.md");
+  capSection("y".repeat(2500), 500, "hint", "doctrines.md");
+  const m = formatCutManifest();
+  for (const need of ["lane.md", "doctrines.md", "4,000"]) {
+    if (!m.includes(need)) throw new Error(`manifest missing ${need}: ${m}`);
+  }
+});
+
+test("the manifest itself is small enough to never need capping", () => {
+  beginBootAudit();
+  for (const f of Object.keys(STARTUP_BUDGETS)) {
+    capSection("x".repeat(200_000), STARTUP_BUDGETS[f] || 1000, "hint", f);
+  }
+  const m = formatCutManifest();
+  if (m.length > 1500)
+    throw new Error(`manifest is ${m.length} chars — it must not compete with content`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
