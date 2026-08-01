@@ -11,7 +11,7 @@ from agentb.vec import VecStore
 def scan_tenant(memory_dir: Path, vec_store: VecStore, *, window_days: int = 7,
                 top_k: int = 5, cosine_threshold: float = 0.80,
                 overlap_threshold: float = 0.55, min_tokens: int = 5,
-                report_max_pairs: int = 20) -> dict:
+                report_max_pairs: int = 10) -> dict:
     corpus_size = vec_store.count()
     source = {"thresholds": {"cosine": cosine_threshold, "overlap": overlap_threshold,
                              "min_tokens": min_tokens}, "top_k": top_k,

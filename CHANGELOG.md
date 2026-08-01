@@ -23,7 +23,7 @@ size, window, scores, and homes, plus a fresh block consumed by the dream
 brief. It exits 0 clean, 1 on advisory findings, and 2 on a blind zero-memory
 store. It can bus each affected lane owner through the existing Dreamer bus
 environment. It never merges, demotes, or rewrites a memory.
-Reports preserve the total finding count but cap detailed pair evidence at 20
+Reports preserve the total finding count but cap detailed pair evidence at 10
 by default, preventing a duplicate-heavy corpus from bloating the dream brief
 or bus envelope; `dedup.report_max_pairs` controls the cap.
 

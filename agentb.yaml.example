@@ -97,7 +97,7 @@ dedup:
   overlap_threshold: 0.55
   min_tokens: 5
   nightly_window_days: 7
-  report_max_pairs: 20
+  report_max_pairs: 10
 
 # ── Server Settings ──
 server:
