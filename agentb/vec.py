@@ -69,7 +69,11 @@ class VecStore:
         self._ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        # FastAPI lifespan setup and request handling may run on different
+        # worker threads (notably TestClient, and some ASGI deployments).
+        # sqlite is built in serialized mode; permit the connection to follow
+        # the app while bounded dedup queries use their own worker connection.
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)

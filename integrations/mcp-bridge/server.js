@@ -755,10 +755,16 @@ server.registerTool(
       .array(z.string().max(64))
       .optional()
       .describe("Free-form human-readable tags for search."),
+    force: z.boolean().optional().describe(
+      "Save despite reported near-duplicates; records near_dup_of links."
+    ),
+    supersedes: z.array(z.string().max(64)).optional().describe(
+      "Save and demote these existing memory ids while preserving history."
+    ),
   },
     annotations: { "title": 'Save Memory', "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true },
   },
-  async ({ summary, key_facts, session_id, source, category, additional_tags }) => {
+  async ({ summary, key_facts, session_id, source, category, additional_tags, force, supersedes }) => {
     captureCall("mnemo_save", summary.slice(0, 150));
     trackSave();
     try {
@@ -779,8 +785,24 @@ server.registerTool(
       if (source !== undefined) body.source = source;
       if (category !== undefined) body.category = category;
       if (additional_tags !== undefined) body.additional_tags = additional_tags;
+      if (force !== undefined) body.force = force;
+      if (supersedes !== undefined) body.supersedes = supersedes;
 
       const data = await mnemoRequest("POST", "/writeback", body);
+
+      if (data.status === "held") {
+        const matches = (data.near_duplicates || []).map((m) =>
+          `  - ${m.id}: cosine=${m.cosine} overlap=${m.overlap} age=${m.age_days ?? "?"}d\n` +
+          `    shared: ${(m.shared_tokens || []).join(", ")}\n` +
+          `    ${m.excerpt || ""}`
+        );
+        return {
+          content: [{ type: "text", text:
+            `Save HELD: Mnemo found ${matches.length} near-duplicate(s).\n` +
+            matches.join("\n") +
+            "\nReview the existing home, then repeat with force=true, supersedes=[id], or abandon." }],
+        };
+      }
 
       // Surface what the server actually stored so the agent can learn.
       const lines = [

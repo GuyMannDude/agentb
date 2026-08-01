@@ -1,5 +1,29 @@
 # Changelog
 
+## v4.15.0 — Bounded write-time near-duplicate holds + advisory rulekeeper (2026-08-01)
+
+**Problem.** Curated memories could restate an existing rule or decision months
+later because `/writeback` never asked the existing vector index what the lane
+already knew. A corpus scan on every save was unacceptable: that is the same
+unbounded disk-work shape that previously starved the event loop.
+
+**Fix.** Interactive writes now embed once and query only the same tenant's
+top 5 indexed neighbors off-loop. A candidate is held when cosine is at least
+0.80 and the explainable, stemmed token-overlap coefficient is at least 0.55.
+Responses name ids, ages, both scores, shared tokens, and excerpts. Callers may
+explicitly `force` (recording `near_dup_of`) or `supersedes` (the old JSON
+remains as audit history but is demoted from every recall tier). Under-five-token
+saves are advisory-only. Batch/session-log capture never blocks; embed failure
+degrades to a raw, `dedup_unchecked` save rather than loss. Thresholds, top-k,
+and the seven-day window are configurable under `dedup:`.
+
+`mnemo-rulekeeper.py` supplies the nightly read-only back half: bounded recent
+writes versus the same-lane index, ASCII evidence naming thresholds, corpus
+size, window, scores, and homes, plus a fresh block consumed by the dream
+brief. It exits 0 clean, 1 on advisory findings, and 2 on a blind zero-memory
+store. It can bus each affected lane owner through the existing Dreamer bus
+environment. It never merges, demotes, or rewrites a memory.
+
 ## mcp-bridge 2.19.0 — nothing gets cut silently (2026-07-30)
 
 **Guy's rule, verbatim:** *"Nothing gets cut! New rule. If something is going to be cut then I am notified before any more."*

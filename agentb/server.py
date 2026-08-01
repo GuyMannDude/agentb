@@ -50,6 +50,7 @@ from agentb.provenance import (
     suggest_category, compute_stale_warning,
 )
 from agentb.classify import classify_category, reclassify_memory_dir, is_routine_log
+from agentb.dedup import find_near_duplicates
 from agentb.redact import redact_text, redact_obj
 from agentb.capture_gate import CaptureGate
 from agentb.ranking import composite_score, explore_score
@@ -240,6 +241,10 @@ class WritebackRequest(BaseModel):
             "not trip or be blocked by the breaker that guards live /context."
         ),
     )
+    force: bool = Field(False, description="Save despite confirmed near-duplicates.")
+    supersedes: list[str] = Field(
+        default_factory=list,
+        description="Save and demote these existing memory ids.")
 
 
 class WritebackResponse(BaseModel):
@@ -255,6 +260,7 @@ class WritebackResponse(BaseModel):
     source_used: Optional[str] = None
     # v4.1 — how many secrets were redacted before storage (0 = clean)
     redactions: int = 0
+    near_duplicates: list[dict] = Field(default_factory=list)
 
 
 # ── v4.5 Trajectory Learning ──
@@ -1322,6 +1328,46 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         ts = req.timestamp or datetime.now(timezone.utc).isoformat()
         memory_id = hashlib.sha256(f"{req.session_id}:{ts}".encode()).hexdigest()[:16]
 
+        # Embed once, then use the existing same-tenant index for a bounded
+        # top-k candidate check before anything is persisted. SQLite work runs
+        # through an isolated worker connection in dedup.py.
+        full_text = summary + "\n" + "\n".join(key_facts)
+        embedding = None
+        dedup_unchecked = None
+        try:
+            embedding = await embedder.embed(
+                full_text, use_breaker=not req.batch, task_type="document")
+        except Exception as exc:
+            # Degrade to raw: an embedder outage must never turn dedup into
+            # silent write loss, especially for non-interactive capture.
+            dedup_unchecked = f"embedding unavailable: {type(exc).__name__}"
+            log.error(f"Writeback dedup unavailable for {req.session_id}: {exc}")
+        near_duplicates: list[dict] = []
+        if config.dedup.enabled and embedding is not None:
+            near_duplicates = await find_near_duplicates(
+                vec_store=vec_store,
+                embedding=embedding,
+                text=full_text,
+                candidate_id=req.session_id,
+                allow_path=memory_dir.parent / "dedup-allow.txt",
+                top_k=config.dedup.top_k,
+                cosine_threshold=config.dedup.cosine_threshold,
+                overlap_threshold=config.dedup.overlap_threshold,
+                min_tokens=config.dedup.min_tokens,
+            )
+        non_interactive = bool(
+            req.batch or req.category == "session_log"
+            or is_routine_log(summary, key_facts))
+        if near_duplicates and not non_interactive and not req.force and not req.supersedes:
+            return WritebackResponse(
+                status="held", memory_id="", agent_id=req.agent_id,
+                l1_bundles_updated=0,
+                message=("Near-duplicate held. Repeat with force=true, "
+                         "supersedes=[id], or abandon the save."),
+                near_duplicates=near_duplicates,
+                redactions=sum(red_counts.values()),
+            )
+
         # v3: provenance + decay tagging
         source_used = req.source if req.source in VALID_SOURCES else "inferred"
         # v4 Smart Ingestion: categorize so real memories (Tier 1) never land in
@@ -1364,6 +1410,13 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             "additional_tags": additional_tags,
             "schema_version": 3,
         }
+        near_dup_ids = [match["id"] for match in near_duplicates]
+        if near_dup_ids:
+            memory_entry["near_dup_of"] = near_dup_ids
+        if req.supersedes:
+            memory_entry["supersedes"] = list(dict.fromkeys(req.supersedes))
+        if dedup_unchecked:
+            memory_entry["dedup_unchecked"] = dedup_unchecked
         # v4 provenance: how the category was decided, and whether the dreamer
         # should revisit it (regex fallback fired because the LLM was unavailable).
         if classified_by:
@@ -1377,12 +1430,28 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         await asyncio.to_thread(
             _atomic_write_text, memory_dir / f"{memory_id}.json",
             json.dumps(memory_entry, indent=2, default=str))
+
+        # Demotion keeps the old JSON as audit history while removing it from
+        # active vector recall. No memory evidence is deleted.
+        for old_id in dict.fromkeys(req.supersedes):
+            old_path = memory_dir / f"{old_id}.json"
+            if not old_path.exists():
+                continue
+
+            def _mark_superseded(path=old_path, new_id=memory_id):
+                old = json.loads(path.read_text(encoding="utf-8"))
+                old["superseded_by"] = new_id
+                old["superseded_at"] = time.time()
+                _atomic_write_text(path, json.dumps(old, indent=2, default=str))
+
+            await asyncio.to_thread(_mark_superseded)
+            vec_store.delete(old_id)
         log.info(f"Writeback: {req.session_id} → {memory_id} (agent: {req.agent_id or 'default'}, source={source_used}, category={category_used})")
 
         l1_updated = 0
         try:
-            full_text = summary + "\n" + "\n".join(key_facts)
-            embedding = await embedder.embed(full_text, use_breaker=not req.batch, task_type="document")
+            if embedding is None:
+                raise RuntimeError("embedding unavailable; raw memory retained unindexed")
             # v4.1: new memories index into VEC only. The legacy L2 tier kept a
             # full copy of every embedding in one index.json rewritten on every
             # save (cc's had grown to 43 MB → ~43 MB of disk writes per minute
@@ -1427,6 +1496,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             category_match_keywords=category_match_keywords_field,
             source_used=source_used,
             redactions=sum(red_counts.values()),
+            near_duplicates=near_duplicates,
         )
 
     # ── Trajectory Learning (v4.5) ──

@@ -172,6 +172,16 @@ class ClassificationConfig:
 
 
 @dataclass
+class DedupConfig:
+    enabled: bool = True
+    top_k: int = 5
+    cosine_threshold: float = 0.80
+    overlap_threshold: float = 0.55
+    min_tokens: int = 5
+    nightly_window_days: int = 7
+
+
+@dataclass
 class AnalysisConfig:
     # The Analyst (v4.1, Phase 2): periodically distills unprocessed Tier-2
     # session logs into Tier-1 notes. Conservative by design — see analyst.py.
@@ -295,6 +305,7 @@ class AgentBConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
     classification: ClassificationConfig = field(default_factory=ClassificationConfig)
+    dedup: DedupConfig = field(default_factory=DedupConfig)
     ranking: RankingConfig = field(default_factory=RankingConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     muse: MuseConfig = field(default_factory=MuseConfig)
@@ -424,6 +435,10 @@ def _parse_config(raw: dict) -> AgentBConfig:
         cl = raw["classification"]
         cfg.classification = ClassificationConfig(
             **{k: cl[k] for k in cl if hasattr(ClassificationConfig, k)})
+    if "dedup" in raw and raw["dedup"]:
+        dd = raw["dedup"]
+        cfg.dedup = DedupConfig(
+            **{k: dd[k] for k in dd if hasattr(DedupConfig, k)})
     if "ranking" in raw and raw["ranking"]:
         rk = raw["ranking"]
         cfg.ranking = RankingConfig(
