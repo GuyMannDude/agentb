@@ -179,6 +179,7 @@ class DedupConfig:
     overlap_threshold: float = 0.55
     min_tokens: int = 5
     nightly_window_days: int = 7
+    report_max_pairs: int = 20
 
 
 @dataclass

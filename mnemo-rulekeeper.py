@@ -29,7 +29,8 @@ def main() -> int:
                 window_days=cfg.dedup.nightly_window_days, top_k=cfg.dedup.top_k,
                 cosine_threshold=cfg.dedup.cosine_threshold,
                 overlap_threshold=cfg.dedup.overlap_threshold,
-                min_tokens=cfg.dedup.min_tokens)
+                min_tokens=cfg.dedup.min_tokens,
+                report_max_pairs=cfg.dedup.report_max_pairs)
         finally:
             store.close()
         name = agent_id or "default"

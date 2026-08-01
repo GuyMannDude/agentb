@@ -10,7 +10,8 @@ from agentb.vec import VecStore
 
 def scan_tenant(memory_dir: Path, vec_store: VecStore, *, window_days: int = 7,
                 top_k: int = 5, cosine_threshold: float = 0.80,
-                overlap_threshold: float = 0.55, min_tokens: int = 5) -> dict:
+                overlap_threshold: float = 0.55, min_tokens: int = 5,
+                report_max_pairs: int = 20) -> dict:
     corpus_size = vec_store.count()
     source = {"thresholds": {"cosine": cosine_threshold, "overlap": overlap_threshold,
                              "min_tokens": min_tokens}, "top_k": top_k,
@@ -51,8 +52,12 @@ def scan_tenant(memory_dir: Path, vec_store: VecStore, *, window_days: int = 7,
                               "cosine": round(cosine, 4),
                               "overlap": round(token_overlap, 4),
                               "new_home": str(path), "existing_home": hit.source_file})
-    return {"status": "duplicates" if pairs else "clean",
-            "exit_code": 1 if pairs else 0, "source": source, "pairs": pairs}
+    pair_count = len(pairs)
+    pairs.sort(key=lambda pair: (pair["overlap"], pair["cosine"]), reverse=True)
+    reported = pairs[:max(0, report_max_pairs)]
+    return {"status": "duplicates" if pair_count else "clean",
+            "exit_code": 1 if pair_count else 0, "source": source,
+            "pair_count": pair_count, "pairs": reported}
 
 
 def format_advisory(agent_id: str, result: dict) -> str:
@@ -66,7 +71,8 @@ def format_advisory(agent_id: str, result: dict) -> str:
     elif not result["pairs"]:
         lines.append("No unallowlisted near-duplicate pairs found.")
     else:
-        lines.append(f"Advisory only: {len(result['pairs'])} pair(s); nothing merged or demoted.")
+        lines.append(f"Advisory only: {result.get('pair_count', len(result['pairs']))} pair(s); "
+                     f"showing {len(result['pairs'])}; nothing merged or demoted.")
         for pair in result["pairs"]:
             lines.append(f"- {pair['new_id']} ~ {pair['existing_id']} "
                          f"cosine={pair['cosine']:.4f} overlap={pair['overlap']:.4f} "
