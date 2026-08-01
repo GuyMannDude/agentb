@@ -318,3 +318,16 @@ def test_boot_dream_prioritizes_changed_then_open_and_names_drops():
 def test_boot_dream_always_states_when_nothing_dropped():
     result = dream._compose_boot_dream("# What changed\n\nsmall", 200)
     assert result.endswith("DROPPED: nothing")
+
+
+def test_boot_dream_preserves_advisory_preamble_at_highest_priority():
+    source = "ADVISORY PREAMBLE with no heading\n\n---\n\n# What was built\n\nbody"
+    result = dream._compose_boot_dream(source, 500)
+    assert result.startswith("ADVISORY PREAMBLE")
+    assert result.endswith("DROPPED: nothing")
+
+
+def test_boot_dream_budget_is_utf16_units_near_emoji_boundary():
+    source = "# What changed\n\n" + ("x" * 35) + ("😀" * 10)
+    result = dream._compose_boot_dream(source, 70)
+    assert len(result.encode("utf-16-le")) // 2 <= 70

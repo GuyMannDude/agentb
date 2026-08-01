@@ -81,8 +81,13 @@ def _boot_budget(name: str) -> int:
 
 def _compose_boot_dream(text: str, budget: int) -> str:
     """Keep complete Markdown sections in boot priority order and name loss."""
+    def units(value: str) -> int:
+        return len(value.encode("utf-16-le")) // 2
+
     matches = list(re.finditer(r"(?m)^#{1,3}\s+(.+?)\s*$", text))
     sections = []
+    if matches and text[:matches[0].start()].strip():
+        sections.append(("preamble", text[:matches[0].start()].strip()))
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         sections.append((match.group(1).strip(), text[match.start():end].strip()))
@@ -91,6 +96,8 @@ def _compose_boot_dream(text: str, budget: int) -> str:
 
     def rank(name: str) -> int:
         lower = name.lower()
+        if lower == "preamble":
+            return 0
         if any(word in lower for word in ("built", "shipped", "changed")):
             return 0
         if any(word in lower for word in ("blocked", "pending", "open", "next")):
@@ -103,19 +110,18 @@ def _compose_boot_dream(text: str, budget: int) -> str:
     for _, (name, body) in ordered:
         prospective = kept + [body]
         line = f"DROPPED: {', '.join(dropped) if dropped else 'nothing'}"
-        if len("\n\n".join(prospective + [line])) <= budget:
+        if units("\n\n".join(prospective + [line])) <= budget:
             kept.append(body)
         else:
             dropped.append(name)
     line = f"DROPPED: {', '.join(dropped) if dropped else 'nothing'}"
-    while kept and len("\n\n".join(kept + [line])) > budget:
+    while kept and units("\n\n".join(kept + [line])) > budget:
         removed = kept.pop()
         dropped.insert(0, re.sub(r"^#{1,3}\s+", "", removed.splitlines()[0]).strip())
         line = f"DROPPED: {', '.join(dropped)}"
     result = "\n\n".join(kept + [line])
-    if len(result) > budget:
-        suffix = " [identifier list cut]"
-        result = result[:max(0, budget - len(suffix))] + suffix
+    if units(result) > budget:
+        result = "DROPPED: identifier list exceeds boot budget"
     return result
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -664,7 +670,7 @@ def write_dream(dream_text: str, memories: list[dict], since: datetime) -> str:
     # Reserve the human-readable Markdown envelope before composing the body.
     # Its dynamic source list is bounded by the agents represented tonight.
     envelope_chars = 180 + len(", ".join(f"{a} ({c} entries)" for a, c in sorted(agent_counts.items())))
-    dream_text = _compose_boot_dream(
+    boot_text = _compose_boot_dream(
         dream_text, max(1, _boot_budget("dream") - envelope_chars)
     )
 
@@ -700,8 +706,10 @@ _Sources: {', '.join(f'{a} ({c} entries)' for a, c in sorted(agent_counts.items(
 """
     md_path = DREAM_DIR / f"{date_str}.md"
     md_path.write_text(md_content, encoding="utf-8")
+    boot_path = DREAM_DIR / f"{date_str}-boot.md"
+    boot_path.write_text(md_content.replace(dream_text, boot_text, 1), encoding="utf-8")
 
-    log.info(f"Dream written: {json_path} + {md_path}")
+    log.info(f"Dream written: {json_path} + {md_path} + {boot_path}")
 
     # Also POST through /writeback so the dream hits L2 index
     bridge_url = os.getenv("MNEMO_URL", "http://localhost:50001")

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Dreamer now reads the canonical `dream` boot budget from `boot-budget.js`, composes complete sections in what-changed/open-items/narrative priority order, and ends every generated brief with a named `DROPPED:` inventory.
+- Dreamer now reads the canonical `dream` boot budget from `boot-budget.js`, composes a separate UTF-16-budgeted boot artifact in preamble/what-changed/open-items/narrative priority order, and ends it with a named `DROPPED:` inventory. The full JSON and Markdown synthesis remain intact; `/dream/latest` exposes the compact sibling as `boot_content`.
 - `boot-cuts.jsonl` now records dropped Markdown section and memory identifiers alongside character counts, making withheld context fetchable by name.
 
 ## v4.15.0 — Bounded write-time near-duplicate holds + advisory rulekeeper (2026-08-01)

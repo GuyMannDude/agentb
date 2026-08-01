@@ -73,7 +73,20 @@ def test_serves_newest_by_filename(tmp_path, make_client):
         body = r.json()
         assert body["date"] == "2026-07-05"
         assert body["content"] == "newest brief"
+        assert body["boot_content"] is None
         assert body["age_hours"] >= 0
+
+
+def test_serves_full_and_boot_artifacts_separately(tmp_path, make_client):
+    dreams = tmp_path / "dreams"
+    dreams.mkdir()
+    (dreams / "2026-07-05.md").write_text("full brief", encoding="utf-8")
+    (dreams / "2026-07-05-boot.md").write_text("boot brief\nDROPPED: narrative", encoding="utf-8")
+    with make_client() as client:
+        body = client.get("/dream/latest").json()
+        assert body["date"] == "2026-07-05"
+        assert body["content"] == "full brief"
+        assert body["boot_content"] == "boot brief\nDROPPED: narrative"
 
 
 def test_ignores_non_md_files(tmp_path, make_client):
