@@ -1242,26 +1242,36 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
       let brief = null;
       try {
         const d = await mnemoRequest("GET", "/dream/latest");
-        if (d && d.content && d.age_hours < 48) {
-          brief = { ageH: Math.round(d.age_hours), content: d.content };
+        if (d && (d.boot_content || d.content) && d.age_hours < 48) {
+          // Prefer the dreamer-composed boot artifact: whole sections in
+          // priority order ending in a named DROPPED: line, sized in the
+          // same UTF-16 units capSection cuts in. content stays the full
+          // brief; capSection below is the backstop for either shape.
+          brief = { ageH: Math.round(d.age_hours), content: d.boot_content || d.content };
         }
       } catch {
         // server predates /dream/latest or is unreachable — try local disk
       }
       if (!brief) {
+        // Anchor "latest" on full briefs only, then prefer the -boot sibling
+        // ("-boot" sorts before ".md", so unfiltered ordering would break).
         const dreamFiles = (await readdir(DREAM_DIR))
-          .filter((f) => f.endsWith(".md"))
+          .filter((f) => f.endsWith(".md") && !f.endsWith("-boot.md"))
           .sort()
           .reverse();
         if (dreamFiles.length > 0) {
+          const bootSibling = join(DREAM_DIR, dreamFiles[0].replace(/\.md$/, "-boot.md"));
           const latestDream = join(DREAM_DIR, dreamFiles[0]);
           const st = await stat(latestDream);
           const dreamAge = (Date.now() - st.mtimeMs) / 3600000;
           if (dreamAge < 48) {
-            brief = {
-              ageH: Math.round(dreamAge),
-              content: await readFile(latestDream, "utf-8"),
-            };
+            let text;
+            try {
+              text = await readFile(bootSibling, "utf-8");
+            } catch {
+              text = await readFile(latestDream, "utf-8");
+            }
+            brief = { ageH: Math.round(dreamAge), content: text };
           }
         }
       }
