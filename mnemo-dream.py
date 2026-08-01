@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -63,6 +64,59 @@ MNEMO_DB_PATH = Path(os.getenv("MNEMO_DB_PATH", "~/.mnemo-v2/mnemo.sqlite3")).ex
 DREAM_DIR = AGENTB_DATA_DIR / "dreams"
 AGENTS_ROOT = AGENTB_DATA_DIR / "agents"
 DREAMER_MEMORY_DIR = AGENTS_ROOT / "dreamer" / "memory"
+
+
+def _boot_budget(name: str) -> int:
+    """Read a named startup budget from the bridge's canonical JS source."""
+    budget_file = Path(__file__).parent / "integrations" / "mcp-bridge" / "boot-budget.js"
+    source = budget_file.read_text(encoding="utf-8")
+    block = re.search(r"STARTUP_BUDGETS\s*=\s*\{(.*?)\}", source, re.S)
+    if not block:
+        raise RuntimeError(f"STARTUP_BUDGETS missing from {budget_file}")
+    match = re.search(rf'["\']?{re.escape(name)}["\']?\s*:\s*([\d_]+)', block.group(1))
+    if not match:
+        raise RuntimeError(f"startup budget {name!r} missing from {budget_file}")
+    return int(match.group(1).replace("_", ""))
+
+
+def _compose_boot_dream(text: str, budget: int) -> str:
+    """Keep complete Markdown sections in boot priority order and name loss."""
+    matches = list(re.finditer(r"(?m)^#{1,3}\s+(.+?)\s*$", text))
+    sections = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections.append((match.group(1).strip(), text[match.start():end].strip()))
+    if not sections:
+        sections = [("narrative", text.strip())]
+
+    def rank(name: str) -> int:
+        lower = name.lower()
+        if any(word in lower for word in ("built", "shipped", "changed")):
+            return 0
+        if any(word in lower for word in ("blocked", "pending", "open", "next")):
+            return 1
+        return 2
+
+    ordered = sorted(enumerate(sections), key=lambda pair: (rank(pair[1][0]), pair[0]))
+    kept = []
+    dropped = []
+    for _, (name, body) in ordered:
+        prospective = kept + [body]
+        line = f"DROPPED: {', '.join(dropped) if dropped else 'nothing'}"
+        if len("\n\n".join(prospective + [line])) <= budget:
+            kept.append(body)
+        else:
+            dropped.append(name)
+    line = f"DROPPED: {', '.join(dropped) if dropped else 'nothing'}"
+    while kept and len("\n\n".join(kept + [line])) > budget:
+        removed = kept.pop()
+        dropped.insert(0, re.sub(r"^#{1,3}\s+", "", removed.splitlines()[0]).strip())
+        line = f"DROPPED: {', '.join(dropped)}"
+    result = "\n\n".join(kept + [line])
+    if len(result) > budget:
+        suffix = " [identifier list cut]"
+        result = result[:max(0, budget - len(suffix))] + suffix
+    return result
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 DREAM_MODEL = os.getenv("MNEMO_DREAM_MODEL", "google/gemini-2.5-flash")
@@ -606,6 +660,13 @@ def write_dream(dream_text: str, memories: list[dict], since: datetime) -> str:
     for m in memories:
         a = m["agent_id"]
         agent_counts[a] = agent_counts.get(a, 0) + 1
+
+    # Reserve the human-readable Markdown envelope before composing the body.
+    # Its dynamic source list is bounded by the agents represented tonight.
+    envelope_chars = 180 + len(", ".join(f"{a} ({c} entries)" for a, c in sorted(agent_counts.items())))
+    dream_text = _compose_boot_dream(
+        dream_text, max(1, _boot_budget("dream") - envelope_chars)
+    )
 
     # Write AgentB-format JSON (so /writeback search finds it)
     memory_entry = {

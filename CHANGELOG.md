@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Dreamer now reads the canonical `dream` boot budget from `boot-budget.js`, composes complete sections in what-changed/open-items/narrative priority order, and ends every generated brief with a named `DROPPED:` inventory.
+- `boot-cuts.jsonl` now records dropped Markdown section and memory identifiers alongside character counts, making withheld context fetchable by name.
+
 ## v4.15.0 — Bounded write-time near-duplicate holds + advisory rulekeeper (2026-08-01)
 
 **Problem.** Curated memories could restate an existing rule or decision months

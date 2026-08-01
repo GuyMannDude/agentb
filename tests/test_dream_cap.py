@@ -296,3 +296,25 @@ def test_extract_section_salvages_truncated_call(monkeypatch):
     facts = dream._extract_facts_from_section("cc", "section", label=" chunk 1/4")
     assert facts is not None
     assert [f["value"] for f in facts] == ["v1", "v2"]
+
+
+def test_boot_budget_is_read_from_canonical_bridge_file():
+    assert dream._boot_budget("dream") == 3500
+
+
+def test_boot_dream_prioritizes_changed_then_open_and_names_drops():
+    source = (
+        "# Narrative\n\n" + ("n" * 100) + "\n\n"
+        "# What was built or shipped\n\nnewest change\n\n"
+        "# What's blocked or pending\n\nopen item\n"
+    )
+    result = dream._compose_boot_dream(source, 150)
+    assert result.startswith("# What was built or shipped")
+    assert "# What's blocked or pending" in result
+    assert result.endswith("DROPPED: Narrative")
+    assert len(result) <= 150
+
+
+def test_boot_dream_always_states_when_nothing_dropped():
+    result = dream._compose_boot_dream("# What changed\n\nsmall", 200)
+    assert result.endswith("DROPPED: nothing")
