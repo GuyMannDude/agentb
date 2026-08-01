@@ -64,12 +64,25 @@ export function getBootCuts() {
 // which is a bug worth seeing rather than hiding.
 export function capSection(text, budget, hint, label) {
   if (text.length <= budget) return text;
+  const withheld = text.slice(budget);
+  const headings = [...text.matchAll(/^#{1,6}\s+(.+)$/gm)];
+  const identifiers = headings
+    .filter((m, index) => {
+      const sectionEnd = index + 1 < headings.length ? headings[index + 1].index : text.length;
+      return sectionEnd > budget;
+    })
+    .map((m) => m[1].trim())
+    .concat(
+      [...withheld.matchAll(/\b(?:memory_id|id)[:=]\s*([a-f0-9]{8,64})\b/gi)]
+        .map((m) => m[1])
+    );
   bootCuts.push({
     section: label || "unnamed section",
     actual: text.length,
     delivered: budget,
     dropped: text.length - budget,
     hint,
+    dropped_identifiers: [...new Set(identifiers)],
   });
   return (
     text.slice(0, budget) +

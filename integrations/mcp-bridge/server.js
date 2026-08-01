@@ -1053,11 +1053,12 @@ function recordBootCuts(agentId, cuts) {
         ts: new Date().toISOString(),
         agent_id: agentId,
         total_dropped: cuts.reduce((n, c) => n + c.dropped, 0),
-        sections: cuts.map(({ section, actual, delivered, dropped }) => ({
+        sections: cuts.map(({ section, actual, delivered, dropped, dropped_identifiers }) => ({
           section,
           actual,
           delivered,
           dropped,
+          dropped_identifiers: dropped_identifiers || [],
         })),
       }) + "\n"
     );
