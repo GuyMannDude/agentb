@@ -578,6 +578,19 @@ def write_dream(dream_text: str, memories: list[dict], since: datetime) -> str:
     except ImportError:
         log.warning("agentb.redact unavailable — dream brief written unredacted")
 
+    # Append a fresh advisory produced by the independent read-only nightly
+    # rulekeeper. Stale output is ignored instead of replayed forever.
+    advisory_path = Path(os.getenv(
+        "MNEMO_RULEKEEPER_ADVISORY",
+        str(Path.home() / ".mnemo-dreams" / "rulekeeper-latest.md")))
+    try:
+        if time.time() - advisory_path.stat().st_mtime <= 86400:
+            advisory = advisory_path.read_text(encoding="ascii")
+            if advisory.strip():
+                dream_text += "\n\n---\n\n" + advisory.strip()
+    except OSError:
+        pass
+
     now = datetime.now(timezone.utc)
     date_str = now.strftime("%Y-%m-%d")
     dream_id = hashlib.sha256(f"dream:{date_str}:{now.isoformat()}".encode()).hexdigest()[:16]

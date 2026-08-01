@@ -107,6 +107,8 @@ def resolve_disk_truth(chunk: ContextChunk, memory_dir: Path) -> Optional[Contex
         mem = json.loads(mem_path.read_text())
     except Exception:
         return chunk
+    if mem.get("superseded_by"):
+        return None
     from agentb.provenance import compute_stale_warning
     chunk.category = mem.get("category")
     chunk.provenance_source = mem.get("source")
@@ -326,6 +328,8 @@ async def l3_scan(
         for mem_file in files:
             try:
                 mem = json.loads(mem_file.read_text())
+                if mem.get("superseded_by"):
+                    continue
                 content = mem.get("summary", "") + "\n" + "\n".join(mem.get("key_facts", []))
                 if not content.strip():
                     continue

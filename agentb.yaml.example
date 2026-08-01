@@ -87,6 +87,17 @@ cache:
   l2_similarity_threshold: 0.5
   l3_similarity_threshold: 0.4
 
+# Write-time near-duplicate detection (v4.15). Retrieval is always bounded to
+# the same tenant's vector index. These defaults were measured on the fleet's
+# real rule corpus; change them deliberately and record the decision.
+dedup:
+  enabled: true
+  top_k: 5
+  cosine_threshold: 0.80
+  overlap_threshold: 0.55
+  min_tokens: 5
+  nightly_window_days: 7
+
 # ── Server Settings ──
 server:
   host: 0.0.0.0
