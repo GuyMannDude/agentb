@@ -4,6 +4,7 @@
 
 - Dreamer now reads the canonical `dream` boot budget from `boot-budget.js`, composes a separate UTF-16-budgeted boot artifact in preamble/what-changed/open-items/narrative priority order, and ends it with a named `DROPPED:` inventory. The full JSON and Markdown synthesis remain intact; `/dream/latest` exposes the compact sibling as `boot_content`.
 - `boot-cuts.jsonl` now records dropped Markdown section and memory identifiers alongside character counts, making withheld context fetchable by name.
+- MCP bridge boot path prefers the composed boot artifact — `boot_content` from `/dream/latest`, or the `-boot.md` sibling on the local-disk fallback (which now anchors "latest" on full briefs only) — falling back to the full brief either way; `capSection` remains the backstop. Problem this fixes: the bridge previously always fetched the full brief and cut it positionally at 3,500.
 
 ## v4.15.0 — Bounded write-time near-duplicate holds + advisory rulekeeper (2026-08-01)
 
