@@ -587,7 +587,9 @@ def write_dream(dream_text: str, memories: list[dict], since: datetime) -> str:
         if time.time() - advisory_path.stat().st_mtime <= 86400:
             advisory = advisory_path.read_text(encoding="ascii")
             if advisory.strip():
-                dream_text += "\n\n---\n\n" + advisory.strip()
+                # Highest-signal-first: startup caps keep the head of the dream
+                # brief, so prepend the advisory or it would be silently cut.
+                dream_text = advisory.strip() + "\n\n---\n\n" + dream_text
     except OSError:
         pass
 
