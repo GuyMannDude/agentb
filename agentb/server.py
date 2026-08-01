@@ -1665,14 +1665,17 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             # dreams dir must not stall unrelated requests.
             try:
                 candidates = sorted(
-                    dream_dir.glob("*.md"), key=lambda p: p.name, reverse=True
+                    (p for p in dream_dir.glob("*.md") if not p.stem.endswith("-boot")),
+                    key=lambda p: p.name, reverse=True
                 )
             except OSError:
                 candidates = []
             if not candidates:
                 return None
             p = candidates[0]
-            return p.stem, p.read_text(encoding="utf-8"), p.stat().st_mtime
+            boot_path = p.with_name(f"{p.stem}-boot.md")
+            boot_content = boot_path.read_text(encoding="utf-8") if boot_path.exists() else None
+            return p.stem, p.read_text(encoding="utf-8"), boot_content, p.stat().st_mtime
 
         try:
             found = await asyncio.to_thread(_read_latest)
@@ -1680,11 +1683,12 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             raise HTTPException(500, f"Dream brief unreadable: {e}")
         if found is None:
             raise HTTPException(404, "No dream briefs on disk")
-        stem, content, mtime = found
+        stem, content, boot_content, mtime = found
         return {
             "date": stem,
             "age_hours": round((time.time() - mtime) / 3600, 1),
             "content": content,
+            "boot_content": boot_content,
         }
 
     # ── Session Info ──
