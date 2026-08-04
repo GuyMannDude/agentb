@@ -12,6 +12,42 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.19.1 — 2026-08-04 — share-mode search never leaves the bridge unscoped
+
+**Problem:** The server answers agent-less `/context` requests with a silent
+empty 200 (bus #1941). In share mode (`MNEMO_SHARE=always`, or any session
+where `mnemo_share` was toggled on), `mnemo_search`
+with no explicit `agent_id` sent no `agent_id` at all — so every unscoped
+search returned zero results under green health. A share-mode Desktop
+session lost a whole afternoon of search capability to this, and the zeros
+read as "the store is empty," nearly deleting five specimens' last copy.
+
+**Fix:** Every search now names a tenant (new `search-scope.js`, with
+regression tests). Share mode + explicit `agent_id` → that agent, unchanged.
+Share mode + no `agent_id` → self-scoped, and the result says so in a
+prefix instead of silently narrowing. Separate mode unchanged. When the
+server ships its explicit absent-agent_id contract (the server half of
+#1941), re-enabling true unscoped search is a deliberate change, not a
+cleanup. Bridge changes are inert until the host app restarts.
+
+## 2.19.0 — 2026-07-30 — nothing gets cut silently: cut manifest at the top of every boot
+
+*(Entry backfilled 2026-08-04 — `529417f` shipped with a root CHANGELOG
+entry but none here.)*
+
+**Problem:** `capSection` announced truncation at the END of the section it
+truncated — inside the payload, where readers skim past. CC and Opie
+received those notices for 20+ days and neither acted on one. Measured on
+IGOR 2026-07-30: 87% of every boot (235,684 of 270,538 chars) was being
+dropped invisibly. Guy's rule: "Nothing gets cut! If something is going to
+be cut then I am notified before any more."
+
+**Fix:** Cuts are collected per boot and reported at the TOP of the block,
+where they cannot themselves be truncated, and appended to
+`boot-cuts.jsonl` so growth is diffable. Emitted on clean boots too — a
+report that only appears when something is wrong cannot be told apart from
+a reporter that has stopped working.
+
 ## 2.18.2 — 2026-07-17 — boot no longer trips the Thesaurus Loop
 
 **Problem:** The `agent_startup` boot block's "recent Mnemo context" section
