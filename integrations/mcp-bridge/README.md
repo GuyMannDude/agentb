@@ -52,7 +52,7 @@ The exact config syntax varies by host — see the host-specific README in the s
 |---|---|---|
 | `MNEMO_URL` | `http://localhost:50001` | Where your Mnemo Cortex server is reachable. |
 | `MNEMO_AGENT_ID` | `openclaw` | Identifies this client to Mnemo. Memories are scoped per agent — pick a unique name. |
-| `MNEMO_SHARE` | `separate` | Cross-agent memory sharing. One of `separate` (default, see only your own memories), `always` (see all agents), `never` (block even `mnemo_share` toggle). |
+| `MNEMO_SHARE` | `separate` | Cross-agent memory sharing. One of `separate` (default, see only your own memories), `always` (read other agents' memories via explicit `agent_id`; unscoped search stays self-scoped), `never` (block even `mnemo_share` toggle). |
 | `BRAIN_DIR` | `~/mnemo-plan/brain` | Optional. Brain repo for `read_brain_file` / `write_brain_file` / lane-aware boot. Tools skip silently when the dir doesn't exist. |
 | `WIKI_DIR` | `~/wiki` | Optional. Wiki dir for `wiki_*` tools. Tools skip silently when the dir doesn't exist. |
 | `DREAM_DIR` | `~/.agentb/dreams` | Optional. Dream brief location for `agent_startup` to surface in session boot. |

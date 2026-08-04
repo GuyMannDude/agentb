@@ -17,6 +17,7 @@ import {
 } from "./boot-budget.js";
 import { autoCommitBrainFile } from "./brain-git.js";
 import { refusesBrainWrite } from "./lane-guard.js";
+import { searchScope } from "./search-scope.js";
 
 // ── Configuration ──────────────────────────────────────────────
 // MNEMO_URL: where your Mnemo Cortex API lives
@@ -624,7 +625,7 @@ server.registerTool(
       .string()
       .optional()
       .describe(
-        "Filter to a specific agent (rocky, cc, opie). Only works when cross-agent sharing is enabled. Omit for all."
+        "Filter to a specific agent (rocky, cc, opie). Only works when cross-agent sharing is enabled. Omit to search your own memories — every search names a tenant; the server returns silent zeros for agent-less queries (#1941)."
       ),
     max_results: z
       .number()
@@ -673,11 +674,12 @@ server.registerTool(
         max_results: max_results || 3,
       };
 
-      if (sessionShareActive) {
-        if (agent_id) body.agent_id = agent_id;
-      } else {
-        body.agent_id = AGENT_ID;
-      }
+      const scope = searchScope({
+        shareActive: sessionShareActive,
+        requestedAgent: agent_id,
+        selfAgent: AGENT_ID,
+      });
+      body.agent_id = scope.agentId;
       if (source !== undefined) body.source = source;
       if (category !== undefined) body.category = category;
       if (exclude_categories !== undefined) body.exclude_categories = exclude_categories;
@@ -688,7 +690,7 @@ server.registerTool(
       const chunks = data.chunks || [];
       captureCall(
         "mnemo_search",
-        `cross-agent (${agent_id || (sessionShareActive ? "all" : AGENT_ID)}): ${query.slice(0, 80)} → ${chunks.length} results`
+        `cross-agent (${scope.agentId}): ${query.slice(0, 80)} → ${chunks.length} results`
       );
       const text = formatChunks(chunks, sessionShareActive);
       const count = data.total_found || chunks.length;
@@ -697,6 +699,9 @@ server.registerTool(
       if (!sessionShareActive) {
         prefix =
           "(Restricted to your own memories. Use mnemo_share to enable cross-agent search.)\n\n";
+      } else if (scope.selfScopedFallback) {
+        prefix =
+          `(Share mode: unscoped search self-scoped to "${AGENT_ID}" — the server returns silent zeros for agent-less queries (#1941). Pass agent_id to search another agent.)\n\n`;
       }
 
       const out =
@@ -977,7 +982,7 @@ server.registerTool(
 server.registerTool(
   "mnemo_share",
   {
-    description: "Toggle cross-agent memory sharing for this session. When on, mnemo_search can read memories from all agents. When off, search is limited to this agent only.",
+    description: "Toggle cross-agent memory sharing for this session. When on, mnemo_search can read another agent's memories by passing agent_id; without agent_id, search stays scoped to you. When off, search is limited to this agent only.",
     annotations: { "title": 'Toggle Cross-Agent Sharing', "readOnlyHint": false, "idempotentHint": false },
   },
   async () => {
