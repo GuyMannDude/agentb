@@ -8,6 +8,19 @@
 #
 # Copy this file to seed-facts.yaml and replace the rows with your own truths.
 #
+# ⚠️ THE SEED FILE IS A PHOTOGRAPH, AND THE LOADER TRUSTS IT FOREVER.
+# Every run re-asserts these rows as verified truth. If you schedule it
+# (nightly cron, post-commit hook) and then stop updating this file, it
+# becomes an ANTI-MEMORY: corrections your team makes in the live store get
+# silently clobbered back to the stale value on the next run — every night,
+# forever. We learned this the hard way: a seed file last touched in May
+# re-taught our whole fleet a dead server's address, nightly, until August.
+# Two rules keep you safe:
+#   1. When you fix a fact anywhere, fix it HERE in the same commit.
+#   2. Watch the CONTRADICTION count in the loader's output — a nonzero
+#      count after a quiet period usually means the photograph is stale,
+#      not that the live store is wrong.
+#
 # Field rules
 #   entity:          lowercase; hyphen or underscore for multi-word
 #   attribute:       snake_case
