@@ -13,6 +13,15 @@ Idempotent: re-running skips facts whose (entity, attribute, value) already
 matches. A different value at the same attribute is reported as a CONTRADICTION;
 in --dry-run nothing is written, so you can inspect conflicts first.
 
+The trap (learned the hard way)
+-------------------------------
+A scheduled seeder is only as truthful as its YAML. If the seed file stops
+being updated, this loader will clobber your team's live corrections back to
+stale values on every run — a stale "canonical truth" file is an anti-memory.
+Update the YAML in the same commit as any fact fix, and treat a rising
+CONTRADICTION count as "the seed is stale" until proven otherwise. See the
+warning block in seed-facts.example.yaml.
+
 Usage
 -----
     seed-facts.py [--dry-run] [--yaml PATH] [--mnemo-url URL]
