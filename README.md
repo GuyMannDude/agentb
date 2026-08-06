@@ -177,6 +177,10 @@ Facts store `(entity, attribute, value)` triples in a local SQLite table with a 
 
 Four MCP tools ship with it: `mnemo_fact_save` to assert, `mnemo_fact_get` for single lookup, `mnemo_fact_query` for filtered lists, `mnemo_fact_demote` to mark something wrong without supplying a replacement. Reads are sub-millisecond. The confidence ladder means your agent's knowledge sharpens over time instead of accumulating stale guesses.
 
+**Seeding canonical truth** — `tools/seed-facts.py` loads a hand-curated YAML of your known truths as verified facts, so stale fuzzy recall can never outrank them (start from `tools/seed-facts.example.yaml`; nightly and post-commit runners included).
+
+> ⚠️ **Read the warning in the example file before you schedule it.** A seed file is a photograph of the truth, and a scheduled seeder re-asserts that photograph forever. Stop updating it and it becomes an **anti-memory** — every correction your team makes gets silently clobbered back to the stale value on the next run. The rule that keeps you safe: **when you fix a fact, fix the seed file in the same commit.** We shipped this feature, then broke this rule ourselves for two months; the warning is written in our own scar tissue.
+
 ### Deploy Your Way
 
 - **Shared** — One Mnemo for all agents. Cross-agent search and dreaming. Full team awareness.
