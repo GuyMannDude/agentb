@@ -324,6 +324,15 @@ def _resolve_env(value) -> str:
     return str(value) if value is not None else ""
 
 
+def _resolve_path(value) -> str:
+    # YAML never expands "~", and Path("~/x") is a RELATIVE path — it gets
+    # created under the process CWD as a literal "~" directory. Expand at the
+    # parse boundary. (Only "~" is handled; a non-wrapped "${VAR}/x" still
+    # passes through _resolve_env literally.)
+    v = _resolve_env(value)
+    return str(Path(v).expanduser()) if v else ""
+
+
 def _parse_scoped_tokens(entries) -> list:
     """Validate server.scoped_tokens at load time. Every rejection here is a
     request the auth middleware would otherwise mis-handle, so fail LOUD on
@@ -401,7 +410,11 @@ def load_config(path: Optional[str] = None) -> AgentBConfig:
     else:
         env_path = os.environ.get("AGENTB_CONFIG")
         if env_path:
-            config_path = Path(env_path)
+            # systemd Environment= lines don't expand "~" the way a shell
+            # does; without this, a tilde here silently falls through to the
+            # all-defaults config below (health.py already expands — keep the
+            # doctor and the loader agreeing).
+            config_path = Path(env_path).expanduser()
         else:
             for candidate in DEFAULT_CONFIG_PATHS:
                 if candidate.exists():
@@ -426,7 +439,7 @@ def _parse_config(raw: dict) -> AgentBConfig:
         s = raw["storage"]
         cfg.storage = StorageConfig(
             backend=s.get("backend", "json"),
-            path=_resolve_env(s.get("path", "")),
+            path=_resolve_path(s.get("path", "")),
             connection_string=_resolve_env(s.get("connection_string", "")),
         )
     if "cache" in raw and raw["cache"]:
@@ -474,7 +487,7 @@ def _parse_config(raw: dict) -> AgentBConfig:
             max_body_bytes=s.get("max_body_bytes", ServerConfig.max_body_bytes),
         )
     if "data_dir" in raw:
-        cfg.data_dir = _resolve_env(raw["data_dir"])
+        cfg.data_dir = _resolve_path(raw["data_dir"])
     if "log_level" in raw:
         cfg.log_level = raw["log_level"]
     cfg.personas = dict(DEFAULT_PERSONAS)
@@ -486,7 +499,7 @@ def _parse_config(raw: dict) -> AgentBConfig:
         for name, adata in raw["agents"].items():
             if adata:
                 cfg.agents[name] = AgentConfig(
-                    data_dir=_resolve_env(adata.get("data_dir", "")),
+                    data_dir=_resolve_path(adata.get("data_dir", "")),
                     persona=adata.get("persona", "default"),
                     read_only=adata.get("read_only", False),
                 )
