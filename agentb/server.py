@@ -1020,7 +1020,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                         age_days = stale = None
                         if hit.source_file and os.path.exists(hit.source_file):
                             try:
-                                mj = json.loads(Path(hit.source_file).read_text())
+                                mj = json.loads(Path(hit.source_file).read_text(encoding="utf-8"))
                                 category = mj.get("category")
                                 provenance_source = mj.get("source")
                             except Exception:
@@ -1882,7 +1882,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 l1 = tenant["l1"]
                 recent = sorted(memory_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)[:10]
                 for mem_file in recent:
-                    mem = json.loads(mem_file.read_text())
+                    mem = json.loads(mem_file.read_text(encoding="utf-8"))
                     content = mem.get("summary", "")
                     if not content:
                         continue
@@ -1950,7 +1950,8 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                             "schema_version": 3,
                         }
                         (memory_dir / f"{mid}.json").write_text(
-                            json.dumps(entry, indent=2, default=str))
+                            json.dumps(entry, indent=2, default=str),
+                            encoding="utf-8")
                         emb = await embedder.embed(summary, use_breaker=False, task_type="document")
                         tenant["vec"].upsert(
                             mid, summary, emb,

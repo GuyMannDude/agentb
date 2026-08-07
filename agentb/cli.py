@@ -242,7 +242,7 @@ def init():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
 
-    CONFIG_FILE.write_text(yaml_content)
+    CONFIG_FILE.write_text(yaml_content, encoding="utf-8")
 
     console.print()
     console.print(Panel(
@@ -350,7 +350,7 @@ def start(foreground, port):
             stdout=log_fh, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        PID_FILE.write_text(str(proc.pid))
+        PID_FILE.write_text(str(proc.pid), encoding="utf-8")
 
         # Wait a moment and check
         time.sleep(2)
@@ -379,7 +379,7 @@ def start(foreground, port):
             console.print(f"  {LOG_FILE}")
             # Show last few lines
             try:
-                lines = LOG_FILE.read_text().strip().split("\n")[-5:]
+                lines = LOG_FILE.read_text(encoding="utf-8").strip().split("\n")[-5:]
                 for line in lines:
                     console.print(f"  [dim]{line}[/]")
             except Exception:
@@ -608,7 +608,7 @@ def watch(backfill, backfill_count, foreground):
             stdout=log_fh, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        WATCHER_PID_FILE.write_text(str(proc.pid))
+        WATCHER_PID_FILE.write_text(str(proc.pid), encoding="utf-8")
 
         time.sleep(1)
         if proc.poll() is None:
@@ -739,7 +739,7 @@ def refresh(workspace, output, agent, watch_mode, interval, recent, foreground):
             stdout=log_fh, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        REFRESH_PID_FILE.write_text(str(proc.pid))
+        REFRESH_PID_FILE.write_text(str(proc.pid), encoding="utf-8")
 
         time.sleep(1)
         if proc.poll() is None:
@@ -843,7 +843,7 @@ def _detect_workspace(explicit_path: str = None) -> Path:
 
 def _get_refresh_pid() -> int:
     try:
-        return int(REFRESH_PID_FILE.read_text().strip())
+        return int(REFRESH_PID_FILE.read_text(encoding="utf-8").strip())
     except Exception:
         return 0
 
@@ -863,7 +863,7 @@ def _is_refresh_running() -> bool:
 
 def _get_watcher_pid() -> int:
     try:
-        return int(WATCHER_PID_FILE.read_text().strip())
+        return int(WATCHER_PID_FILE.read_text(encoding="utf-8").strip())
     except Exception:
         return 0
 
@@ -887,7 +887,7 @@ def _is_watcher_running() -> bool:
 
 def _get_pid() -> int:
     try:
-        return int(PID_FILE.read_text().strip())
+        return int(PID_FILE.read_text(encoding="utf-8").strip())
     except Exception:
         return 0
 
@@ -1383,7 +1383,7 @@ def _stick_passphrase(passphrase_file, *, confirm: bool) -> str:
     """Passphrase from --passphrase-file (first line; for automation) or an
     interactive hidden prompt."""
     if passphrase_file:
-        text = Path(passphrase_file).read_text().splitlines()
+        text = Path(passphrase_file).read_text(encoding="utf-8").splitlines()
         if not text or not text[0]:
             console.print(f"[red]Empty passphrase file: {passphrase_file}[/]")
             raise SystemExit(1)
@@ -1607,7 +1607,7 @@ def stick_encrypt_cmd(mount, passphrase_file):
         result = encrypt_stick(stick_dir, passphrase)
         import json as _json
         stick_id = _json.loads(
-            (stick_dir / "passport.json").read_text()).get("stick_id", "")
+            (stick_dir / "passport.json").read_text(encoding="utf-8")).get("stick_id", "")
         key_path = save_stick_key(data_dir, stick_id, result["key"])
     except StickError as e:
         console.print(f"[bold red]ENCRYPT REFUSED[/] {e}")
@@ -1672,10 +1672,10 @@ def stick_status_cmd(mount):
     if not stick_dir:
         raise SystemExit(1)
     import json as _json
-    passport = _json.loads((stick_dir / "passport.json").read_text())
+    passport = _json.loads((stick_dir / "passport.json").read_text(encoding="utf-8"))
     console.print(f"[bold]{passport.get('name')}[/] "
                   f"(id {passport.get('stick_id')}, gen "
-                  f"{_json.loads((stick_dir / 'manifest.json').read_text()).get('generation')})")
+                  f"{_json.loads((stick_dir / 'manifest.json').read_text(encoding="utf-8")).get('generation')})")
     enc = passport.get("enc")
     if enc:
         state = enc.get("state", "?")

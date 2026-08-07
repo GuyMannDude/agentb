@@ -374,7 +374,7 @@ def iter_memory_entries(
     """
     for path in sorted(memory_dir.glob("*.json")):
         try:
-            entry = json.loads(path.read_text())
+            entry = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             log.warning(f"Skipping malformed memory file {path}: {e}")
             continue
@@ -515,7 +515,7 @@ def backfill_categories(store: VecStore, memory_dir: Path) -> dict:
     indexed = 0
     for path in sorted(memory_dir.glob("*.json")):
         try:
-            entry = json.loads(path.read_text())
+            entry = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             log.warning(f"backfill_categories: skipping unreadable {path}: {e}")
             continue

@@ -221,12 +221,11 @@ how agents end up with a database they never think to read.
   separate `mcpServers` entries in the host's MCP config — they
   don't conflict.
 
-- **Sparks Bus** — `https://github.com/GuyMannDude/sparks-bus`.
-  Standalone agent-to-agent messaging. Not required for Mnemo;
-  install only if your user wants multi-agent delivery
-  confirmation. Also ships embedded inside Mnemo at
-  [`sparks_bus/`](./sparks_bus/) for users who want the bus
-  without a second install.
+- **Disco-Bus** — `https://github.com/GuyMannDude/disco-bus`.
+  Standalone agent-to-agent messaging (successor to Sparks Bus,
+  which is archived at `GuyMannDude/sparks-bus` with a forwarding
+  banner). Not required for Mnemo; install only if your user
+  wants multi-agent delivery confirmation.
 
 - **mnemo-plan** — `https://github.com/GuyMannDude/mnemo-plan`.
   Starter template for the brain repo. If your user wants

@@ -104,7 +104,7 @@ def resolve_disk_truth(chunk: ContextChunk, memory_dir: Path) -> Optional[Contex
     if not mem_path.exists():
         return None
     try:
-        mem = json.loads(mem_path.read_text())
+        mem = json.loads(mem_path.read_text(encoding="utf-8"))
     except Exception:
         return chunk
     if mem.get("superseded_by"):
@@ -131,7 +131,7 @@ class L1Cache:
         self.bundles = []
         for f in sorted(self.cache_dir.glob("*.json")):
             try:
-                self.bundles.append(json.loads(f.read_text()))
+                self.bundles.append(json.loads(f.read_text(encoding="utf-8")))
             except Exception as e:
                 log.warning(f"L1 load error {f}: {e}")
         log.info(f"L1 cache: {len(self.bundles)} bundles")
@@ -174,7 +174,7 @@ class L1Cache:
             self.bundles.sort(key=lambda b: b.get("created_at", 0))
             evicted = self.bundles.pop(0)
             (self.cache_dir / f"{evicted['id']}.json").unlink(missing_ok=True)
-        (self.cache_dir / f"{bundle_id}.json").write_text(json.dumps(bundle, default=str))
+        (self.cache_dir / f"{bundle_id}.json").write_text(json.dumps(bundle, default=str), encoding="utf-8")
         return bundle_id
 
     @property
@@ -197,7 +197,7 @@ class L2Index:
         index_file = self.index_dir / "index.json"
         if index_file.exists():
             try:
-                self.entries = json.loads(index_file.read_text())
+                self.entries = json.loads(index_file.read_text(encoding="utf-8"))
                 log.info(f"L2 index: {len(self.entries)} entries")
             except Exception as e:
                 log.warning(f"L2 load error: {e}")
@@ -207,7 +207,7 @@ class L2Index:
         # write here meant a crash mid-write wiped the whole L2 index.
         index_file = self.index_dir / "index.json"
         tmp = index_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(entries, default=str))
+        tmp.write_text(json.dumps(entries, default=str), encoding="utf-8")
         os.replace(tmp, index_file)
 
     async def _save(self):
@@ -327,7 +327,7 @@ async def l3_scan(
         files = sorted(memory_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
         for mem_file in files:
             try:
-                mem = json.loads(mem_file.read_text())
+                mem = json.loads(mem_file.read_text(encoding="utf-8"))
                 if mem.get("superseded_by"):
                     continue
                 content = mem.get("summary", "") + "\n" + "\n".join(mem.get("key_facts", []))

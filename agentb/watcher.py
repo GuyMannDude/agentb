@@ -73,7 +73,7 @@ def load_positions() -> dict:
     """Load file positions (how far we've read into each session file)."""
     if STATE_FILE.exists():
         try:
-            return json.loads(STATE_FILE.read_text())
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             return {}
     return {}
@@ -84,7 +84,7 @@ def save_positions(positions: dict):
     wipe every offset and trigger a mass re-ingest)."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = STATE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(positions, indent=2))
+    tmp.write_text(json.dumps(positions, indent=2), encoding="utf-8")
     os.replace(tmp, STATE_FILE)
 
 

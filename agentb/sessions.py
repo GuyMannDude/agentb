@@ -96,7 +96,7 @@ class SessionManager:
         if not hot:
             return
         try:
-            lines = hot[-1].read_text().splitlines()
+            lines = hot[-1].read_text(encoding="utf-8").splitlines()
         except OSError:
             return
         now = time.time()
@@ -226,7 +226,7 @@ class SessionManager:
         sessions = []
         for f in sorted(self.warm_dir.glob("*.json"), reverse=True):
             try:
-                data = json.loads(f.read_text())
+                data = json.loads(f.read_text(encoding="utf-8"))
                 sessions.append({
                     "session_id": f.stem,
                     "summary": data.get("summary", "")[:100],
@@ -385,7 +385,7 @@ class SessionManager:
 
             # Save summary
             summary_path = self.warm_dir / f"{session_id}.json"
-            summary_path.write_text(json.dumps(summary_data, indent=2))
+            summary_path.write_text(json.dumps(summary_data, indent=2), encoding="utf-8")
 
             # Remove hot file
             session_file.unlink()
