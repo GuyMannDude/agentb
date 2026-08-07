@@ -166,7 +166,7 @@ async def _gather_candidates(
         candidates = []
         for path in memory_dir.glob("*.json"):
             try:
-                entry = json.loads(path.read_text())
+                entry = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 continue
             if entry.get("category") != "session_log":
@@ -393,7 +393,7 @@ async def _lens_pass(
             # the unmarked log simply retries next cycle — the dedup gate
             # absorbs any notes that already saved.
             try:
-                fresh = json.loads(path.read_text())
+                fresh = json.loads(path.read_text(encoding="utf-8"))
             except Exception as e:
                 log.warning(f"Re-read before {marker} mark failed for {path} "
                             f"— left unmarked for retry: {e}")

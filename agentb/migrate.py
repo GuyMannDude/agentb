@@ -81,7 +81,7 @@ def _category_spread(memory_dir: Path) -> dict:
     counts: dict = {}
     for p in memory_dir.glob("*.json"):
         try:
-            cat = json.loads(p.read_text()).get("category", "<none>")
+            cat = json.loads(p.read_text(encoding="utf-8")).get("category", "<none>")
         except Exception:
             cat = "<unreadable>"
         counts[cat] = counts.get(cat, 0) + 1
@@ -99,7 +99,7 @@ def _purge_empty(data_dir: Path) -> int:
     try:
         for p in list(memory_dir.glob("*.json")):
             try:
-                entry = json.loads(p.read_text())
+                entry = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
             summary = (entry.get("summary") or "").strip()

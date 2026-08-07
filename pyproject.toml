@@ -74,7 +74,5 @@ mnemo-cortex = "agentb.cli:main"
 mnemo = "agentb.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["agentb*", "passport*", "sparks_bus*"]
+include = ["agentb*", "passport*"]
 
-[tool.setuptools.package-data]
-sparks_bus = ["schema.sql"]

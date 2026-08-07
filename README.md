@@ -233,7 +233,7 @@ Plus one-shot ⚠️ alerts for delivery failures and stale messages. No retry s
 
 **A2A compatible.** Each message maps to an A2A Task: `tracking_id → task.id`, `subject → task.name`, `body → task.input`, lifecycle → A2A `TaskState`, per [Google's A2A spec](https://github.com/google/A2A). Data-shape compatibility is in now; HTTPS / JSON-RPC transport is the v2 roadmap.
 
-> **A note on the older one.** [`sparks_bus/`](sparks_bus/) in this repo is **Sparks Bus**, the earlier Mnemo-coupled version, kept in-tree for anyone already running it and no longer developed — its last release was v0.5.0 in May 2026. Disco-Bus is where it went: same idea, standalone, actively maintained. **If you're starting fresh, start there.** Sparks Bus ships an [AI-agent setup prompt](sparks_bus/SETUP-PROMPT.md) in Karpathy's "idea file as publishing format" style; Disco-Bus does the same job with `robot.install` + `robot-install.sh`.
+> **A note on the older one.** **Sparks Bus**, the earlier Mnemo-coupled bus, shipped in-tree as `sparks_bus/` until August 2026 and is now removed (dead code, superseded). It remains available archived at [GuyMannDude/sparks-bus](https://github.com/GuyMannDude/sparks-bus) (v0.5.0, forwarding banner) and in this repo's git history. Disco-Bus is where it went: same idea, standalone, actively maintained — start there.
 
 ---
 

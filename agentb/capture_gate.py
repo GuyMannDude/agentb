@@ -41,7 +41,7 @@ class CaptureGate:
         if not self.pause_file.exists():
             return None
         try:
-            return json.loads(self.pause_file.read_text())
+            return json.loads(self.pause_file.read_text(encoding="utf-8"))
         except Exception as e:
             # Unreadable state file: fail toward capturing (the system's normal
             # mode) but say so — a corrupt pause file must not be a silent
@@ -60,7 +60,7 @@ class CaptureGate:
             "reason": reason or "(no reason given)",
         }
         self.pause_file.parent.mkdir(parents=True, exist_ok=True)
-        self.pause_file.write_text(json.dumps(state, indent=2))
+        self.pause_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
         log.warning(f"⏸ Capture PAUSED for {mins} min — {state['reason']} (auto-resumes)")
         return self.status()
 

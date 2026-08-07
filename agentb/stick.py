@@ -70,7 +70,7 @@ def sha256_file(path: Path) -> str:
 
 def _load_json(path: Path, default):
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return default
     except (json.JSONDecodeError, OSError) as e:
@@ -222,7 +222,7 @@ def save_stick_key(data_dir: Path, stick_id: str, key: bytes) -> Path:
 def load_stick_key(data_dir: Path, stick_id: str) -> Optional[bytes]:
     p = stick_key_path(data_dir, stick_id)
     try:
-        return bytes.fromhex(p.read_text().strip())
+        return bytes.fromhex(p.read_text(encoding="utf-8").strip())
     except FileNotFoundError:
         return None
     except ValueError as e:
@@ -1162,7 +1162,7 @@ def sync(
         raise StickError(f"Another sync holds the stick lock ({lock}). "
                          "If that sync is dead, delete the lock file.")
     if not dry_run:
-        lock.write_text(f"{hid} {int(time.time())}\n")
+        lock.write_text(f"{hid} {int(time.time())}\n", encoding="utf-8")
 
     try:
         tenant_list = discover_tenants(data_dir, tenants)
