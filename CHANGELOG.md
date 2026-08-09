@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **MCP bridge: boot section `RECENT MNEMO CONTEXT` renamed to `SIMILARITY MATCHES (boot phrase)`** (server.js, and the matching truncation-table label). Problem this fixes: the old name read as "what happened recently," but the section is a vector-similarity match against the boot phrase — recency is not its ranking, and agents kept treating its truncation as lost recent history (A5, per boot-cut naming work). Clients pick the rename up at their next MCP restart.
+
 - **Removed the vendored `sparks_bus/` module** (dead code: superseded by standalone [Disco-Bus](https://github.com/GuyMannDude/disco-bus), imported by nothing in this repo, last released v0.5.0 in May 2026). It remains available in the archived `GuyMannDude/sparks-bus` repo (forwarding banner) and in git history. `pyproject` package includes, README and INSTALL.md updated to match.
 - **Fix: all `read_text`/`write_text` calls in `agentb/` now pass `encoding="utf-8"`** (37 call sites). Problem this fixes: the platform default is cp1252 on Windows, which previously produced 706 skipped memory files in one analyst pass; `atomic_write_text` was already UTF-8 — this closes the same defect class everywhere else, `_gather_candidates` included.
 
