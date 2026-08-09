@@ -1227,12 +1227,12 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
           })
           .join("\n\n");
         parts.push(
-          "# RECENT MNEMO CONTEXT\n\n" +
+          "# SIMILARITY MATCHES (boot phrase)\n\n" +
             capSection(
             mnemoText,
             STARTUP_BUDGETS.mnemo,
             "use mnemo_recall to pull more",
-            "recent Mnemo context"
+            "similarity matches (boot phrase)"
           )
         );
       }
