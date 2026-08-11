@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { execSync, execFileSync } from "node:child_process";
 import { DumpWriter } from "./dump.js";
 import {
+  BOOT_TARGET,
   STARTUP_BUDGETS,
   capSection,
   beginBootAudit,
@@ -1321,14 +1322,34 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
     const manifest = formatCutManifest();
     recordBootCuts(effectiveAgentId, getBootCuts());
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: header + manifest + "\n\n---\n\n" + parts.join("\n\n---\n\n"),
-        },
-      ],
-    };
+    // Per-section withholding is POLICY; the ceiling is CAPACITY, and the
+    // manifest above only ever reported the first. Opie's 2026-08-11 boot
+    // (#2355) showed why that matters: his lane truncated because opie.md is
+    // 33,984 on disk against a 12,500 section cap — it would have truncated
+    // identically whether a BOOT_TARGET change had landed or silently not.
+    // A manifest that reads the same under both outcomes is not a check.
+    // So the producer states the one number only it can know: how many units
+    // it actually handed the host. Fixed-point because the line reports a
+    // length it is itself part of — converges in two passes, and if it ever
+    // does not, it says >= rather than asserting a figure it did not verify.
+    let measure = "";
+    let text = "";
+    for (let pass = 0; pass < 4; pass++) {
+      text = header + manifest + measure + "\n\n---\n\n" + parts.join("\n\n---\n\n");
+      const next =
+        `\n\n📏 **BOOT PAYLOAD: ${text.length.toLocaleString()} units delivered ` +
+        `against BOOT_TARGET ${BOOT_TARGET.toLocaleString()}** — this figure is ` +
+        `the producer's, counted after assembly, and it includes this line. It ` +
+        `says what the host was HANDED; it cannot say what the host accepted.`;
+      if (next === measure) break;
+      measure = next;
+    }
+    if (!text.includes(`${text.length.toLocaleString()} units delivered`)) {
+      measure = measure.replace("BOOT PAYLOAD: ", "BOOT PAYLOAD: >= ");
+      text = header + manifest + measure + "\n\n---\n\n" + parts.join("\n\n---\n\n");
+    }
+
+    return { content: [{ type: "text", text }] };
   } catch (err) {
     return {
       content: [{ type: "text", text: `Startup error: ${err.message}` }],
