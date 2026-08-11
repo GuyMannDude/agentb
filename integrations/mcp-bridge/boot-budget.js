@@ -44,8 +44,22 @@
 // stage-2 ceiling near ~70,000: stage 1 cannot be tipped by a session that
 // happens to be emoji-heavy, and stage 2 can.
 //
-// 49,000 leaves 1,000 units of margin below the 50,000 guarantee.
-export const BOOT_TARGET = 49_000;
+// ⛔ REVERTED TO 45,000 SAME DAY — THE MEASUREMENT WAS SOUND AND ITS SCOPE WAS NOT.
+// Everything above was measured against the CLAUDE CODE host (2.1.227), which is
+// CC's client. This file is FLEET-WIDE: Opie runs on Claude Desktop, Rocky on
+// Hermes, Dave on OpenClaw, Cody on Codex CLI. Those are different hosts with
+// their own inline-result limits, and none of them were measured. Raised to
+// 49,000 at ~19:40; Opie's first session on it took ~10 minutes and maxed out
+// tool use twice. Reverted immediately.
+//
+// The 45,000 that was called "a guess" may well have been calibrated to the
+// TIGHTEST host rather than to CC's — in which case it was not a guess at all,
+// it was a fleet minimum whose reasoning had been lost, and CC read the absence
+// of a recorded justification as the absence of one.
+//
+// Re-raising requires the same two-ended measurement PER HOST, and the fleet
+// value is then the MINIMUM across them, not CC's. → snag-boot-ceiling-was-a-guess.md
+export const BOOT_TARGET = 45_000;
 
 // Overhead outside the budgeted sections: identity header (~1.1KB),
 // lane-freshness banner (~0.4KB), `\n\n---\n\n` separators, and the cut
@@ -55,20 +69,17 @@ export const BOOT_TARGET = 49_000;
 // while the test that exists to prevent exactly that kept passing.
 export const BOOT_OVERHEAD = 2_900;
 
-// The +4,000 units bought by the measurement above, distributed 2026-08-11.
-// It goes where the cuts were actually landing, not evenly: `lane` because all
-// five agents sit within ~200 units of it and have been trimming continuity to
-// pay for new entries, and `mnemo` because it was the section CC's boot cut 49%
-// off that morning (3,946 actual against a 2,000 budget). `active.md` gets
-// nothing on purpose — board-check.py already forces it to shrink, so handing
-// it room would just relieve a pressure that is doing useful work.
+// ⛔ The 2026-08-11 redistribution (lane 12,500 / mnemo 3,300 / doctrines 6,000
+// / CLAUDE.md 7,000 / people.md 2,200) was REVERTED with BOOT_TARGET above.
+// The allocation reasoning was fine; it was spending headroom measured on one
+// host against a budget that five hosts share.
 export const STARTUP_BUDGETS = {
-  lane: 12_500,        // the agent's own continuity — biggest slice (was 11,000)
-  "CLAUDE.md": 7_000,  // cross-agent operating doc / session ritual (was 6,500)
+  lane: 11_000,        // the agent's own continuity — biggest slice
+  "CLAUDE.md": 6_500,  // cross-agent operating doc / session ritual
   "active.md": 10_000, // the board; board rules keep it ~9KB — deliberately unchanged
-  "people.md": 2_200,  // was 2,000
-  "doctrines.md": 6_000, // was 5,500
-  mnemo: 3_300,        // recent Mnemo context chunks (was 2,000 — the 49% cut)
+  "people.md": 2_000,
+  "doctrines.md": 5_500,
+  mnemo: 2_000,        // recent Mnemo context chunks
   dream: 3_500,        // overnight dream brief
 };
 
