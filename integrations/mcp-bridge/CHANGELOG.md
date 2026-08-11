@@ -12,6 +12,51 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.20.0 — 2026-08-11 — the boot ceiling was a guess, and the guess cost 28,000 characters
+
+**Problem:** `BOOT_TARGET` was 45,000 and had never been measured. It was
+inferred from a single incident — a 73KB boot block diverting to a file on
+2026-07-09 — and then set far enough below it to feel safe. Every agent has
+been paying for that margin daily ever since: budgets fleet-wide sat within
+~200 units of their caps, boot-file additions had to be traded against
+removals, and CC's boot on 2026-08-11 withheld 1,946 characters — 49% of one
+section — against a ceiling nobody had checked. The number that was throttling
+five agents' continuity was a round number someone picked once.
+
+**What the host actually does** (read out of the Claude Code 2.1.227 binary,
+then confirmed empirically): the cap is `MAX_MCP_OUTPUT_TOKENS`, default
+**25,000 tokens — not characters**, applied in two stages. Stage 1 is a cheap
+estimate, `Math.round(text.length / 4)`, compared against `25,000 * 0.5`; pass
+it and the result is returned inline **with no further check**. That makes
+**50,000 UTF-16 units a hard guarantee regardless of token density**. Only
+above 50,000 chars does it run a real token count and divert if that exceeds
+25,000. Both units are `String.length`, so the bridge and the host measure the
+same thing — the old UTF-8-vs-UTF-16 caveat in `boot-budget.js` does not apply.
+
+**Confirmed at both ends:** 44,800 chars (that morning's boot) → inline.
+73,103 chars (`active-archive-2026-Q2.md` via `read_brain_file`) → "exceeds
+maximum allowed tokens", saved to a file — reproducing the 2026-07-09 incident
+exactly and putting our content under ~2.9 chars/token. Markdown, emoji and
+code fences are token-expensive, so the naive `length / 4` estimate flatters
+us; that is the reason to stop at the stage-1 guarantee rather than chase the
+true stage-2 ceiling near ~70,000. Stage 1 cannot be tipped by an emoji-heavy
+session. Stage 2 can.
+
+**Fix:** `BOOT_TARGET` 45,000 → **49,000** (1,000 units below the guarantee;
+worst case computes to 48,450, so 1,550 of real margin). The +4,000 is
+distributed where the cuts were landing, not evenly: `lane` 11,000 → 12,500
+(all five agents sat within ~200 units of it), `mnemo` 2,000 → 3,300 (the
+section CC's boot cut 49% off), `doctrines.md` 5,500 → 6,000, `CLAUDE.md`
+6,500 → 7,000, `people.md` 2,000 → 2,200. **`active.md` deliberately gets
+nothing** — `board-check.py` already forces it to shrink, and relieving that
+pressure would remove a constraint that is doing useful work.
+
+**Effect:** every lane green with margin. CC's lane went from 11 units of
+headroom to 1,511 — it had been one edit from a silent cut all week.
+
+⚠️ **Inert until each client restarts.** A bridge change does not reach a
+running session.
+
 ## 2.19.1 — 2026-08-04 — share-mode search never leaves the bridge unscoped
 
 **Problem:** The server answers agent-less `/context` requests with a silent
