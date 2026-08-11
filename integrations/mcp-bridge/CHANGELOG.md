@@ -12,7 +12,51 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.20.2 — 2026-08-11 — the boot block states how many units it handed over
+
+**Problem:** the cut manifest reported per-section *withholding* — which is
+policy — and never the size of the payload, which is capacity. Opie's boot
+under 2.20.0 truncated his lane because `opie.md` is 33,984 on disk against a
+12,500 section cap; it would have truncated **identically** whether the
+`BOOT_TARGET` change had landed or silently not. A report that reads the same
+under both outcomes is not a check (#2355).
+
+**Fix:** every boot block now ends with
+`📏 BOOT PAYLOAD: N units delivered against BOOT_TARGET T`, counted by the
+producer after assembly. Fixed-point, because the line reports a length it is
+part of — converges in 3 passes, verified `reported == actual`, and prints
+`>=` rather than asserting a figure it did not verify if it ever fails to.
+
+⚠️ **Stated limit, written into the line itself:** it reports what the host was
+**handed**, never what the host **accepted**. It closes "did the budget change
+take effect." It cannot close "did the host survive it."
+
+## 2.20.1 — 2026-08-11 — REVERT of 2.20.0: measured on one host, spent across five
+
+**Problem:** 2.20.0 raised `BOOT_TARGET` to 49,000 on a limit read out of the
+**Claude Code** binary. `boot-budget.js` is fleet-wide: Opie runs Claude
+Desktop, Rocky Hermes, Dave OpenClaw, Cody Codex CLI. Four hosts with their own
+inline-result limits, none measured. The measurement was sound and its **scope**
+was not.
+
+**Fix:** all values reverted (`BOOT_TARGET` 45,000; `lane` 11,000, `mnemo`
+2,000, `doctrines.md` 5,500, `CLAUDE.md` 6,500, `people.md` 2,000).
+
+**Two corrections on the record.** The revert was made on a *causal* claim — a
+10-minute stall with two maxed tool uses, attributed to the raise — that the
+evidence does not support: Opie's session **booted cleanly under 49,000**, and
+"maxed tool use" is a tool-*call-count* ceiling while boot payload spends
+*context*. No mechanism connects them. **The revert is right on precaution and
+never needed the causation.** And the argument for raising rested on 45,000
+being arbitrary, where the only evidence for "arbitrary" was that no
+justification had been written down — **an undocumented constraint is not an
+unjustified one**, and precaution independently arrives at the same number.
+
+**Re-raising requires the two-ended test PER HOST, with the fleet value set to
+the MINIMUM across them.**
+
 ## 2.20.0 — 2026-08-11 — the boot ceiling was a guess, and the guess cost 28,000 characters
+*(⛔ superseded by 2.20.1 the same hour — kept for the measurement, which is still valid for Claude Code specifically.)*
 
 **Problem:** `BOOT_TARGET` was 45,000 and had never been measured. It was
 inferred from a single incident — a 73KB boot block diverting to a file on
