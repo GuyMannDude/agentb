@@ -93,6 +93,13 @@ export const BOOT_OVERHEAD = 2_900;
 // active.md keeps 3,007 of margin over its live size, and board-check.py still
 // fails on any growth, so the 9,000 is not a ceiling the board can walk into.
 // Reverting = swap the two numbers back; nothing else depends on them.
+//
+// ⚠️ THE 1,000 WAS BORROWED AGAINST A GATE, NOT AGAINST SLACK (Opie, #2391).
+// Those 4,007 units were unspendable BECAUSE `board-check.py` NO-GROWTH gates
+// active.md — not because the board is inherently small. **If that gate is ever
+// relaxed, 9,000 binds where 10,000 would not have.** Whoever relaxes it is also
+// spending doctrine headroom, and will not be told so by anything but this
+// comment. Relax the gate -> restore 10,000/5,500 or re-measure both.
 export const STARTUP_BUDGETS = {
   lane: 11_000,        // the agent's own continuity — biggest slice
   "CLAUDE.md": 6_500,  // cross-agent operating doc / session ritual
