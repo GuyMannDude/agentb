@@ -1673,9 +1673,10 @@ def stick_status_cmd(mount):
         raise SystemExit(1)
     import json as _json
     passport = _json.loads((stick_dir / "passport.json").read_text(encoding="utf-8"))
+    manifest = _json.loads((stick_dir / "manifest.json").read_text(encoding="utf-8"))
     console.print(f"[bold]{passport.get('name')}[/] "
                   f"(id {passport.get('stick_id')}, gen "
-                  f"{_json.loads((stick_dir / 'manifest.json').read_text(encoding="utf-8")).get('generation')})")
+                  f"{manifest.get('generation')})")
     enc = passport.get("enc")
     if enc:
         state = enc.get("state", "?")

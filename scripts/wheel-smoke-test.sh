@@ -38,23 +38,16 @@ pip install --quiet "$WHEEL"
 echo "==> import smoke tests"
 python3 - <<'PY'
 import importlib
-import importlib.resources as r
 
-REQUIRED_PACKAGES = ["agentb", "passport", "sparks_bus"]
-PACKAGE_DATA = [
-    ("sparks_bus", "schema.sql"),
-]
+REQUIRED_PACKAGES = ["agentb", "passport"]
+
+# No PACKAGE_DATA check: the wheel ships no package data since sparks_bus/ was
+# removed. Re-add the assertion deliberately when data comes back — a loop over
+# an empty list passes without checking anything.
 
 for mod in REQUIRED_PACKAGES:
     importlib.import_module(mod)
     print(f"    ✓ import {mod}")
-
-for pkg, path in PACKAGE_DATA:
-    res = r.files(pkg)
-    for p in path.split("/"):
-        res = res / p
-    assert res.is_file(), f"missing package data: {pkg}/{path}"
-    print(f"    ✓ {pkg}/{path} present ({res.stat().st_size} bytes)")
 PY
 
 echo "==> CLI version flag"

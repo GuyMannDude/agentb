@@ -3,13 +3,13 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install the package the same way pip users get it — from pyproject.toml.
-# create_app() imports passport.api and sparks_bus ships as package data, so
-# copying agentb/ alone produces an image that dies on ModuleNotFoundError
-# at `python -m agentb.server` (shipped broken until v4.9.5 — no CI ran it).
+# create_app() imports passport.api, so copying agentb/ alone produces an
+# image that dies on ModuleNotFoundError at `python -m agentb.server`
+# (shipped broken until v4.9.5 — no CI ran it). Keep this list matching
+# [tool.setuptools.packages.find] in pyproject.toml.
 COPY pyproject.toml README.md ./
 COPY agentb/ agentb/
 COPY passport/ passport/
-COPY sparks_bus/ sparks_bus/
 RUN pip install --no-cache-dir .
 
 # Run as a non-root user; ~/.agentb is the default data dir.
