@@ -12,6 +12,80 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.21.0 — 2026-08-12 — the write that creates an overrun now says so, instead of the boot that suffers it
+
+**Problem.** `agent_startup` caps every boot-loaded file and keeps the head —
+the tail is dropped. Nothing measured a file at the moment it was **written**,
+so an agent learned it had overrun only at the *next* boot, from a manifest
+inside the payload, a session too late to remember what the dropped tail said.
+It failed **3 of 9 days** (2026-08-03/04/11); the 08-11 specimen cut `opie.md`
+**976 units** past the cap, and nothing said so until the following morning.
+The gate existed the whole time — `lane-check.py` — but it lived at commit
+time, on a different machine's habit, and it is not what agents call.
+
+**Fix.** New `write-budget.js`, wired into two places:
+
+- **`write_brain_file`** — assesses the content it just wrote against the
+  slice that will cap it, and appends the overrun to the tool result.
+- **`session_end`** — re-reads the agent's lane **from disk** and reports the
+  same, catching lanes edited by a plain file tool that never passed through
+  the bridge at all.
+
+⚠️ **It never blocks a write.** A refused lane write at session end loses the
+update outright, which is strictly worse than an oversized lane: the tail is
+dropped at *boot*, not on disk, and `read_brain_file` still returns the file
+whole. Write, then scream (`doctrine-degrade-to-raw`).
+
+Silent unless the file is boot-loaded **and** at risk — snags, doctrine bodies
+and archives are the overwhelming majority of brain writes and must not warn,
+or the guard trains its reader to skip it (`doctrine-wrong-guard`). A declared
+`BOOT BOUNDARY` is honored as deliberate, not reported as a fault.
+
+**Semantics are `lane-check.py`'s, deliberately** — same budget source, same
+UTF-16 ruler, same boundary rule, same floor, and the same CUT-vs-LIES split
+(a marker sitting *past* the real cut is named separately, because the owner of
+a cut lane knows they have no boundary and the owner of a lying one believes
+theirs). Verified by running both against all five live lanes: identical
+totals, statuses, and Opie's 565-unit spare.
+
+⚠️ **TIGHT / BOUND / LIES are lane-only.** Review caught this before it shipped:
+the flat 500-unit floor is *lane* calibration (Opie #1986). The shared docs are
+`boot-budget-check.py`'s, and it uses a **proportional** floor
+(`max(100, budget // 20)`, Opie #2011) — so a flat 500 against `people.md`'s
+2,000 budget is 25% of the whole file, and the guard would have screamed TIGHT
+at `people.md` (278 spare) and `CLAUDE.md` (360 spare) from day one, on files
+the authoritative gate calls healthy and that boot whole. **The first version of
+this feature was the exact failure it cites `doctrine-wrong-guard` to avoid**,
+and the lanes-only cross-check missed it because the divergence was in the files
+the check never looked at. Shared docs now report only the verdict both tools
+reach without arithmetic — over budget, or not — rather than re-homing the
+proportional rule here and creating the second copy this module exists to avoid.
+A `BOOT BOUNDARY` in a shared doc no longer excuses an overrun either; that is
+lane semantics and blessing a 20K board with it would contradict a `[FAIL]`.
+
+**`MARGIN_FLOOR` now has one home** (`boot-budget.js`), read by `write-budget.js`
+(import) and `lane-check.py` (parsed via `boot-budget-check.py`). It had been a
+`FLOOR = 500` literal in the Python — the same shape as the stale `BUDGET = 11_000`
+caught the day before (`snag-lane-check-hardcoded-budget`). Proven live, not
+assumed: setting the bridge constant to 600 flipped `lane-check.py` to TIGHT and
+exit 1, and restoring it flipped it back.
+
+The advisory sits in **its own** `try/catch` at both call sites. In
+`write_brain_file` the file is on disk and committed by the time it runs, so a
+throw inside the handler's outer `try` would have returned
+`Error writing <file>` — telling an agent its lane update was lost when it had
+landed, which is worse than the overrun being reported.
+
+**Verified end-to-end**, not just in unit tests: the real server driven over
+stdio against an isolated brain wrote a lane 976 units over, returned the
+warning in the tool result, and left the file whole on disk (11,976 units); the
+healthy control returned no warning at all. All four live shared docs and all
+five live lanes now agree with their owning gate. 25 new tests; all 68 bridge
+tests green.
+
+⚠️ **INERT UNTIL EACH CLIENT RESTARTS** — every MCP bridge process on IGOR
+predates this file. Nothing is guarded until they cycle.
+
 ## 2.20.3 — 2026-08-12 — doctrines get 1,000 units from the board's unusable slack
 
 **Problem.** `doctrines.md` sat at 5,191/5,500 — 309 units spare — and Opie

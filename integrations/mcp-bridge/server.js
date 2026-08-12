@@ -18,6 +18,7 @@ import {
 } from "./boot-budget.js";
 import { autoCommitBrainFile } from "./brain-git.js";
 import { refusesBrainWrite } from "./lane-guard.js";
+import { budgetWarning } from "./write-budget.js";
 import { searchScope } from "./search-scope.js";
 
 // ── Configuration ──────────────────────────────────────────────
@@ -1548,11 +1549,29 @@ server.registerTool(
         agentId: AGENT_ID,
         dateStr: localDateOnly(),
       });
+      // Boot-budget check AFTER the write, never before: an oversized lane
+      // still boots (head kept) and read_brain_file still returns it whole,
+      // but a refused write at session end loses the update outright.
+      // Silent unless the file is boot-loaded AND actually at risk.
+      //
+      // Its own try/catch, NOT the handler's: by this line the file is on
+      // disk and committed, so a throw from the advisory would be reported
+      // as `Error writing ${filename}` — telling an agent its lane update
+      // was lost when it landed. That is worse than the overrun the
+      // advisory exists to report.
+      let warning = null;
+      try {
+        warning = budgetWarning({ filename: safe, content, agentId: AGENT_ID });
+      } catch {
+        // advisory only — a broken warning must never shadow a good write
+      }
       return {
         content: [
           {
             type: "text",
-            text: `Wrote ${safe} (${content.length} bytes); git: ${gitStatus}`,
+            text:
+              `Wrote ${safe} (${content.length} bytes); git: ${gitStatus}` +
+              (warning ? `\n\n${warning}` : ""),
           },
         ],
       };
@@ -1664,6 +1683,29 @@ server.registerTool(
             `Per the Lane Protocol: write_brain_file("${lane}", ...) with a date bump + what changed, then call session_end again.`
           );
         }
+      }
+    } catch {
+      // advisory only — never block a session end
+    }
+
+    // Boot-budget backstop, read from DISK. write_brain_file warns at the
+    // moment of its own write, but a lane edited with a plain file tool (or
+    // by hand) never passes through it, and session_end is the last surface
+    // that runs before the overrun becomes next session's silent cut.
+    // Deliberately re-reads instead of trusting anything this process wrote.
+    try {
+      let lane = null;
+      for (const c of [`${AGENT_ID}.md`, `${AGENT_ID}-session.md`]) {
+        if (existsSync(join(BRAIN_DIR, c))) { lane = c; break; }
+      }
+      if (lane) {
+        const onDisk = await readFile(join(BRAIN_DIR, lane), "utf-8");
+        const warning = budgetWarning({
+          filename: lane,
+          content: onDisk,
+          agentId: AGENT_ID,
+        });
+        if (warning) results.push(warning);
       }
     } catch {
       // advisory only — never block a session end

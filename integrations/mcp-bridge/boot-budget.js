@@ -110,6 +110,19 @@ export const STARTUP_BUDGETS = {
   dream: 3_500,        // overnight dream brief
 };
 
+// Margin floor (Opie #1986, 2026-08-04): a file that fits with almost no
+// headroom is one edit from a silent cut, and a gate that only reports the
+// overrun afterwards reports it too late. Under this many units of spare,
+// "fits" is downgraded to TIGHT.
+//
+// This lives HERE, beside the budgets, because two consumers need it and a
+// constant with two homes drifts the moment one moves — exactly how
+// lane-check.py came to hold a stale `BUDGET = 11_000` beside a comment
+// correctly naming this file as its source (snag-lane-check-hardcoded-budget).
+// Read by write-budget.js (import) and lane-check.py (parsed, via
+// boot-budget-check.py). A comment naming a source is not a pointer.
+export const MARGIN_FLOOR = 500;
+
 // ── Cut audit (Guy's rule, 2026-07-30: "Nothing gets cut! New rule. If
 // something is going to be cut then I am notified before any more.")
 //
