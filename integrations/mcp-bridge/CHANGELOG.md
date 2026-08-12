@@ -12,6 +12,33 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.20.3 — 2026-08-12 — doctrines get 1,000 units from the board's unusable slack
+
+**Problem.** `doctrines.md` sat at 5,191/5,500 — 309 units spare — and Opie
+**stopped authoring** rather than write into a full store, four doctrines queued
+behind it (incl. agreement-is-not-corroboration, #2382). Meanwhile `active.md`
+sat at 5,993/10,000 holding **4,007 units it has no route to spending**: the
+board is NO-GROWTH gated by `board-check.py`, so that headroom is reserved for
+growth that is deliberately forbidden. Idle budget behind a gate is not
+prudence, it is a stalled colleague.
+
+**Fix.** `active.md` 10,000 -> 9,000, `doctrines.md` 5,500 -> 6,500.
+
+⚠️ **This is NOT 2.20.0 repeated.** That raised `BOOT_TARGET` on a limit measured
+against one host and spent it across five; Opie's next session maxed out tool
+use twice and it was reverted the same day. This changes the **split**, not the
+**size**: budgets still sum to 40,500, `boot-budget.test.js` reports the same
+worst-case boot of 44,800, and no host — measured or unmeasured — is handed a
+larger block than it has been booting on all along. A reallocation cannot
+regress a ceiling it does not move. Revert = swap the two numbers back.
+
+**Also in this release: the version number itself was lying.** `package.json`
+read **2.19.1** (last bumped 2026-08-04) while this CHANGELOG documented 2.20.0,
+2.20.1 and 2.20.2, all shipped 08-11. Three releases changed code and changelog
+and never touched the version field, so anything reporting the bridge version
+reported a build four releases stale. Bumped 2.19.1 -> 2.20.3 here.
+*(doctrine-names-are-claims. → `[task:version-skew-watch]`.)*
+
 ## 2.20.2 — 2026-08-11 — the boot block states how many units it handed over
 
 **Problem:** the cut manifest reported per-section *withholding* — which is
