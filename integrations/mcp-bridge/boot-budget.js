@@ -73,12 +73,32 @@ export const BOOT_OVERHEAD = 2_900;
 // / CLAUDE.md 7,000 / people.md 2,200) was REVERTED with BOOT_TARGET above.
 // The allocation reasoning was fine; it was spending headroom measured on one
 // host against a budget that five hosts share.
+// ── 2026-08-12 (S220): 1,000 moved active.md -> doctrines.md. NET ZERO. ──
+// This is NOT the 08-11 move repeated. That one raised BOOT_TARGET and spent
+// headroom measured on one host against a budget five hosts share; Opie's next
+// session maxed out tool use twice. This changes the SPLIT, not the SIZE: the
+// budgets still sum to 40,500 and the test's worst-case boot is unchanged at
+// 44,800, so no host — measured or unmeasured — sees a larger block than the
+// one it has been booting on all along. A reallocation cannot regress a ceiling
+// it does not move.
+//
+// Why: doctrines.md sat at 5,191/5,500 — 309 spare — and Opie STOPPED AUTHORING
+// rather than write into a full store, with four doctrines queued behind it
+// (incl. agreement-is-not-corroboration, #2382). Meanwhile active.md sat at
+// 5,993/10,000 with 4,007 spare it has no route to using: the board is
+// NO-GROWTH gated by board-check.py, so that headroom is reserved for growth
+// that is deliberately forbidden. Idle budget behind a gate is not prudence,
+// it is a stalled colleague.
+//
+// active.md keeps 3,007 of margin over its live size, and board-check.py still
+// fails on any growth, so the 9,000 is not a ceiling the board can walk into.
+// Reverting = swap the two numbers back; nothing else depends on them.
 export const STARTUP_BUDGETS = {
   lane: 11_000,        // the agent's own continuity — biggest slice
   "CLAUDE.md": 6_500,  // cross-agent operating doc / session ritual
-  "active.md": 10_000, // the board; board rules keep it ~9KB — deliberately unchanged
+  "active.md": 9_000,  // the board; NO-GROWTH gated, live 5,993 — lent 1,000 to doctrines
   "people.md": 2_000,
-  "doctrines.md": 5_500,
+  "doctrines.md": 6_500, // was 5,500; +1,000 so Opie's queue can land (S220)
   mnemo: 2_000,        // recent Mnemo context chunks
   dream: 3_500,        // overnight dream brief
 };
