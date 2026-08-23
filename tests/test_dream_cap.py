@@ -509,6 +509,18 @@ def test_rollup_double_failure_drops_only_named_bad_lines(monkeypatch, tmp_path)
     assert not list(tmp_path.glob("rejected-*"))
 
 
+def test_normalize_swapped_stated_line_fields_only_repairs_unambiguous_owner_first():
+    payload = ("# Decisions\n"
+               "CC · CC shipped the fix · 2026-08-23T03:00:00 · shipped\n"
+               "Cody shipped the test · Cody · 2026-08-23T04:00:00 · verified\n"
+               "Unknown · A claim · 2026-08-23T05:00:00 · pending")
+    result, count = dream._normalize_swapped_stated_line_fields(payload)
+    assert count == 1
+    assert "CC shipped the fix · CC · 2026-08-23T03:00:00 · shipped" in result
+    assert "Cody shipped the test · Cody · 2026-08-23T04:00:00 · verified" in result
+    assert "Unknown · A claim · 2026-08-23T05:00:00 · pending" in result
+
+
 _BRAIN_DIR = os.environ.get("BRAIN_DIR", "").strip()
 _REAL_CHECKER = Path(_BRAIN_DIR) / "tools" / "stated-line-check.py" if _BRAIN_DIR else None
 
