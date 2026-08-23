@@ -527,6 +527,30 @@ def _validate_stated_lines(payload: str) -> None:
     log.info("  stated-line validation passed")
 
 
+_STATED_LINE_OWNERS = {"CC", "Cody", "Opie", "Rocky", "Dave", "Guy"}
+
+
+def _normalize_swapped_stated_line_fields(payload: str) -> tuple[str, int]:
+    """Repair the model's unambiguous ``owner · claim · timestamp · status`` inversion.
+
+    The prompt specifies claim-first, but some providers strongly prefer putting
+    the actor first.  Only swap an exact four-field line whose first field is a
+    known short owner and whose second field is not; everything ambiguous stays
+    untouched for the validator to reject loudly.
+    """
+    repaired = []
+    swaps = 0
+    for line in payload.splitlines():
+        parts = [part.strip() for part in line.split("·")]
+        if (len(parts) == 4 and parts[0] in _STATED_LINE_OWNERS
+                and parts[1] not in _STATED_LINE_OWNERS):
+            parts[0], parts[1] = parts[1], parts[0]
+            line = " · ".join(parts)
+            swaps += 1
+        repaired.append(line)
+    return "\n".join(repaired).strip(), swaps
+
+
 def _drop_invalid_stated_lines(payload: str, report: str) -> tuple[str, int]:
     """Remove only lines named by the validator and append an explicit loss report.
 
@@ -758,6 +782,9 @@ def synthesize(memories: list[dict], dry_run: bool = False) -> str:
     llm_calls = len(per_agent_briefs) + 1
 
     try:
+        dream_text, swap_count = _normalize_swapped_stated_line_fields(dream_text)
+        if swap_count:
+            log.warning("  normalized %d stated line(s) emitted owner-first", swap_count)
         try:
             _validate_stated_lines(dream_text)
         except RuntimeError as first_err:
@@ -788,6 +815,9 @@ def synthesize(memories: list[dict], dry_run: bool = False) -> str:
             total_prompt_tokens += usage.get("prompt_tokens", 0)
             total_completion_tokens += usage.get("completion_tokens", 0)
             llm_calls += 1
+            retry_text, swap_count = _normalize_swapped_stated_line_fields(retry_text)
+            if swap_count:
+                log.warning("  normalized %d corrective stated line(s) emitted owner-first", swap_count)
             try:
                 _validate_stated_lines(retry_text)
             except RuntimeError as second_err:
