@@ -571,10 +571,19 @@ server.registerTool(
         "what does this remind the store of; prefers the adjacent similarity band, ignores recency, " +
         "favors rarely-recalled memories. Use for brainstorming and idea recall."
       ),
+    expand: z
+      .boolean()
+      .optional()
+      .describe(
+        "Thesaurus Loop escalation — reword the query several ways and search each, fusing by " +
+        "max relevance. Costs ~5x latency (one Flash call plus up to 4 extra retrieval passes) " +
+        "and is NON-DETERMINISTIC, so the same query can return different memories. Use it " +
+        "deliberately when a normal recall came back weak or off-topic; do not set it by default."
+      ),
   },
     annotations: { "title": 'Recall Memories', "readOnlyHint": true, "idempotentHint": true, "openWorldHint": true },
   },
-  async ({ query, max_results, source, category, exclude_categories, exclude_stale, max_age_days, mode }) => {
+  async ({ query, max_results, source, category, exclude_categories, exclude_stale, max_age_days, mode, expand }) => {
     try {
       await ensureHealth();
       const requestBody = {
@@ -588,6 +597,7 @@ server.registerTool(
       if (exclude_stale !== undefined) requestBody.exclude_stale = exclude_stale;
       if (max_age_days !== undefined) requestBody.max_age_days = max_age_days;
       if (mode !== undefined) requestBody.mode = mode;
+      if (expand !== undefined) requestBody.expand = expand;
       const data = await mnemoRequest("POST", "/context", requestBody);
 
       const chunks = data.chunks || [];

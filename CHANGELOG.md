@@ -1,5 +1,25 @@
 # Changelog
 
+## mcp-bridge 2.24.0 — `mnemo_recall` can ask for the Thesaurus Loop (2026-08-23)
+
+**Problem.** The server's `/context` has accepted an `expand` flag since v4.3, but
+`mnemo_recall` never exposed it, so no agent could ask for query expansion or
+refuse it — the Thesaurus Loop was reachable only by its automatic trigger.
+
+That trigger is being defaulted OFF (it fires on 70% of recalls at ~5x latency,
+blind-tested at 2 wins / 1 loss / 4 ties, and is non-deterministic — Flash at
+`temperature: 0.7` returned 3 distinct result sets across 4 identical calls).
+**Turning the default off WITHOUT this passthrough would have removed expansion
+from all five agents with no way to ask for it back** — a config change on one
+side of a seam nobody could reach from the other (`doctrine-both-halves-green`).
+
+**Fix.** `integrations/mcp-bridge/server.js` — `mnemo_recall` takes an optional
+`expand` boolean and forwards it to `/context`. Omitted = server default, so
+behaviour is unchanged for every existing caller. The description states the cost
+and the non-determinism so callers escalate deliberately.
+
+Evidence and method: `brain/snag-thesaurus-loop-trigger-rate.md`.
+
 ## Unreleased
 
 - **Dreamer: the stated-line gate no longer discards the night's synthesis — one corrective retry, then redacted quarantine; prompts now bridge the lowercase-id seam** (`mnemo-dream.py`; tests in `tests/test_dream_cap.py`). Problem this fixes: the gate's first live night (2026-08-21) rejected the rollup with 79 violations — nearly all `SUBJECT claim starts lowercase`, because the harvest names agents by their lowercase ids (`cc`, `cody`) and the model faithfully led claims with them, while the prompts never stated the capitalization rule the validator enforces. The producer and the real validator had only ever met through a monkeypatched fake in tests, so the seam shipped unproven; on the first real night the run exited 1 and the whole paid two-stage synthesis was discarded with nothing persisted. Fix, three parts: (1) both system prompts now require every claim to begin with its capitalized subject, spell the agent names (CC, Cody, Opie, Rocky, Dave — never lowercase ids), and forbid bare-verb openers (the checker's *other* SUBJECT rule, which a capitalize-only instruction would have converted violations into); (2) a validation failure on the rollup triggers exactly one retry with the validator's report handed back to the model; (3) if the retry is also rejected — or the retry call itself dies, labeled distinctly so the file tells the true story of which attempt's text it holds — the text plus reports are preserved at `dreams/rejected-<UTC date>.txt`, a name invisible to the server's `*.md` brief glob and the dreamer's `*.json` memory glob, after passing the same `agentb.redact` choke point as every other on-disk write of LLM output; the run still exits non-zero, so CronAlarm keeps screaming (degrade to raw, never to nothing; fail-closed serving is unchanged), and the LLM-usage total is now logged even on the failure path. The seam itself is under test: where `BRAIN_DIR` provides the real `stated-line-check.py` (dev hosts, the deployed runtime), a new test pipes representative capitalized lines through it live; public CI without a brain skips it by name.
