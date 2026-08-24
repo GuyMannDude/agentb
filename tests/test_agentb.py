@@ -152,6 +152,27 @@ class TestCircuitBreaker:
 
 class TestResilientReasoning:
     @pytest.mark.asyncio
+    async def test_ollama_disables_hidden_thinking_for_small_output_budgets(self):
+        provider = OllamaReasoning(ProviderConfig(
+            provider="ollama", model="qwen3:8b", api_base="http://localhost:11434"
+        ))
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"response": "topology"}
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.post.return_value = response
+
+        with patch("httpx.AsyncClient", return_value=client):
+            result = await provider.generate("classify", max_tokens=8)
+
+        assert result == "topology"
+        payload = client.post.call_args.kwargs["json"]
+        assert payload["think"] is False
+        assert payload["options"]["num_predict"] == 8
+
+    @pytest.mark.asyncio
     async def test_primary_success(self):
         config = ResilientProviderConfig(
             primary=ProviderConfig(provider="ollama", model="test", api_base="http://localhost:11434"),

@@ -419,6 +419,10 @@ class OllamaReasoning(ReasoningProvider):
     async def generate(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         import httpx
         payload = {"model": self.config.model, "prompt": prompt, "stream": False,
+                   # Qwen3 spends num_predict on hidden reasoning unless this is
+                   # disabled. Small structured callers (classification uses 8
+                   # tokens) then receive an empty response during failover.
+                   "think": False,
                    "options": {"temperature": 0.3, "num_predict": max_tokens}}
         if system:
             payload["system"] = system
