@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Thesaurus Loop defaults off, explicit escalation works
+
+Automatic query expansion now defaults off after production measurement found a
+~5x latency path, non-deterministic result sets, and no demonstrated quality win.
+`expand: true` explicitly forces expansion on a weak/empty first pass;
+`expand: false` forbids it; omission follows the server default. The explicit
+override is implemented server-side as well as in mcp-bridge 2.24.0—without that
+second seam, disabling the default would also have disabled deliberate expansion.
+The stale cost comment now accounts for Flash plus up to four extra retrieval
+passes and no longer claims merged results are identical to plain recall.
+
 ## mcp-bridge 2.24.0 — `mnemo_recall` can ask for the Thesaurus Loop (2026-08-23)
 
 **Problem.** The server's `/context` has accepted an `expand` flag since v4.3, but

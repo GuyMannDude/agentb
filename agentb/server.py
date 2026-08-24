@@ -142,7 +142,7 @@ class ContextRequest(BaseModel):
     expand: Optional[bool] = Field(
         None,
         description=(
-            "Thesaurus Loop query expansion. None = server default; True = allow; "
+            "Thesaurus Loop query expansion. None = server default; True = force; "
             "False = never. Expansion only ever fires on a weak/empty first pass "
             "(escalation), so it never slows a good search."
         ),
@@ -1151,7 +1151,8 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # isolated Flash call), searches each, and fuses by max-relevance. Good
         # searches never reach this branch, so there's no hot-path cost.
         exp = config.expansion
-        if exp.enabled and req.expand is not False and not req.batch \
+        expansion_allowed = req.expand is True or (req.expand is None and exp.enabled)
+        if expansion_allowed and not req.batch \
                 and should_expand(req.prompt, all_chunks, exp):
             variants = await expand_query(req.prompt, exp, expand_or_key, expand_or_base)
             extra_passes = []

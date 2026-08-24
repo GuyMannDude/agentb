@@ -221,9 +221,10 @@ class ExpansionConfig:
     # The Thesaurus Loop (v4.2): query expansion on a WHIFF. The standard recall
     # runs first; only when it comes back empty or weak do we fan the query into
     # a few alternative phrasings (one isolated Flash call), search each, and
-    # fuse by max-relevance. Escalation means good searches pay nothing, so
-    # default-ON is safe. Disable for the exact pre-v4.2 single-query behavior.
-    enabled: bool = True
+    # fuse by max-relevance. Automatic expansion is disabled: production showed
+    # a ~5x latency path, non-deterministic results, and no measured quality win.
+    # Callers can still request expansion explicitly with expand=true.
+    enabled: bool = False
     # A first pass is a "whiff" when its best hit barely rises above the pack:
     # top_relevance - median_relevance < this. RELATIVE shape, not an absolute
     # score — the v4.3.0 absolute relevance_floor (0.5) sat INSIDE this embedder's
@@ -232,10 +233,10 @@ class ExpansionConfig:
     # nomic-embed-text (v4.5.3): that band is even tighter (~0.49-0.62), so
     # measured top-vs-pack gaps run clear-standout on-topic 0.05-0.07, flat-but-
     # on-topic ~0.02, whiff ~0.01. 0.02 catches every true whiff + empty while
-    # sparing flat on-topic pools the escalation tax; the near-free false-positive
-    # on a uniform pool is still accepted (one Flash call, ~$0.001, max-relevance
-    # merge makes the merged result identical to not expanding). (v4.4.0 gap-not-
-    # floor; v4.5.3 nomic retune; was relevance_floor.)
+    # sparing flat on-topic pools the escalation tax. A false positive costs one
+    # Flash call plus up to max_variants extra retrieval passes, and the merged
+    # result can differ from plain recall. (v4.4.0 gap-not-floor; v4.5.3 nomic
+    # retune; was relevance_floor.)
     gap_threshold: float = 0.02
     max_variants: int = 4          # alternative phrasings requested from Flash
     # Hard cap on the expansion LLM call; expire → no expansion (graceful). 2.5s:
