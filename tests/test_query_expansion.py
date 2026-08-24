@@ -308,7 +308,7 @@ def _make_client(tmp_path, embedder):
         cache=CacheConfig(), server=ServerConfig(host="127.0.0.1", port=50097),
         data_dir=str(tmp_path),
         classification=ClassificationConfig(enabled=False),
-        expansion=ExpansionConfig(),  # default-ON
+        expansion=ExpansionConfig(),  # default-OFF; callers opt in per request
         personas=dict(DEFAULT_PERSONAS),
     )
     patch_embed = patch("agentb.server.create_resilient_embedding", return_value=embedder)
@@ -344,7 +344,8 @@ def test_escalation_fires_on_empty_store():
         try:
             mock_expand = AsyncMock(return_value=["an alternate phrasing of it"])
             with patch("agentb.server.expand_query", mock_expand):
-                r = client.post("/context", json={"prompt": "how do we deploy this", "max_results": 5})
+                r = client.post("/context", json={"prompt": "how do we deploy this",
+                                                  "max_results": 5, "expand": True})
             assert r.status_code == 200, r.text
             mock_expand.assert_awaited_once()                 # whiff → escalated
             assert "an alternate phrasing of it" in emb.embedded  # variant got searched
@@ -392,6 +393,24 @@ def test_expand_false_never_expands():
                 p.stop()
 
 
+def test_omitted_expand_uses_disabled_server_default():
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        client, patches = _make_client(Path(td), _RecordingEmbedding())
+        try:
+            mock_expand = AsyncMock(return_value=["x"])
+            with patch("agentb.server.expand_query", mock_expand):
+                r = client.post("/context", json={"prompt": "how do we deploy this",
+                                                  "max_results": 5})
+            assert r.status_code == 200, r.text
+            mock_expand.assert_not_awaited()
+        finally:
+            client.__exit__(None, None, None)
+            for p in patches:
+                p.stop()
+
+
 def test_clear_winner_first_pass_skips_expansion():
     # A real on-topic memory peaks above filler memories (cosine 1.0 vs 0.894)
     # through the actual L3 cosine path, so top - median = 0.106 >= gap_threshold
@@ -407,7 +426,8 @@ def test_clear_winner_first_pass_skips_expansion():
         try:
             mock_expand = AsyncMock(return_value=["x"])
             with patch("agentb.server.expand_query", mock_expand):
-                r = client.post("/context", json={"prompt": "how do we deploy this", "max_results": 5})
+                r = client.post("/context", json={"prompt": "how do we deploy this",
+                                                  "max_results": 5, "expand": True})
             assert r.status_code == 200, r.text
             assert r.json()["total_found"] >= 1
             mock_expand.assert_not_awaited()
@@ -431,7 +451,8 @@ def test_flat_high_distribution_expands():
         try:
             mock_expand = AsyncMock(return_value=["an alternate phrasing here"])
             with patch("agentb.server.expand_query", mock_expand):
-                r = client.post("/context", json={"prompt": "how do we deploy this", "max_results": 5})
+                r = client.post("/context", json={"prompt": "how do we deploy this",
+                                                  "max_results": 5, "expand": True})
             assert r.status_code == 200, r.text
             mock_expand.assert_awaited_once()  # flat pool → whiff → escalate
         finally:
