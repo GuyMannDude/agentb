@@ -55,7 +55,7 @@ def set_last_updated(host: Path, entity: str, attribute: str, ts: float) -> None
 
 def test_fact_travels_and_is_ciphertext(world):
     a, b, stick = world
-    store(a).save(entity="IGOR-2", attribute="tailscale_ip",
+    store(a).save(entity="host-b", attribute="tailscale_ip",
                   value="100.64.0.1", confidence="verified",
                   evidence_source="test")
     r = courier(a, stick, "host-a")
@@ -64,7 +64,7 @@ def test_fact_travels_and_is_ciphertext(world):
     assert raw.startswith(b"CSTK\x01") and b"100.64.0.1" not in raw
     r = courier(b, stick, "host-b")
     assert r.facts_to_host == 1
-    fact = store(b).get("IGOR-2", "tailscale_ip")
+    fact = store(b).get("host-b", "tailscale_ip")
     assert fact is not None and fact.value == "100.64.0.1"
     assert fact.confidence == "verified"
 
