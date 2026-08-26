@@ -112,9 +112,9 @@ export const BOOT_OVERHEAD = 2_900;
 export const STARTUP_BUDGETS = {
   lane: 11_000,        // the agent's own continuity — biggest slice
   "CLAUDE.md": 6_500,  // cross-agent operating doc / session ritual
-  "active.md": 8_500,  // the board; NO-GROWTH gated — lent 1,000 (S220) + 500 (08-20) to doctrines
+  "active.md": 8_000,  // the board; NO-GROWTH gated — lent 1,000 (S220) + 500 (08-20) + 500 (08-25) to doctrines
   "people.md": 2_000,
-  "doctrines.md": 7_000, // was 5,500; +1,000 (S220) +500 (08-20, Guy) so doctrine authoring never stalls
+  "doctrines.md": 7_500, // was 5,500; +1,000 (S220) +500 (08-20, Guy) +500 (08-25, S272: three doctrines landed at once — CC's reasoning-transcript filing + Opie's snag-half-life + tail-is-the-error — against 388 headroom; same split-not-size move as S220, sum unchanged) so doctrine authoring never stalls
   // The "mnemo" key (worth 2,000 units) was RETIRED 2026-08-15 — deliberately
   // written WITHOUT the key:value shape, because boot-budget-check.py parses
   // this block by regex and a commented-out entry still counted.

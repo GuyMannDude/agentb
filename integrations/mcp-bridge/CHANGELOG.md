@@ -12,6 +12,21 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.24.1 — 2026-08-25 — boot budget rebalance: 500 more active.md → doctrines.md
+
+**Problem.** Three doctrines landed in one evening — CC's
+`doctrine-reasoning-transcript` filing (Opie ruling #2953) plus Opie's
+`doctrine-snag-half-life` and `doctrine-tail-is-the-error` (#2954) — against
+388 chars of index headroom. Even after CC trimmed five claim lines,
+doctrines.md sat at 8 spare vs the 350 floor and the brain pre-commit gate
+blocked the push, stranding all three doctrines uncommitted on one disk.
+
+**Fix.** `STARTUP_BUDGETS`: active.md 8,500 → 8,000; doctrines.md 7,000 →
+7,500. Net zero — the sum stays 38,500, same split-not-size shape as S220 and
+2.23.1. active.md keeps 3,171 spare at its current 4,829 chars. Third loan
+from the same lender: if a fourth is ever needed, the index FORMAT is the
+problem, not the budget.
+
 ## 2.23.1 — 2026-08-20 — boot budget rebalance: 500 more active.md → doctrines.md
 
 **Problem.** The doctrines.md boot index hit FULL at 35 doctrines — 321 spare
