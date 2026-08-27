@@ -7,6 +7,7 @@ on IGOR, 2026-03..2026-08, planted by test runs and module import of
 agentb.server from assorted working directories).
 """
 from pathlib import Path
+import os
 
 from agentb.config import _parse_config, get_agent_data_dir
 
@@ -39,8 +40,9 @@ def test_empty_agent_data_dir_stays_empty():
 def test_absolute_data_dir_passes_through_unchanged():
     # The deployed invariant: existing configs with absolute paths must be
     # byte-identical after parse.
-    cfg = _parse_config({"data_dir": "/srv/agentb-data"})
-    assert cfg.data_dir == "/srv/agentb-data"
+    absolute = str(Path.cwd().anchor + "agentb-data")
+    cfg = _parse_config({"data_dir": absolute})
+    assert cfg.data_dir == absolute
 
 
 def test_missing_data_dir_still_defaults_to_home_agentb():
@@ -58,8 +60,11 @@ def test_agentb_config_env_var_tilde_expands(monkeypatch, tmp_path):
     # must not silently fall through to the all-defaults config.
     from agentb.config import load_config
     cfg_file = tmp_path / "agentb.yaml"
-    cfg_file.write_text("data_dir: /srv/from-env-config\n", encoding="utf-8")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    configured_data = tmp_path / "from-env-config"
+    cfg_file.write_text(f"data_dir: {configured_data}\n", encoding="utf-8")
+    # pathlib follows the platform's home convention: HOME on POSIX,
+    # USERPROFILE on Windows.  Exercise the same '~' contract on both.
+    monkeypatch.setenv("USERPROFILE" if os.name == "nt" else "HOME", str(tmp_path))
     monkeypatch.setenv("AGENTB_CONFIG", "~/agentb.yaml")
     cfg = load_config()
-    assert cfg.data_dir == "/srv/from-env-config"
+    assert Path(cfg.data_dir) == configured_data

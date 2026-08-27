@@ -23,7 +23,11 @@ def passport_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *args],
-        check=True, capture_output=True, text=True,
+        # Git writes commit metadata as UTF-8 regardless of the Windows
+        # console code page.  Leaving this to locale decoding turns the em
+        # dash into mojibake on cp1252 hosts while the repository itself is
+        # correct.
+        check=True, capture_output=True, text=True, encoding="utf-8",
     ).stdout.strip()
 
 
