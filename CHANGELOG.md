@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Dream contradiction triage: non-competing flags become drift notes
+
+The dreamer's verified-vs-extracted contradiction fan-out had a lifetime score
+of 0 real conflicts / 8 flags — every flag was two TRUE statements (same value
+spelled differently, or descriptions at different granularity collapsed onto
+one attribute slot), so the report was reliably noise and trained its readers
+to skim. Flags now pass through two downgrade stages before notification:
+deterministic identifier normalization (casefold, whitespace, basename for
+path-shaped values), then one batched LLM call applying the discriminator
+"can both statements be true of the entity at the same instant?". Downgrades
+ship as one-line drift notes; a run with zero survivors says so in one line
+instead of shipping its rejects; and a triage failure keeps every flag — the
+judge can only downgrade, never swallow. Twenty-one tests pin the real
+specimens (Opie/role, IGOR.type, opie.md-vs-brain/opie.md), the
+fail-toward-noise contract (judge outage, null content, non-list JSON,
+malformed flag dicts), and the review-caught trap that two DIFFERENT paths
+sharing a filename ("brain/opie.md" vs "archive/opie.md" — a real move) must
+reach the judge rather than the identifier downgrade.
+
 ## Unreleased — Thesaurus Loop defaults off, explicit escalation works
 
 Automatic query expansion now defaults off after production measurement found a

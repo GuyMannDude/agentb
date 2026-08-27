@@ -1298,6 +1298,121 @@ def post_facts(extracted: list[dict], source_agent: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Contradiction triage — downgrade non-competing flags to drift notes
+# ---------------------------------------------------------------------------
+# The detector's lifetime score before triage was 0 real conflicts / 8 flags
+# (specimens: Opie/role x6, IGOR-2 "Windows machine", IGOR.type — see brain
+# active-detail.md § [task:dreamer-generalisation-filter]). Every FP was two
+# TRUE statements: same value under different spellings, or descriptions at
+# different granularity collapsed onto one attribute slot. A report that is
+# reliably noise trains its readers to skim, which is how a real contradiction
+# eventually slides by (doctrine-wrong-guard).
+#
+# Two triage stages, both DOWNGRADERS — a triage failure keeps the flag:
+#   A (deterministic): identifier normalization — casefold/whitespace, and
+#     basename equality for path-shaped values ("opie.md" vs "brain/opie.md").
+#   B (semantic, one batched LLM call): the discriminator banked 2026-08-25 —
+#     two statements conflict only if they cannot BOTH be true of the entity
+#     at the same instant. Judge unavailable/unparseable => every remaining
+#     flag survives. Fail toward noise, never toward silence.
+
+def _norm_identifier(value: str) -> str:
+    """Casefold + collapse whitespace + strip wrapping quotes."""
+    return " ".join(str(value).split()).strip().strip("'\"").casefold()
+
+
+def _identifiers_match(a: str, b: str) -> bool:
+    """True when two values name the same identifier.
+
+    Equality after normalization, or the bare-name-vs-qualified-path SUFFIX
+    relation ("opie.md" vs "brain/opie.md"). Deliberately NOT basename
+    equality of two full paths — "brain/opie.md" vs "archive/opie.md" is a
+    real move and must survive to the judge (review finding 2026-08-27)."""
+    na, nb = _norm_identifier(a), _norm_identifier(b)
+    if na == nb:
+        return True
+    for bare, pathish in ((na, nb), (nb, na)):
+        if not re.search(r"[/\\]", bare) and re.search(r"[/\\]", pathish):
+            if re.split(r"[/\\]", pathish)[-1] == bare:
+                return True
+    return False
+
+
+_TRIAGE_SYSTEM_PROMPT = """You judge whether two recorded statements about the same entity attribute genuinely conflict.
+Two statements CONFLICT only if they cannot both be true of the entity at the same instant.
+Statements are COMPATIBLE when one is a subset, consequence, or coarser description of the other, or when they describe different aspects that were filed under the same attribute name.
+Answer with STRICT JSON only: a list with one object per item, [{"i": <item number>, "verdict": "conflict" or "compatible", "reason": "<one short sentence>"}]. Every item number must appear exactly once. No prose, no code fences."""
+
+
+def triage_contradictions(contradictions: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split raw contradictions into (survivors, drift_notes).
+
+    Drift notes carry the original fields plus downgrade_class
+    ("identifier" | "compatible") and downgrade_reason. Every downgrade is
+    logged — silent truncation reads as "covered everything" when it didn't.
+
+    Log-don't-raise contract like notify_contradictions: this runs unattended
+    between fact posting and notification, and ANY escape here would abort the
+    run after the dream is written. Total failure => every flag survives."""
+    try:
+        return _triage_contradictions_inner(contradictions)
+    except Exception as e:  # noqa: BLE001 — deliberate: fail toward noise, never toward silence or a crash
+        log.warning(f"  triage: unexpected failure ({e!r}) — keeping all {len(contradictions)} flag(s) as contradictions")
+        return list(contradictions), []
+
+
+def _triage_contradictions_inner(contradictions: list[dict]) -> tuple[list[dict], list[dict]]:
+    survivors: list[dict] = []
+    drift_notes: list[dict] = []
+    llm_queue: list[dict] = []
+
+    for c in contradictions:
+        if _identifiers_match(c["extracted_value"], c["existing_verified_value"]):
+            drift_notes.append({
+                **c,
+                "downgrade_class": "identifier",
+                "downgrade_reason": "values normalize to the same identifier",
+            })
+            log.info(f"  triage: {c['entity']}.{c['attribute']} downgraded (identifier normalization)")
+        else:
+            llm_queue.append(c)
+
+    if not llm_queue:
+        return survivors, drift_notes
+
+    items = "\n".join(
+        f"Item {i}: entity={c['entity']!r} attribute={c['attribute']!r}\n"
+        f"  statement A (existing verified): {c['existing_verified_value']!r}\n"
+        f"  statement B (newly extracted):   {c['extracted_value']!r}"
+        for i, c in enumerate(llm_queue, 1)
+    )
+    try:
+        raw, _ = _call_openrouter(_TRIAGE_SYSTEM_PROMPT, items, max_tokens=1024)
+        verdicts = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
+        by_index = {v["i"]: v for v in verdicts if isinstance(v, dict) and v.get("verdict") in ("conflict", "compatible")}
+    except (RuntimeError, httpx.HTTPError, json.JSONDecodeError, TypeError, KeyError, AttributeError) as e:
+        # AttributeError: OpenRouter can 200 with "content": null → raw.strip() on None.
+        log.warning(f"  triage: compatibility judge unavailable ({e}) — keeping all {len(llm_queue)} flag(s) as contradictions")
+        return survivors + llm_queue, drift_notes
+
+    for i, c in enumerate(llm_queue, 1):
+        v = by_index.get(i)
+        if v is None:
+            log.warning(f"  triage: no verdict for item {i} ({c['entity']}.{c['attribute']}) — keeping as contradiction")
+            survivors.append(c)
+        elif v["verdict"] == "compatible":
+            drift_notes.append({
+                **c,
+                "downgrade_class": "compatible",
+                "downgrade_reason": str(v.get("reason", ""))[:300],
+            })
+            log.info(f"  triage: {c['entity']}.{c['attribute']} downgraded (compatible: {str(v.get('reason', ''))[:120]})")
+        else:
+            survivors.append(c)
+    return survivors, drift_notes
+
+
+# ---------------------------------------------------------------------------
 # Trajectory Phase 2: Stage 0.7 — strategy distillation (v4.7, Opie bus #995)
 # ---------------------------------------------------------------------------
 # Source of truth pivot (bus #996): the Developer Dump only sees Mnemo-bridge
@@ -1601,26 +1716,50 @@ def flag_stale_trajectories() -> list[str]:
     return flags
 
 
-def notify_contradictions(contradictions: list[dict], dream_date: str) -> None:
+def notify_contradictions(contradictions: list[dict], dream_date: str, drift_notes: list[dict] | None = None) -> None:
     """End-of-run batched notification. Best-effort to both bus + Discord;
-    failures are logged, not raised. Quiet runs (no contradictions) produce
-    no message."""
-    if not contradictions:
+    failures are logged, not raised. Quiet runs (no contradictions and no
+    drift notes) produce no message. Zero survivors with drift notes produce
+    a one-line report naming the downgrades — never their full bodies (the
+    reader asked for the verdict, not the rejects)."""
+    drift_notes = drift_notes or []
+    drift_lines = [
+        f"{d['entity']}.{d['attribute']} ({d['downgrade_class']}: {d['downgrade_reason']})"
+        for d in drift_notes
+    ]
+    if not contradictions and not drift_notes:
         log.info("  no verified-vs-extracted contradictions this run")
         return
-    log.warning(f"  {len(contradictions)} verified-vs-extracted contradiction(s) — notifying")
-
-    summary_lines = [
-        f"Dream {dream_date}: {len(contradictions)} verified-vs-extracted contradiction(s).",
-        "Dreamer extracted facts that conflict with existing verified values.",
-        "Existing verified values preserved; extracted values logged to fact_history.",
-        "",
-    ]
-    for c in contradictions:
-        summary_lines.append(
-            f"  • {c['entity']}.{c['attribute']}: verified='{c['existing_verified_value']}' vs extracted='{c['extracted_value']}' (from {c['source_agent']}, {c['evidence_source']})"
+    if not contradictions:
+        log.info(f"  0 contradictions survived triage; {len(drift_notes)} downgraded to drift notes")
+        summary = (
+            f"Dream {dream_date}: 0 contradictions survived triage — "
+            f"{len(drift_notes)} flag(s) downgraded to drift notes: " + "; ".join(drift_lines)
         )
-    summary_text = "\n".join(summary_lines)
+    else:
+        log.warning(f"  {len(contradictions)} verified-vs-extracted contradiction(s) — notifying")
+        summary = f"{len(contradictions)} verified-vs-extracted contradiction(s) this dream"
+
+    # The zero-survivor case sends the SAME one-liner to every channel — the
+    # full preamble asserts "facts conflict", which is false on such a run,
+    # and Discord's readers are the ones the triage exists to stop training
+    # to skim (review finding 2026-08-27).
+    if not contradictions:
+        summary_text = summary
+    else:
+        summary_lines = [
+            f"Dream {dream_date}: {len(contradictions)} verified-vs-extracted contradiction(s) survived triage; {len(drift_notes)} downgraded to drift notes.",
+            "Dreamer extracted facts that conflict with existing verified values.",
+            "Existing verified values preserved; extracted values logged to fact_history.",
+            "",
+        ]
+        for c in contradictions:
+            summary_lines.append(
+                f"  • {c['entity']}.{c['attribute']}: verified='{c['existing_verified_value']}' vs extracted='{c['extracted_value']}' (from {c['source_agent']}, {c['evidence_source']})"
+            )
+        if drift_lines:
+            summary_lines.append("  drift notes (downgraded, no action): " + "; ".join(drift_lines))
+        summary_text = "\n".join(summary_lines)
 
     # Bus notification (optional, best-effort).
     # Requires MNEMO_DREAM_BUS_URL + MNEMO_DREAM_BUS_FROM + MNEMO_DREAM_BUS_TARGETS.
@@ -1645,10 +1784,11 @@ def notify_contradictions(contradictions: list[dict], dream_date: str) -> None:
                         "subject": f"dream-contradictions-{dream_date}",
                         "body": {
                             "source": "dreamer",
-                            "summary": f"{len(contradictions)} verified-vs-extracted contradiction(s) this dream",
+                            "summary": summary,
                             "dream_date": dream_date,
                             "contradictions": contradictions,
-                            "guidance": "Verified facts preserved. Review each: was the verified fact wrong (use mnemo_fact_demote or assert new verified value), or was the extraction a false-positive (no action needed, drift signal)?",
+                            "drift_notes": drift_lines,
+                            "guidance": "Verified facts preserved. Review each contradiction: was the verified fact wrong (use mnemo_fact_demote or assert new verified value), or was the extraction a false-positive (no action needed, drift signal)? Drift notes are already-triaged downgrades — no action.",
                         },
                     }
                     r = httpx.post(f"{MNEMO_DREAM_BUS_URL}/mesh/ping", json=envelope, timeout=10.0)
@@ -1923,7 +2063,8 @@ def main():
     # End-of-run contradiction notification (Phase 3). Best-effort; failures
     # logged not raised. Quiet runs produce no message.
     dream_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    notify_contradictions(contradictions, dream_date)
+    contradictions, drift_notes = triage_contradictions(contradictions)
+    notify_contradictions(contradictions, dream_date, drift_notes=drift_notes)
 
     # Git-sync wedge: surface repo drift (uncommitted / unpushed / behind remote).
     # Always logged + printed for cron.log visibility; pushed to bus + Discord only
