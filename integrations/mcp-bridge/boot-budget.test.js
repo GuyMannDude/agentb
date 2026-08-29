@@ -74,7 +74,7 @@ test("worst-case boot block lands inline (< BOOT_TARGET)", () => {
 });
 
 test("every boot section has a budget", () => {
-  for (const key of ["lane", "CLAUDE.md", "active.md", "people.md", "doctrines.md", "mnemo", "dream"]) {
+  for (const key of ["lane", "CLAUDE.md", "active.md", "people.md", "doctrines.md", "bus", "dream"]) {
     if (!(key in STARTUP_BUDGETS)) throw new Error(`missing budget: ${key}`);
     if (!(STARTUP_BUDGETS[key] > 0)) throw new Error(`non-positive budget: ${key}`);
   }

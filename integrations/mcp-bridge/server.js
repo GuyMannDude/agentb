@@ -21,6 +21,7 @@ import { autoCommitBrainFile, sessionEndCommit } from "./brain-git.js";
 import { refusesBrainWrite } from "./lane-guard.js";
 import { budgetWarning } from "./write-budget.js";
 import { searchScope } from "./search-scope.js";
+import { fetchUnrepliedBusSummary } from "./bus-startup.js";
 
 // ── Configuration ──────────────────────────────────────────────
 // MNEMO_URL: where your Mnemo Cortex API lives
@@ -61,6 +62,8 @@ const BRAIN_DIR =
 const WIKI_DIR = process.env.WIKI_DIR || join(process.env.HOME || ".", "wiki");
 const DREAM_DIR =
   process.env.DREAM_DIR || join(process.env.HOME || ".", ".agentb/dreams");
+const DISCOBUS_DISPATCHER = process.env.DISCOBUS_DISPATCHER || "";
+const DISCOBUS_AGENT = process.env.DISCOBUS_AGENT || AGENT_ID;
 
 // Lane freshness is reported on EVERY boot (Guy, 2026-07-05: "every agent
 // every time — I notice when the last session is missing"). Older than this
@@ -1168,6 +1171,25 @@ async function _runStartup({ effectiveAgentId, identityHeader, laneCandidates })
         `No lane file found for agent_id "${effectiveAgentId}". ` +
         `Looked for: ${laneCandidates.join(", ")} in ${BRAIN_DIR}.\n` +
         `Create one via write_brain_file when ready.`
+      );
+    }
+
+    // Optional reply-chain inbox surface. Cody's standing startup already calls
+    // this tool first, so wiring bus state here makes backlog visibility
+    // mechanical without relying on a host-specific prompt hook. A configured
+    // dispatcher failure is a visible UNKNOWN, never silent absence.
+    const busSummary = await fetchUnrepliedBusSummary({
+      dispatcher: DISCOBUS_DISPATCHER,
+      agent: DISCOBUS_AGENT,
+    });
+    if (busSummary) {
+      parts.unshift(
+        capSection(
+          busSummary,
+          STARTUP_BUDGETS.bus,
+          'call disco-bus inbox(filter="unreplied") for the full reply-chain backlog',
+          "unreplied bus inbox"
+        )
       );
     }
 
