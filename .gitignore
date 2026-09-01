@@ -14,3 +14,5 @@ tests/ongoing/mnemo-test-results.md
 
 # Passport Lane — never track anyone's private deny/redaction maps.
 *.local.yaml
+tests/ongoing/*.jsonl
+tests/ongoing/*-results.md

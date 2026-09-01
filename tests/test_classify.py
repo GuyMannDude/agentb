@@ -86,7 +86,7 @@ async def test_classify_invalid_llm_output_falls_back_to_regex():
 @pytest.mark.asyncio
 async def test_classify_llm_failure_falls_back_to_regex():
     r = FakeReasoner(raises=True)
-    cat, method = await classify_category(r, "a customer named Hoffman Bedding", [])
+    cat, method = await classify_category(r, "a customer named Lakeside Linens", [])
     assert method == "regex"
     assert cat == "relationship"      # regex matches 'customer'
 

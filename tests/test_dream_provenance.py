@@ -105,7 +105,7 @@ def test_extraction_input_drops_derived_records(monkeypatch):
     LLM. Asserted by capturing what the section builder receives — if the
     filter is deleted, the specimen record reaches the builder and this fails."""
     specimen = _mem("Processed Disco Bus message #2401: dream-contradictions for Opie's role.")
-    ordinary = _mem("April's HoffmanBedding order shipped; nightstands approved.")
+    ordinary = _mem("Avery's LakesideLinens order shipped; nightstands approved.")
     seen: list[dict] = []
 
     def fake_build(agent_id, chunk):

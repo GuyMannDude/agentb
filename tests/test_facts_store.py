@@ -12,12 +12,12 @@ def store(tmp_path):
 
 
 def test_initial_insert(store):
-    r = store.save("Guy", "location", "Half Moon Bay", "verified", "statement:Guy direct", source_agent="cc")
+    r = store.save("Guy", "location", "Cedar Cove", "verified", "statement:Guy direct", source_agent="cc")
     assert r.written is True
     assert r.was_contradiction is False
     f = store.get("guy", "location")
     assert f is not None
-    assert f.value == "Half Moon Bay"
+    assert f.value == "Cedar Cove"
     assert f.confidence == "verified"
 
 
@@ -142,7 +142,7 @@ def test_query_by_confidence(store):
 
 
 def test_query_value_contains(store):
-    store.save("guy", "city", "Half Moon Bay", "verified", "e", source_agent="cc")
+    store.save("guy", "city", "Cedar Cove", "verified", "e", source_agent="cc")
     store.save("rocky", "model", "google/gemini-2.5-flash", "verified", "e", source_agent="cc")
     results = store.query(value_contains="gemini")
     assert len(results) == 1
