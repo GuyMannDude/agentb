@@ -1,15 +1,16 @@
-"""v4.0.2 regression test: the L1 + L2 tiers must honor the category filter.
+"""Disk-truth category filtering, and the E3 contract for the L1/L2 caches.
 
-v4.0.1 fixed the VEC tier. But the category is canonical *on disk*
-(`memory/<id>.json`), and the reclassification migration rewrote only those
-files — not the L1/L2 tier caches. So:
-  - L2 filtered against its stale cached category, and
-  - L1 had no category (or memory_id) at all,
-and `session_log` leaked past `/context` again. The fix re-reads disk-truth per
-hit (`resolve_disk_truth`) before the filter, mirroring the VEC fix.
+v4.0.2: the category is canonical *on disk* (`memory/<id>.json`), and the
+reclassification migration rewrote only those files — not the L1/L2 tier
+caches — so `session_log` leaked past `/context` through their stale
+metadata. The fix re-reads disk-truth per hit (`resolve_disk_truth`).
 
-These tests isolate the L2 path from VEC (VEC is empty here, so L2 is the
-enforcer), unit-test the L1 plumbing, and unit-test the helper directly.
+v4.16 (E3): L1 and L2 no longer feed `/context` at all. The first two tests
+keep the v4.0.2 seeds (a memory whose only cache residue is a stale L1 or
+L2 entry, VEC empty) and pin the new contract: the default filter still
+holds on disk-truth, and when the caller opts in the memory is reached by
+the L3 escape hatch — never by the retired tier. The remaining tests
+unit-test the L1 plumbing and the helper directly.
 """
 from __future__ import annotations
 
@@ -92,26 +93,27 @@ def _seed_l2_and_disk(tmp_path, memory_id, summary, disk_category, cached_catego
     }]))
 
 
-def test_l2_disk_truth_excludes_reclassified_session_log(client, tmp_path):
+def test_l2_residue_is_not_a_recall_tier(client, tmp_path):
     # Cached as 'topology' (pre-migration) but reclassified to 'session_log' on disk.
     _seed_l2_and_disk(tmp_path, "m-stale", "raw auto-sync activity dump",
                       disk_category="session_log", cached_category="topology")
 
-    # Default recall must exclude it on disk-truth, despite the stale L2 cache.
+    # Default recall must exclude it on disk-truth, whatever the stale L2 cache says.
     r = client.post("/context", json={"prompt": "activity", "max_results": 5})
     assert r.status_code == 200, r.text
     cats = [c.get("category") for c in r.json()["chunks"]]
     assert "session_log" not in cats
-    assert r.json()["cache_hits"]["L2"] == 0   # excluded, not served
+    assert r.json()["cache_hits"]["L2"] == 0
 
-    # Opt back in (exclude_categories=[]) → reachable via L2 (VEC is empty, so a
-    # hit here proves the L2 path itself, not VEC, carried it).
+    # Opt back in (exclude_categories=[]) → the memory is reachable, but only
+    # through the L3 disk-walk: VEC is empty and L2 is no longer a tier.
     r2 = client.post("/context", json={"prompt": "activity", "max_results": 5,
                                        "exclude_categories": []})
     assert r2.status_code == 200, r2.text
     assert "session_log" in [c.get("category") for c in r2.json()["chunks"]]
-    assert r2.json()["cache_hits"]["L2"] >= 1
-    assert r2.json()["cache_hits"]["VEC"] == 0
+    hits = r2.json()["cache_hits"]
+    assert hits["L3"] >= 1
+    assert hits["L2"] == 0 and hits["L1"] == 0 and hits["HOT"] == 0 and hits["VEC"] == 0
 
 
 def _seed_l1_and_disk(tmp_path, memory_id, content, disk_category, cached_category):
@@ -135,7 +137,7 @@ def _seed_l1_and_disk(tmp_path, memory_id, content, disk_category, cached_catego
     }))
 
 
-def test_l1_disk_truth_excludes_reclassified_session_log(client, tmp_path):
+def test_l1_residue_is_not_a_recall_tier(client, tmp_path):
     # Bundle cached as 'topology' but the memory was reclassified to 'session_log' on disk.
     _seed_l1_and_disk(tmp_path, "m-l1", "raw auto-capture activity dump",
                       disk_category="session_log", cached_category="topology")
@@ -143,16 +145,17 @@ def test_l1_disk_truth_excludes_reclassified_session_log(client, tmp_path):
     r = client.post("/context", json={"prompt": "activity", "max_results": 5})
     assert r.status_code == 200, r.text
     assert "session_log" not in [c.get("category") for c in r.json()["chunks"]]
-    assert r.json()["cache_hits"]["L1"] == 0   # excluded on disk-truth
+    assert r.json()["cache_hits"]["L1"] == 0
 
-    # Opt back in → reachable via L1 (VEC + L2 empty, so the hit proves the L1 path).
+    # Opt back in → reachable, but only through the L3 disk-walk (VEC empty,
+    # L1 no longer a tier — its bundle is a dead write, not a recall path).
     r2 = client.post("/context", json={"prompt": "activity", "max_results": 5,
                                        "exclude_categories": []})
     assert r2.status_code == 200, r2.text
     assert "session_log" in [c.get("category") for c in r2.json()["chunks"]]
-    assert r2.json()["cache_hits"]["L1"] >= 1
-    assert r2.json()["cache_hits"]["VEC"] == 0
-    assert r2.json()["cache_hits"]["L2"] == 0
+    hits = r2.json()["cache_hits"]
+    assert hits["L3"] >= 1
+    assert hits["L1"] == 0 and hits["L2"] == 0 and hits["HOT"] == 0 and hits["VEC"] == 0
 
 
 def test_resolve_disk_truth_overrides_stale_chunk_category(tmp_path):

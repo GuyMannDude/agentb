@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — Recall pool is VEC-only: HOT, L1 and L2 retired from `/context` (review item E3)
+
+`/context` pooled five tiers — HOT (keyword search over live session logs, a
+fixed 0.75 relevance), L1 (the precache bundle store, cosine ≥ 0.75), VEC (the
+sqlite-vec index), L2 (a legacy read-only index that stopped taking writes in
+v4.1) and the L3 disk-walk escape hatch. Read-only probes before this change
+(2026-09-01/02, every configured tenant, 366 queries, 3,665 served chunks;
+script and method in `tools/experiments/e3-tier-retirement/`) found VEC
+serving 99.8 %, L1 0.2 % in one tenant, HOT and L2 zero everywhere — served
+counts, i.e. after the trim, so a lower bound on what the tiers pooled. HOT
+could never serve more than it did: its rows are `session_log`, hidden by
+default, and three of four tenants have no hot sessions at all — the one that
+does holds heartbeat polls, which a presence probe confirmed HOT serves when
+opted in. What HOT was, structurally: the only `/context` route to a live
+session's raw exchanges before archival summarises them into VEC (`hot_days`,
+default 3) — those exchanges are now reachable only through `/sessions/{id}`
+and `/sessions/recent`, transcript endpoints, not search. Each of the three
+tiers also brought its own relevance scale into a pool whose VEC hits top out
+near 0.58; the mixing is now down to VEC and L3 (L3 emits raw cosine; focus
+mode normalises both, explore mode still reads them raw — tracked in the
+explore-rescale snag, E4). `/context` now pools VEC plus the L3 escape hatch
+only; `cache_hits` keeps every key on the wire and reports zero for the
+retired ones. One gate tightened with the cut: L3 used to run whenever the
+pool was short of `max_results` unless a category-filtered VEC pass had
+served something. With nothing left to pad the pool between VEC and L3, an
+un-filtered request (`exclude_categories: []`, no `category`) that VEC
+under-filled by one would have walked the disk — review measured 0 → 80
+document embeds on a thin store — so the short-circuit is now uniform: L3
+runs only when VEC served nothing, filter or no filter. The E2 harness is
+byte-identical across the cut (recall@5 0.971, MRR 0.901, hard-subset MRR
+0.422) — its fixtures never touched the removed tiers, which is the point.
+Not touched: `/preflight` still reads L1 and L2 for its memory block, the
+maintenance precache and project-bundle writers still fill L1, and
+`SessionManager.search_hot` has no production caller; with no reader on the
+recall path those are dead code and dead writes, tracked separately rather
+than bundled here.
+
 ## Unreleased — Recall ranking: similarity term was numerically inert (Experiment One)
 
 The v4.1 composite promised similarity "the majority share" and the test suite

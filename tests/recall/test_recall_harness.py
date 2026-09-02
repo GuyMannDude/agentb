@@ -191,7 +191,8 @@ def report(rows: list[dict], summary: dict, title: str) -> str:
     lines = [f"── {title} ──",
              f"recall@{TOP_K} {summary['recall_at_5']:.3f}   MRR {summary['mrr']:.3f}   "
              f"top-1 {summary['top1']:.0%}   n={summary['queries']}   "
-             f"hard MRR {summary['hard_mrr']:.3f} (n={summary['hard_n']})"]
+             + (f"hard MRR {summary['hard_mrr']:.3f} (n={summary['hard_n']})"
+                if summary["hard_mrr"] is not None else "hard subset: NONE MARKED")]
     for r in rows:
         flag = " " if r["recall"] == 1.0 else "✗"
         mark = "H" if r["hard"] else " "
@@ -230,11 +231,52 @@ def test_recall_gate(tmp_path, world):
         f"recall@{TOP_K} {summary['recall_at_5']:.3f} fell below gate {gate['recall_at_5_min']}\n{text}")
     assert summary["mrr"] >= gate["mrr_min"], (
         f"MRR {summary['mrr']:.3f} fell below gate {gate['mrr_min']}\n{text}")
-    assert gate["hard_mrr_min"] is not None and summary["hard_n"] > 0, (
+    assert gate.get("hard_mrr_min") is not None and summary["hard_n"] > 0, (
         "hard-subset gate unset — mark the discriminating queries hard=true and record the floor")
     assert summary["hard_mrr"] >= gate["hard_mrr_min"], (
         f"hard-subset MRR {summary['hard_mrr']:.3f} fell below gate {gate['hard_mrr_min']} — "
         f"a regression on the discriminating queries, masked by the easy majority\n{text}")
+
+
+def _demote_first_hit(row: dict) -> dict:
+    """The same served list with the first expected id pushed down one slot,
+    staying inside the served window. A miss stays a miss and a hit at the
+    bottom slot stays put: pushing it out would be a lost query, which the
+    primary recall floor already catches — the hard gate is for the
+    regression that keeps every answer in the window and still degrades.
+    Synthetic, because that regression has not happened yet."""
+    served = list(row["served"])
+    idx = next((i for i, m in enumerate(served) if m in row["expected"]), None)
+    if idx is not None and idx + 1 < len(served):
+        served[idx], served[idx + 1] = served[idx + 1], served[idx]
+    ranks = [i + 1 for i, mid in enumerate(served) if mid in row["expected"]]
+    return {**row, "served": served,
+            "recall": len(ranks) / len(row["expected"]),
+            "rr": 1.0 / ranks[0] if ranks else 0.0}
+
+
+def test_hard_gate_catches_a_regression_the_primary_gate_hides(tmp_path, world):
+    """Control for the hard-subset floor specifically: demote every hard
+    query by one rank inside the served window and leave the easy ones
+    alone (on the E1 baseline that is five of the six; q08 sits at slot 5).
+    The primary floors (one whole query of headroom over 35) must still
+    PASS — that is the masking — and the hard floor must FAIL. If the
+    primary gate also fails here, the hard gate is redundant and this test
+    says so."""
+    fixtures, vectors = world
+    gate = fixtures["gate"]
+    index_path = _seed(tmp_path, fixtures, vectors)
+    with _make_client(tmp_path, vectors, RankingConfig()) as client:
+        rows = run_harness(client, index_path, fixtures)
+    demoted = [_demote_first_hit(r) if r["hard"] else r for r in rows]
+    summary = summarize(demoted)
+    print("\n" + report(demoted, summary, "control — every hard query one rank lower"))
+    assert summary["recall_at_5"] >= gate["recall_at_5_min"] and summary["mrr"] >= gate["mrr_min"], (
+        f"primary gate ALSO failed ({summary['recall_at_5']:.3f} / {summary['mrr']:.3f}) — "
+        "the hard gate is not adding anything; re-derive its headroom")
+    assert summary["hard_mrr"] < gate["hard_mrr_min"], (
+        f"hard-subset MRR {summary['hard_mrr']:.3f} passed the gate {gate['hard_mrr_min']} "
+        "with every hard query demoted — the hard gate cannot catch the regression it was built for")
 
 
 def test_gate_can_fail_when_similarity_is_removed(tmp_path, world):

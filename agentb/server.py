@@ -42,7 +42,7 @@ from agentb.config import (
     ExpansionConfig,
 )
 from agentb.providers import create_resilient_reasoning, create_resilient_embedding
-from agentb.cache import L1Cache, L2Index, l3_scan, ContextChunk, resolve_disk_truth
+from agentb.cache import L1Cache, L2Index, l3_scan, ContextChunk
 from agentb.fsutil import atomic_write_text as _atomic_write_text
 from agentb.sessions import SessionManager, SessionConfig
 from agentb.provenance import (
@@ -574,7 +574,9 @@ def merge_passes(passes) -> list:
     max-relevance), not the first one seen. A plain dict update keeps the
     original insertion position, so a single pass — already tier-deduped inside
     _retrieve_for_embedding — returns byte-identical order to the pre-expansion
-    handler. memory_id-less HOT chunks dedup by (source, content).
+    handler. Chunks without a memory_id dedup by (source, content) — /context
+    no longer produces any (the HOT tier was retired in E3), the fallback
+    stays for callers that do.
     """
     merged: dict = {}
     for pass_chunks in passes:
@@ -900,9 +902,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         start = time.time()
         persona = get_persona(config, req.persona, req.agent_id)
         tenant = tenants.get(req.agent_id)
-        l1, l2 = tenant["l1"], tenant["l2"]
         memory_dir = tenant["memory_dir"]
-        sessions = tenant["sessions"]
         vec_store: VecStore = tenant["vec"]
 
         # v3 filter setup. exclude_categories defaults to DEFAULT_HIDDEN_CATEGORIES
@@ -963,50 +963,30 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # phrasing. With expansion off the handler calls this exactly once and
         # merge_passes is an identity over that one pass → behaviour is
         # byte-identical to the v4.1 pooled re-rank handler.
-        async def _retrieve_for_embedding(query_str: str, query_embedding) -> list[ContextChunk]:
+        async def _retrieve_for_embedding(query_embedding) -> list[ContextChunk]:
             pass_chunks: list[ContextChunk] = []
 
-            # HOT: keyword search over recent live sessions. These are raw
-            # session logs, so they carry category=session_log and obey the same
-            # two-tier default hiding as every other log (opt back in via
-            # exclude_categories=[]). relevance 0.75: a keyword hit in a recent
-            # session is decent signal, but the old hardcoded 0.95 put raw logs
-            # above every semantic match, sight unseen.
-            hot_results = sessions.search_hot(query_str, max_results=min(3, req.max_results))
-            for hr in hot_results:
-                content = f"[{hr['timestamp'][:16]}] User: {hr['prompt']}\nAgent: {hr['response']}"
-                if hr.get("actions"):
-                    content += "\nActions: " + " | ".join(hr["actions"][:3])
-                if hr.get("thinking"):
-                    content += f"\nThinking: {hr['thinking']}"
-                c = ContextChunk(
-                    content=content,
-                    source=f"hot-session:{hr['session_id']}",
-                    relevance=0.75,
-                    cache_tier="HOT",
-                    category="session_log",
-                )
-                if keep_chunk(c):
-                    pass_chunks.append(c)
+            # E3 (2026-09): the HOT, L1 and L2 tiers no longer feed this pool.
+            # Measured before the cut (read-only probes, 2026-09-01/02, all
+            # four tenants, 366 queries / 3,665 served chunks — served, i.e.
+            # post-trim, so a lower bound on what the tiers pooled): VEC
+            # 99.8 %, L1 0.2 % (one tenant), HOT and L2 zero everywhere. HOT
+            # could only ever serve session_log rows (hidden by default) and
+            # the one tenant with hot sessions held heartbeat polls; L2 stopped
+            # taking writes in v4.1. Each removed tier also carried its own
+            # relevance scale (HOT a 0.75 sentinel, L1 cosine ≥0.75) into a
+            # pool whose VEC hits top out near 0.58; the mixing is now down to
+            # VEC and L3 (L3 emits raw cosine — focus mode normalises both via
+            # pool_similarities, explore mode still reads them raw, see
+            # snag-mnemo-explore-constants-raw-scale). The cache_hits keys stay
+            # for wire compatibility; they report zero.
 
-            # L1
-            # v4.0.2: disk-truth the category before filtering — L1's cached
-            # category is stale/absent after the reclassification migration, so
-            # session_log leaked. Resolve per-hit (cheap, over-fetch is small),
-            # like the VEC tier. v4.1: resolve_disk_truth returns None for
-            # deleted memories.
-            pass_chunks.extend(
-                c for c in (resolve_disk_truth(c, memory_dir)
-                            for c in l1.search(query_embedding, top_k=overfetch, persona=persona))
-                if c is not None and keep_chunk(c)
-            )
-
-            # Intra-pass cross-tier dedup: a memory written via /writeback ends
-            # up in BOTH the vec index and the L2/L3 stores. Without this, the
-            # same chunk appears once per tier within this pass. (Cross-PASS
+            # Intra-pass cross-tier dedup: a memory written via /writeback is
+            # in the vec index AND on disk where the L3 walk finds it. Without
+            # this, the same chunk appears once per tier within this pass. (Cross-PASS
             # dedup — fusing the original query with expanded phrasings — happens
             # in merge_passes, by max-relevance, not first-wins.)
-            seen_memory_ids: set[str] = {c.memory_id for c in pass_chunks if c.memory_id}
+            seen_memory_ids: set[str] = set()
 
             # VEC: indexed sqlite-vec lookup over written memories.
             # #468: push the category filter INTO the kNN. A session_log-dominated
@@ -1087,31 +1067,21 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 if vec_ok and vec_filter_active and len(pass_chunks) < req.max_results:
                     _vec_pass(config.cache.vec_category_overfetch_multiplier * 5)
 
-            # L2 (legacy read-only tier — new writes stopped in v4.1)
-            # v4.0.2: resolve disk-truth category first — L2's metadata cache
-            # kept the pre-migration category, so session_log leaked here too.
-            # v4.1: resolve_disk_truth returns None for deleted memories.
-            l2_results = [
-                c for c in (resolve_disk_truth(c, memory_dir)
-                            for c in l2.search(query_embedding, top_k=overfetch, persona=persona))
-                if c is not None and keep_chunk(c)
-                and (not c.memory_id or c.memory_id not in seen_memory_ids)
-            ]
-            pass_chunks.extend(l2_results)
-            for c in l2_results:
-                if c.memory_id:
-                    seen_memory_ids.add(c.memory_id)
-
             # L3: the expensive disk-walk (embeds candidates) stays an escape
-            # hatch — only runs when the cheap tiers couldn't fill the request.
-            # #468 / v4.9.2: when ANY category filter was pushed into the kNN —
-            # a pinned include OR the default session_log exclusion — and the
-            # VEC tier actually served survivors, VEC (plus its escalation
-            # retry) already did the filtered over-fetch that L3 would
-            # duplicate. A partial result beats the multi-second disk-walk
-            # (which on a large store exceeds the bridge timeout — the vec
-            # search contract says the caller must NOT fall through). Gate on a
-            # real VEC contribution, NOT just "filter set + index non-empty":
+            # hatch — only runs when VEC couldn't fill the request AND served
+            # nothing at all.
+            # #468 / v4.9.2 established the short-circuit for the filtered
+            # path: when a category filter was pushed into the kNN and VEC
+            # served survivors, VEC (plus its escalation retry) already did
+            # the over-fetch L3 would duplicate; a partial result beats the
+            # multi-second disk-walk (which on a large store exceeds the bridge
+            # timeout — the vec search contract says the caller must NOT fall
+            # through). E3 made it uniform: with the HOT/L1/L2 tiers gone,
+            # nothing pads the pool between VEC and L3 any more, so on the
+            # UN-filtered path (exclude_categories=[] and no category) a VEC
+            # pass that under-filled by one would have walked the disk —
+            # measured in review at 0 → 80 document embeds on a thin store.
+            # Gate on a real VEC contribution, NOT just "index non-empty":
             # in the un-backfilled deploy window the category columns are NULL,
             # so include filters match nothing, exclusion filters drop nothing
             # in-index and keep_chunk then drops everything on disk-truth —
@@ -1119,10 +1089,8 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             # hatch that finds the memories. Every VEC chunk that reached
             # pass_chunks already passed keep_chunk, so a survivor here is by
             # definition on-filter.
-            vec_served_filtered = vec_filter_active and any(
-                c.cache_tier == "VEC" for c in pass_chunks
-            )
-            if len(pass_chunks) < req.max_results and not vec_served_filtered:
+            vec_served = any(c.cache_tier == "VEC" for c in pass_chunks)
+            if len(pass_chunks) < req.max_results and not vec_served:
                 l3_results = [
                     c for c in await l3_scan(memory_dir, query_embedding,
                                               # L3 embeds candidate DOCUMENTS, not the query
@@ -1143,7 +1111,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             raise HTTPException(503, f"Embedding unavailable: {e}")
 
         # Standard pass — always runs, identical to v4.1.
-        standard = await _retrieve_for_embedding(req.prompt, query_embedding)
+        standard = await _retrieve_for_embedding(query_embedding)
         all_chunks = merge_passes([standard])
 
         # Thesaurus Loop (v4.2): escalate ONLY when the first pass whiffed. A
@@ -1163,7 +1131,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                     # A failed variant embed must not sink the recall — skip it.
                     log.warning(f"expansion variant embed failed (skipped): {e}")
                     continue
-                extra_passes.append(await _retrieve_for_embedding(v, v_emb))
+                extra_passes.append(await _retrieve_for_embedding(v_emb))
             if extra_passes:
                 before = top_relevance(all_chunks)
                 all_chunks = merge_passes([standard, *extra_passes])
@@ -1949,7 +1917,11 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 if archived:
                     log.info(f"Archived {len(archived)} hot sessions for '{tenant_key}'")
                 # Each archived summary becomes a Tier-2 session_log memory
-                # in VEC — without this a session leaving the HOT tier
+                # in VEC — this is a hot session's FIRST appearance in
+                # /context recall: since E3 retired the HOT keyword tier, the
+                # raw exchanges of a live session (≤ hot_days old) are reachable
+                # only through /sessions/{id} and /sessions/recent, never by
+                # search, until this summary lands. Without it the session
                 # would vanish from recall entirely (its old home was the
                 # retired L2 write path). The Analyst distills these like
                 # any other session log on its next pass.

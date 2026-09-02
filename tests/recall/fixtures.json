@@ -28,7 +28,15 @@
     "primary's one-query headroom, which on this subset is the same as the",
     "primary gate and therefore adds nothing.",
     "First honest hard-subset run: MRR 0.4222 (6 queries, 2026-09-02, ranker E1,",
-    "same serving as the primary baseline) minus 0.0833 = 0.338."
+    "same serving as the primary baseline) minus 0.0833 = 0.338.",
+    "",
+    "Two caveats on the hard floor (review, 2026-09-02): the 0.0833 step is",
+    "sourced entirely by q14, the only hard query at rr 1.0 — the other five",
+    "can each lose at most 0.033-0.167. And the hard set is frozen against the",
+    "E1 ranker's own outcomes; a ranker that fixes q33 while breaking a",
+    "currently-easy query clears the hard gate. RE-SELECTION RULE: whenever the",
+    "primary floors are re-baselined, re-mark hard = every query with rr < 1.0",
+    "under the new baseline plus every multi-hit query, re-measure, re-floor."
   ],
   "gate": {
     "recall_at_5_min": 0.942,
