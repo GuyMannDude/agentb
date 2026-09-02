@@ -323,7 +323,7 @@ else
   log "step 3/5 — config at $CONFIG_DIR"
 
   mkdir -p "$CONFIG_DIR"
-  mkdir -p "$DATA_DIR"/{memory,cache/l1,cache/l2,logs}
+  mkdir -p "$DATA_DIR"/{memory,logs}
 
   python3 - "$CONFIG_FILE" <<PY
 import os

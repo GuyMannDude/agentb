@@ -58,35 +58,6 @@ def basic_config(tmp_data_dir):
     )
 
 
-@pytest.fixture
-def sample_embedding():
-    """A normalized 768-dim embedding vector for testing."""
-    import numpy as np
-    vec = np.random.randn(768).astype(np.float32)
-    vec /= np.linalg.norm(vec)
-    return vec.tolist()
-
-
-@pytest.fixture
-def similar_embedding(sample_embedding):
-    """An embedding close to sample_embedding (high cosine similarity)."""
-    import numpy as np
-    vec = np.array(sample_embedding, dtype=np.float32)
-    noise = np.random.randn(768).astype(np.float32) * 0.01  # very small noise
-    result = vec + noise
-    result /= np.linalg.norm(result)
-    return result.tolist()
-
-
-@pytest.fixture
-def different_embedding():
-    """An embedding far from sample_embedding."""
-    import numpy as np
-    vec = np.random.randn(768).astype(np.float32)
-    vec /= np.linalg.norm(vec)
-    return vec.tolist()
-
-
 # ─────────────────────────────────────────────
 #  Circuit Breaker Tests
 # ─────────────────────────────────────────────

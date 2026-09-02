@@ -86,7 +86,7 @@ def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _writeback_body(agent_id="cc", summary="a memory to precache"):
+def _writeback_body(agent_id="cc", summary="a memory to recall"):
     return {"agent_id": agent_id, "session_id": "s1", "summary": summary,
             "key_facts": ["x"]}
 
@@ -166,6 +166,49 @@ def test_preflight_memory_context_comes_from_vec(tmp_path):
     assert reasoner.prompts, "reasoner never saw a prompt"
     assert "MEMORY CONTEXT:" in reasoner.prompts[-1]
     assert "[VEC] " in reasoner.prompts[-1] and "the anvil laptop is the launchpad" in reasoner.prompts[-1]
+
+
+def test_preflight_memory_block_absent_on_empty_index_and_hides_session_log(tmp_path):
+    """Two negatives that make the positive above mean something: no
+    memories → no block at all (not an empty block); a session_log memory
+    (raw auto-capture, archived-session summaries) is hidden from the
+    verdict exactly as /context hides it by default (review, E3 follow-up)."""
+    reasoner = VerdictReasoning()
+    app = make_app(tmp_path, reasoner=reasoner)
+    with TestClient(app) as c:
+        r = c.post("/preflight", json={"prompt": "anything", "draft_response": "x", "agent_id": "cc"},
+                   headers=_auth(MASTER))
+        assert r.status_code == 200, r.text
+        assert "MEMORY CONTEXT:" not in reasoner.prompts[-1]
+
+        body = _writeback_body("cc", summary="[AUTO-CAPTURE] 3 tool calls: ran the suite")
+        body["category"] = "session_log"
+        assert c.post("/writeback", json=body, headers=_auth(MASTER)).status_code == 200
+        r = c.post("/preflight", json={"prompt": "anything", "draft_response": "x", "agent_id": "cc"},
+                   headers=_auth(MASTER))
+        assert r.status_code == 200, r.text
+        assert "AUTO-CAPTURE" not in reasoner.prompts[-1]
+        assert "MEMORY CONTEXT:" not in reasoner.prompts[-1]
+
+
+# ── tenant isolation at the recall surface ──
+
+def test_context_never_serves_another_tenants_memory(tmp_path):
+    """The deleted L2 isolation test built two indexes by hand and never went
+    through the server. This is the property that matters: agent A's recall
+    excludes agent B's memory even when the vectors are identical."""
+    app = make_app(tmp_path)
+    with TestClient(app) as c:
+        assert c.post("/writeback", json=_writeback_body("cc", summary="cc's private note about the anvil"),
+                      headers=_auth(MASTER)).status_code == 200
+        assert c.post("/writeback", json=_writeback_body("rocky", summary="rocky's private note about the bellows"),
+                      headers=_auth(MASTER)).status_code == 200
+        r = c.post("/context", json={"prompt": "private note", "max_results": 5, "agent_id": "cc"},
+                   headers=_auth(MASTER))
+        assert r.status_code == 200, r.text
+        texts = " ".join(ch["content"] for ch in r.json()["chunks"])
+        assert "anvil" in texts
+        assert "bellows" not in texts
 
 
 # ── M4: preflight fails UNAVAILABLE, not PASS ──

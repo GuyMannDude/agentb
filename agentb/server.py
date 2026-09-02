@@ -1243,7 +1243,10 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # VEC index /context serves.
         try:
             query_embedding = await embedder.embed(prompt, task_type="query")
-            hits = vec_store.search(query_embedding, top_k=2) if vec_store.count() > 0 else []
+            # Same default hiding as /context: session_log rows (raw
+            # auto-capture, archived-session summaries) never feed a verdict.
+            hits = vec_store.search(query_embedding, top_k=2,
+                                    exclude_categories=DEFAULT_HIDDEN_CATEGORIES)
             if hits:
                 context_text = "\n\n".join(f"[VEC] {h.text}" for h in hits)
                 user_prompt = f"MEMORY CONTEXT:\n{context_text}\n\n{user_prompt}"

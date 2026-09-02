@@ -19,7 +19,15 @@ two classes are removed (`TestL1Cache`, `TestL2Index`, the L2-based
 tenant-isolation and persona-threshold tests, the L2 atomic-save and cap
 tests, the L1 disk-truth seeding tests); the L2 *residue* test stays — a
 pre-E3 store may still hold an `index.json`, and recall must keep ignoring
-it. 715 passed; E2 and E4 harnesses byte-identical.
+it. 715 passed; E2 and E4 harnesses byte-identical. Review follow-up in
+the same change: `/preflight`'s VEC read now hides `session_log` exactly
+as `/context` does by default — without it, raw auto-capture and
+archived-session summaries (the bulk of a live store) could reach a
+verdict, a new exposure the empty L1 block never had; two negatives pin
+it (no memories → no block; a session_log memory → no block). The
+installer no longer creates `cache/l1`/`cache/l2`; `agentb.yaml.example`
+drops the six removed keys; a direct cross-tenant `/context` test
+replaces the deleted L2-only isolation test. 717 passed.
 
 ## Unreleased — E3 follow-up: `/preflight` reads VEC; the dead L1 writers and `search_hot` are gone
 

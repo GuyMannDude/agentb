@@ -81,10 +81,6 @@ embedding:
 
 # ── Cache Settings ──
 cache:
-  l1_max_bundles: 50
-  l1_ttl_seconds: 86400
-  l1_similarity_threshold: 0.75
-  l2_similarity_threshold: 0.5
   l3_similarity_threshold: 0.4
 
 # Write-time near-duplicate detection (v4.15). Retrieval is always bounded to
@@ -140,8 +136,6 @@ personas:
   #   context_bias: associative
   #   max_confidence_for_pass: 0.3
   #   allow_speculative: true
-  #   l1_similarity_override: 0.5
-  #   l2_similarity_override: 0.3
 
 # ── Multi-Agent Isolation ──
 # Each agent gets its own memory namespace at ~/.agentb/agents/<id>/memory/.
