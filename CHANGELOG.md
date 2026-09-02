@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — Recall ranking: similarity term was numerically inert (Experiment One)
+
+The v4.1 composite promised similarity "the majority share" and the test suite
+agreed — with inputs of 0.9 vs 0.2 that the VEC tier cannot produce. In
+production VEC relevance is `1/(1+L2)`, which on unit vectors squashes the
+entire on-topic band into ~0.52–0.58: the 0.55-weighted similarity term spanned
+~0.015 inside a served pool while recency spanned up to 0.20 and access 0.10. A
+read-only probe of 187 live `/context` recalls on 2026-09-01 (scripts and
+numbers in `tools/experiments/ranker-exp1/`) measured Spearman(served rank, raw
+similarity) = +0.05; the most-similar memory was served first 15% of the time
+and otherwise landed uniformly across all ten slots. The ranker was a recency
++ access + category sort. Fix (`ranking.pool_similarities`, used by `/context`
+focus mode): every tier's relevance is put on cosine (VEC via `1 − d²/2`, exact
+for the Ollama `/api/embed` path, whose vectors probe at L2 norm 1.000000),
+then each candidate is scored by its cosine distance below the pool's best hit
+over a fixed span of 0.20 — the best hit is always 1.0 and the pool's off-topic
+tail never influences the on-topic head. Anchoring on the top rather than
+min-max over the pool is deliberate: `/context` ranks the full overfetch pool,
+and a min-max span stretches to the tail; replayed with one outlier injected
+per pool, min-max fell to rho +0.50 while the anchored form held +0.70 (74%
+top-1 agreement; pure min-max scored +0.90 but decided two-item near-ties on
+noise and broke the standing "doctrine beats noise inside a tie-band" test).
+Replay caveat: the recorded pools are the served top-10, so the reading covers
+re-ordering inside the served band, not which ten get selected — that is the
+Q&A harness's job (review item E2). The wire `relevance` field, the Thesaurus
+whiff gap and explore mode keep their raw units on purpose: explore's band
+constants are sized to the raw scale and would collapse on normalised input.
+Same experiment, free finding: cache_hits over 1,865 served chunks were 99.7%
+VEC, 0.3% L1, zero HOT/L2/L3/MEM0 (feeds review item E3).
+
 ## Unreleased — Dream contradiction triage: non-competing flags become drift notes
 
 The dreamer's verified-vs-extracted contradiction fan-out had a lifetime score

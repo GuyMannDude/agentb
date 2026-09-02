@@ -53,7 +53,7 @@ from agentb.classify import classify_category, reclassify_memory_dir, is_routine
 from agentb.dedup import find_near_duplicates
 from agentb.redact import redact_text, redact_obj
 from agentb.capture_gate import CaptureGate
-from agentb.ranking import composite_score, explore_score
+from agentb.ranking import composite_score, pool_similarities, explore_score
 from agentb.analyst import analyze_tenant, muse_tenant
 from agentb.vec import VecStore, detect_mode as vec_detect_mode, backfill as vec_backfill, VecDimMismatch
 from agentb.trajectory import TrajectoryStore, embedding_text as traj_embedding_text
@@ -1206,16 +1206,22 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 return None
 
             access = vec_store.access_counts([c.memory_id for c in all_chunks if c.memory_id])
-            all_chunks.sort(
-                key=lambda c: composite_score(
-                    similarity=c.relevance,
+            # Experiment One: similarity enters the composite normalised over
+            # the pool (cosine, anchored on the best hit — ranking.py); raw
+            # tier relevance left the term inert. Wire `relevance` unchanged.
+            sims = pool_similarities([(c.relevance, c.cache_tier) for c in all_chunks])
+            scored = [
+                (composite_score(
+                    similarity=sim,
                     age_days=_age(c),
                     category=c.category,
                     access_count=access.get(c.memory_id, 0) if c.memory_id else 0,
                     cfg=config.ranking,
-                ),
-                reverse=True,
-            )
+                ), c)
+                for sim, c in zip(sims, all_chunks)
+            ]
+            scored.sort(key=lambda sc: sc[0], reverse=True)
+            all_chunks = [c for _, c in scored]
 
         selected = all_chunks[: req.max_results]
         for c in selected:

@@ -16,3 +16,7 @@ tests/ongoing/mnemo-test-results.md
 *.local.yaml
 tests/ongoing/*.jsonl
 tests/ongoing/*-results.md
+
+# experiment data — names memory topics; keep private
+tools/experiments/**/recalls.jsonl
+tools/experiments/**/queries.txt

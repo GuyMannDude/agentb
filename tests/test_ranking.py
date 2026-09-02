@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from agentb.ranking import composite_score
+from agentb.ranking import composite_score, pool_similarities, SIMILARITY_SPAN, _to_cosine
 from agentb.vec import VecStore
 from agentb.config import (
     AgentBConfig, ResilientProviderConfig, ProviderConfig, RankingConfig,
@@ -66,6 +66,88 @@ def test_weights_come_from_config():
     b = composite_score(similarity=0.5, age_days=900, category="session_log",
                         access_count=0, cfg=flat)
     assert a == pytest.approx(b)
+
+
+# ── Unit: pool similarity normalisation (Experiment One) ──
+
+def _rel(cos):
+    """What the VEC tier reports for a stored unit vector at this cosine:
+    L2 = sqrt(2 - 2cos), relevance = 1/(1+L2)."""
+    import math
+    return 1.0 / (1.0 + math.sqrt(max(0.0, 2.0 - 2.0 * cos)))
+
+
+def test_vec_relevance_maps_back_to_cosine():
+    # pins the actual formula, not just monotonicity: a stored vector at
+    # cosine 0.9 from the query reports rel 1/(1+0.447) = 0.691 and must come
+    # back as 0.9; a production-band rel of 0.553 is cosine ~0.673.
+    assert _to_cosine(_rel(0.9), "VEC") == pytest.approx(0.9)
+    assert _to_cosine(0.553, "VEC") == pytest.approx(0.673, abs=0.002)
+    assert _to_cosine(0.9, "L1") == 0.9          # already cosine — untouched
+    assert _to_cosine(0.0, "VEC") == 0.0          # zero relevance is safe
+
+
+def test_pool_best_hit_is_one_and_band_becomes_dominant():
+    # a served on-topic pool from the live probe spans rel 0.527..0.583
+    # (cosine ~0.60..0.74, range ~0.147). Raw, the 0.55-weighted term spanned
+    # ~0.03 across this band and lost to recency (max spread 0.20); anchored
+    # on the top it must beat recency's maximum.
+    rels = [0.583, 0.570, 0.553, 0.540, 0.527]
+    sims = pool_similarities([(r, "VEC") for r in rels])
+    assert sims[0] == 1.0
+    assert sims == sorted(sims, reverse=True)      # order-preserving
+    assert sims[-1] == pytest.approx(1.0 - 0.147 / SIMILARITY_SPAN, abs=0.01)
+    assert CFG.w_similarity * (sims[0] - sims[-1]) > CFG.w_recency
+
+
+def test_pool_hair_width_gap_stays_small():
+    # two near-identical matches (cosine 0.98 vs 0.955): min-max would hand
+    # the closer one the full 0.55 term. Anchored, the gap is 0.025 / SPAN, so
+    # category can still re-order — the standing tie-band contract.
+    sims = pool_similarities([(_rel(0.98), "VEC"), (_rel(0.955), "VEC")])
+    assert sims[0] == 1.0
+    assert sims[0] - sims[1] == pytest.approx(0.025 / SIMILARITY_SPAN, abs=1e-3)
+    noise = composite_score(similarity=sims[0], age_days=None, category="unknown",
+                            access_count=0, cfg=CFG)
+    doctrine = composite_score(similarity=sims[1], age_days=None, category="doctrine",
+                               access_count=0, cfg=CFG)
+    assert doctrine > noise
+
+
+def test_pool_old_exact_doctrine_beats_fresh_marginal_state():
+    # the hazard the clean-room review named: a 90-day doctrine at the top of
+    # the band lost to a 2-day current_state at the bottom of it.
+    sims = pool_similarities([(0.583, "VEC"), (0.527, "VEC")])
+    old_doctrine = composite_score(similarity=sims[0], age_days=90, category="doctrine",
+                                   access_count=0, cfg=CFG)
+    fresh_state = composite_score(similarity=sims[1], age_days=2, category="current_state",
+                                  access_count=5, cfg=CFG)
+    assert old_doctrine > fresh_state
+    # and RAW relevance (the previous input) reproduces the bug
+    assert composite_score(similarity=0.583, age_days=90, category="doctrine",
+                           access_count=0, cfg=CFG) < \
+           composite_score(similarity=0.527, age_days=2, category="current_state",
+                           access_count=5, cfg=CFG)
+
+
+def test_pool_top_band_ignores_the_off_topic_tail():
+    # /context ranks the full overfetch pool (30+ candidates). The on-topic
+    # head must score the same whether or not a long off-topic tail is
+    # present — min-max over the pool would have re-compressed it.
+    head = [(0.583, "VEC"), (0.560, "VEC"), (0.540, "VEC")]
+    tail = [(0.50 - i * 0.004, "VEC") for i in range(27)]   # rel 0.50→0.396 = cosine 0.50 down to −0.16
+    alone = pool_similarities(head)
+    with_tail = pool_similarities(head + tail)
+    assert with_tail[:3] == pytest.approx(alone)
+    assert all(s == 0.0 for s in with_tail[-10:])            # far tail is zeroed, not negative
+
+
+def test_pool_edge_cases():
+    assert pool_similarities([]) == []
+    assert pool_similarities([(0.55, "VEC")]) == [1.0]                 # lone hit is the best hit
+    assert pool_similarities([(0.55, "VEC"), (0.55, "VEC")]) == [1.0, 1.0]  # flat pool: all best
+    hot_and_dead = pool_similarities([(0.0, "VEC"), (0.75, "HOT")])
+    assert hot_and_dead == [0.0, 1.0]                                   # sentinel anchors, dead hit floors
 
 
 # ── /context integration: doctrine out-ranks noise at lower similarity ──

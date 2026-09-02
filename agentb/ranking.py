@@ -82,6 +82,62 @@ def composite_score(
     )
 
 
+# ── Pool similarity normalisation (Experiment One, 2026-09-01) ─────────────
+# The composite's similarity input was the tier's raw relevance. For VEC hits
+# that is 1/(1+L2), which on unit vectors squashes the whole on-topic band
+# into ~0.52-0.58: the 0.55-weighted similarity term then spans ~0.015 inside
+# a served pool while recency spans up to 0.20 — the docstring's "majority
+# share" was numerically inert. Measured over 187 live recalls
+# (tools/experiments/ranker-exp1/RESULTS.md): Spearman(served rank, raw
+# similarity) = +0.05; the most-similar hit was served first 15% of the time.
+#
+# Fix, two steps:
+#   1. Put every tier on cosine. L1/L2/L3 already are. VEC's 1/(1+d) is
+#      inverted to d and mapped through cos = 1 - d²/2, exact for unit vectors
+#      — the Ollama /api/embed path (nomic-embed-text) returns L2 norm
+#      1.000000 (probed 2026-09-01). Other providers are NOT normalised at the
+#      boundary; there the mapping stays monotone (order preserved) but the
+#      magnitudes drift and the clamp below can collapse far hits into ties.
+#      HOT's fixed 0.75 was chosen to outrank every VEC hit on the old scale;
+#      on cosine it sits just above the on-topic band, so it keeps that role
+#      (HOT is session_log and hidden unless a caller opts in).
+#   2. Anchor on the pool's BEST hit: similarity = 1 - (top - cos)/SPAN,
+#      clamped at 0. Relative in anchor (survives a shift of the cosine band;
+#      a RESCALED band means retuning SPAN), fixed in magnitude (a hair-width
+#      gap stays a hair-width gap, so the tie-band
+#      contract — category/recency re-order near-equal matches — survives).
+#      Anchoring on the top rather than min-max over the pool matters because
+#      /context ranks the full overfetch pool (30+ candidates with an
+#      off-topic tail): a min-max span would stretch to the tail and
+#      re-compress the on-topic band — the very inertness being removed.
+#      Replay on the recorded pools: SPAN 0.20 → rho +0.70, top-1 agreement
+#      74%; immune to an injected outlier by construction (min-max, measured,
+#      fell to +0.50); 0.15 already let a two-item near-tie be decided by noise.
+SIMILARITY_SPAN = 0.20  # cosine distance below the pool's best hit at which the term reaches 0
+
+
+def _to_cosine(relevance: float, tier: str) -> float:
+    if tier != "VEC":
+        return relevance  # L1/L2/L3 are cosine; HOT is the fixed sentinel (see above)
+    if relevance <= 0.0:
+        return 0.0
+    d = 1.0 / relevance - 1.0
+    return max(-1.0, min(1.0, 1.0 - d * d / 2.0))
+
+
+def pool_similarities(hits: list[tuple[float, str]]) -> list[float]:
+    """Map a candidate pool's (relevance, cache_tier) pairs to [0, 1]
+    similarities for composite_score: tiers unified on cosine, then each hit
+    scored by its cosine distance below the pool's best hit over
+    SIMILARITY_SPAN. The best hit is always 1.0; order within the pool is
+    preserved; the pool's bottom never influences the top."""
+    cos = [_to_cosine(r, t) for r, t in hits]
+    if not cos:
+        return []
+    top = max(cos)
+    return [max(0.0, 1.0 - (top - c) / SIMILARITY_SPAN) for c in cos]
+
+
 # ── Explore mode (v4.8, the serendipity lens) ──────────────────────────────
 # Focus recall answers "what matches best right now"; explore answers "what
 # does this remind the store of". Three deliberate inversions of focus logic:
