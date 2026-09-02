@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased — `L1Cache` and `L2Index` deleted
+## v4.16.0 — Recall science: VEC-only pool, explore rescale, L1/L2 retired (2026-09-02)
+
+Problem: the recall ranker was carrying inert and dead machinery — a similarity term that never moved rank, three cache tiers nothing read, explore-mode constants on a raw scale an embedder change silently retuned, and a `/preflight` memory lookup whose threshold sat above the embedder's band. Fix: the review items below, each gated by a measured harness. Sections are in reverse order of landing.
+
+### `L1Cache` and `L2Index` deleted
 
 With `/preflight` on VEC and the writers gone (previous entry), nothing
 read or wrote the L1 bundle cache or the L2 index. Both classes are
@@ -29,7 +33,7 @@ installer no longer creates `cache/l1`/`cache/l2`; `agentb.yaml.example`
 drops the six removed keys; a direct cross-tenant `/context` test
 replaces the deleted L2-only isolation test. 717 passed.
 
-## Unreleased — E3 follow-up: `/preflight` reads VEC; the dead L1 writers and `search_hot` are gone
+### E3 follow-up: `/preflight` reads VEC; the dead L1 writers and `search_hot` are gone
 
 E3 retired HOT, L1 and L2 from `/context` but, by the non-bundling rule,
 left three things standing that only made sense while those tiers were
@@ -52,7 +56,7 @@ tenant. The `L1Cache` and `L2Index` classes, their config fields and the
 persona overrides are now unread and unwritten; they come out in the next
 entry. 733 passed; E2 and E4 harnesses byte-identical.
 
-## Unreleased — Explore mode reads the pool-normalised similarity; band constants are span fractions (review item E4)
+### Explore mode reads the pool-normalised similarity; band constants are span fractions (review item E4)
 
 `/context` with `mode: "explore"` (the serendipity lens, v4.8) scored its
 adjacency band on the raw tier relevance — VEC's `1/(1+L2)` — with band
@@ -118,7 +122,7 @@ band). `embed_fixtures.py` embeds the explore queries into the same cache
 spec; the similarity-only control suggests the adjacency TARGET term earns
 less than assumed — a re-check for a later experiment, not this one).
 
-## Unreleased — Recall pool is VEC-only: HOT, L1 and L2 retired from `/context` (review item E3)
+### Recall pool is VEC-only: HOT, L1 and L2 retired from `/context` (review item E3)
 
 `/context` pooled five tiers — HOT (keyword search over live session logs, a
 fixed 0.75 relevance), L1 (the precache bundle store, cosine ≥ 0.75), VEC (the
@@ -155,7 +159,7 @@ maintenance precache and project-bundle writers still fill L1, and
 recall path those are dead code and dead writes, tracked separately rather
 than bundled here.
 
-## Unreleased — Recall ranking: similarity term was numerically inert (Experiment One)
+### Recall ranking: similarity term was numerically inert (Experiment One)
 
 The v4.1 composite promised similarity "the majority share" and the test suite
 agreed — with inputs of 0.9 vs 0.2 that the VEC tier cannot produce. In
@@ -185,7 +189,7 @@ constants are sized to the raw scale and would collapse on normalised input.
 Same experiment, free finding: cache_hits over 1,865 served chunks were 99.7%
 VEC, 0.3% L1, zero HOT/L2/L3/MEM0 (feeds review item E3).
 
-## Unreleased — Recall harness: the gate for ranker changes (review item E2)
+### Recall harness: the gate for ranker changes (review item E2)
 
 Experiment One's replay could only re-order the ten memories that had been
 served; it could not say whether the RIGHT ten were selected, and the fix was
@@ -213,7 +217,7 @@ change, and the harness refuses a cache built by a different model. Explore
 mode has no fixtures yet — its success criterion is not "best match first"
 and arrives with the explore rescale spec (review item E4).
 
-## Unreleased — Dream contradiction triage: non-competing flags become drift notes
+### Dream contradiction triage: non-competing flags become drift notes
 
 The dreamer's verified-vs-extracted contradiction fan-out had a lifetime score
 of 0 real conflicts / 8 flags — every flag was two TRUE statements (same value
@@ -232,7 +236,7 @@ malformed flag dicts), and the review-caught trap that two DIFFERENT paths
 sharing a filename ("brain/opie.md" vs "archive/opie.md" — a real move) must
 reach the judge rather than the identifier downgrade.
 
-## Unreleased — Thesaurus Loop defaults off, explicit escalation works
+### Thesaurus Loop defaults off, explicit escalation works
 
 Automatic query expansion now defaults off after production measurement found a
 ~5x latency path, non-deterministic result sets, and no demonstrated quality win.
@@ -263,7 +267,7 @@ and the non-determinism so callers escalate deliberately.
 
 Evidence and method: `brain/snag-thesaurus-loop-trigger-rate.md`.
 
-## Unreleased
+### Also since v4.15.0
 
 - **Dreamer: the stated-line gate no longer discards the night's synthesis — one corrective retry, then redacted quarantine; prompts now bridge the lowercase-id seam** (`mnemo-dream.py`; tests in `tests/test_dream_cap.py`). Problem this fixes: the gate's first live night (2026-08-21) rejected the rollup with 79 violations — nearly all `SUBJECT claim starts lowercase`, because the harvest names agents by their lowercase ids (`cc`, `cody`) and the model faithfully led claims with them, while the prompts never stated the capitalization rule the validator enforces. The producer and the real validator had only ever met through a monkeypatched fake in tests, so the seam shipped unproven; on the first real night the run exited 1 and the whole paid two-stage synthesis was discarded with nothing persisted. Fix, three parts: (1) both system prompts now require every claim to begin with its capitalized subject, spell the agent names (CC, Cody, Opie, Rocky, Dave — never lowercase ids), and forbid bare-verb openers (the checker's *other* SUBJECT rule, which a capitalize-only instruction would have converted violations into); (2) a validation failure on the rollup triggers exactly one retry with the validator's report handed back to the model; (3) if the retry is also rejected — or the retry call itself dies, labeled distinctly so the file tells the true story of which attempt's text it holds — the text plus reports are preserved at `dreams/rejected-<UTC date>.txt`, a name invisible to the server's `*.md` brief glob and the dreamer's `*.json` memory glob, after passing the same `agentb.redact` choke point as every other on-disk write of LLM output; the run still exits non-zero, so CronAlarm keeps screaming (degrade to raw, never to nothing; fail-closed serving is unchanged), and the LLM-usage total is now logged even on the failure path. The seam itself is under test: where `BRAIN_DIR` provides the real `stated-line-check.py` (dev hosts, the deployed runtime), a new test pipes representative capitalized lines through it live; public CI without a brain skips it by name.
 
