@@ -1,0 +1,619 @@
+{
+  "_about": [
+    "E2 recall harness fixtures (S291, 2026-09-01). A fictional workshop world:",
+    "machines Anvil (Linux laptop) and Bellows (Windows workstation), agents Pip",
+    "and Quill, an owner, and the doctrines/incidents/decisions of a small",
+    "fleet. Nothing here is a real memory; the store under test is a fresh",
+    "tmp store, so the only thing measured is the ranker's geometry.",
+    "",
+    "memories: id, summary (the embedded text), category, age_days (created_at",
+    "= now - age), access_count (recall_stats seed). Decoys are memories that",
+    "share words or topic with a query but are the WRONG answer.",
+    "",
+    "queries: id, prompt, expected (ids that count as a hit), note. recall@5 =",
+    "|expected in top-5| / |expected|; MRR = 1 / rank of the first expected id.",
+    "",
+    "gate: measured floors, never tuned to pass. Floor = the first honest run",
+    "(recall@5 0.9714, MRR 0.9010, 35 queries, 2026-09-01, ranker E1) minus one",
+    "full query miss (1/35), so one rank moving is churn and two queries lost",
+    "is a regression. Re-baseline only with a ranker change that the report",
+    "shows improving; write the new measured values here when you do."
+  ],
+  "gate": {
+    "recall_at_5_min": 0.942,
+    "mrr_min": 0.872
+  },
+  "memories": [
+    {
+      "id": "m-anvil",
+      "category": "topology",
+      "age_days": 60,
+      "access_count": 3,
+      "summary": "Anvil is the Ubuntu laptop that acts as the launchpad; the coding agent Quill runs there."
+    },
+    {
+      "id": "m-bellows",
+      "category": "topology",
+      "age_days": 60,
+      "access_count": 5,
+      "summary": "Bellows is the Windows workstation with the RTX 4070; it hosts the memory server on port 51001, reachable only over the mesh VPN."
+    },
+    {
+      "id": "m-bellows-ssh",
+      "category": "topology",
+      "age_days": 45,
+      "access_count": 2,
+      "summary": "SSH into Bellows as user smith over the mesh VPN address 203.0.113.9; the old LAN address 192.0.2.6 died after the board swap."
+    },
+    {
+      "id": "m-forge-dead",
+      "category": "topology",
+      "age_days": 70,
+      "access_count": 1,
+      "summary": "The machine called Forge was decommissioned in June and wiped; every reference to forge:PORT is dead and must not be routed to."
+    },
+    {
+      "id": "m-pip",
+      "category": "topology",
+      "age_days": 60,
+      "access_count": 4,
+      "summary": "Pip is the desk agent running on Anvil with its web dashboard on localhost port 3101."
+    },
+    {
+      "id": "m-bus",
+      "category": "topology",
+      "age_days": 50,
+      "access_count": 2,
+      "summary": "The message bus is SQLite plus HTTP on port 50090; the chat mirror in Discord is display only and the owner is the bell."
+    },
+    {
+      "id": "m-backup",
+      "category": "topology",
+      "age_days": 40,
+      "access_count": 1,
+      "summary": "Nightly rsync backs Anvil up to Bellows at 02:30; the memory corpus also goes offsite to a cloud bucket at 03:35."
+    },
+    {
+      "id": "d-archive",
+      "category": "doctrine",
+      "age_days": 300,
+      "access_count": 6,
+      "summary": "Doctrine: archive before anything destructive. Copy aside first, delete last, never rewrite a file from memory."
+    },
+    {
+      "id": "d-secrets",
+      "category": "doctrine",
+      "age_days": 280,
+      "access_count": 2,
+      "summary": "Doctrine: a live credential is revoked, never archived; a backup copy keeps the exposure alive."
+    },
+    {
+      "id": "d-brain-wins",
+      "category": "doctrine",
+      "age_days": 320,
+      "access_count": 4,
+      "summary": "Doctrine: when the brain files and the memory server disagree, the brain files win; brain is now, memory is then."
+    },
+    {
+      "id": "d-scream",
+      "category": "doctrine",
+      "age_days": 330,
+      "access_count": 3,
+      "summary": "Doctrine: scream on failure. If something breaks, say so loudly; silent degradation is forbidden."
+    },
+    {
+      "id": "d-git-add",
+      "category": "doctrine",
+      "age_days": 200,
+      "access_count": 2,
+      "summary": "Doctrine: git add names specific paths, never -A or dot; a pre-commit hook blocks the wildcard forms."
+    },
+    {
+      "id": "d-body",
+      "category": "doctrine",
+      "age_days": 150,
+      "access_count": 1,
+      "summary": "Doctrine: an HTTP 200 is not health; read the response body before declaring a service up."
+    },
+    {
+      "id": "d-untested",
+      "category": "doctrine",
+      "age_days": 120,
+      "access_count": 1,
+      "summary": "Doctrine: an untested capability is a claim, not a capability; fire every trap after a restart or deploy."
+    },
+    {
+      "id": "i-lockup",
+      "category": "incident",
+      "age_days": 8,
+      "access_count": 2,
+      "summary": "Incident: Anvil froze hard on the 24th and had to be power cycled; the journal ended with no error, so the cause is undetermined."
+    },
+    {
+      "id": "i-gpu",
+      "category": "incident",
+      "age_days": 7,
+      "access_count": 1,
+      "summary": "Incident: the second Anvil lockup showed a wedged discrete GPU with 29 modeset errors in the last two minutes; the failing 3060 is the suspect."
+    },
+    {
+      "id": "i-pkill",
+      "category": "incident",
+      "age_days": 30,
+      "access_count": 0,
+      "summary": "Incident: pkill -f with a pattern that matches your own shell kills the shell; use pkill -x with the command name instead."
+    },
+    {
+      "id": "i-ps1",
+      "category": "incident",
+      "age_days": 1,
+      "access_count": 0,
+      "summary": "Incident: a PowerShell script shipped to Bellows failed to parse because of a non-ASCII dash; PowerShell 5 reads BOM-less UTF-8 as ANSI."
+    },
+    {
+      "id": "i-restart",
+      "category": "incident",
+      "age_days": 5,
+      "access_count": 0,
+      "summary": "Incident: the updater reported restarted but had restarted a sidecar; the main gateway process kept its old start timestamp."
+    },
+    {
+      "id": "id-owner",
+      "category": "identity",
+      "age_days": 200,
+      "access_count": 8,
+      "summary": "The owner is a 73 year old maker in a coastal town who prints seasonal collectibles; not a developer of modern stacks, but deep computing roots."
+    },
+    {
+      "id": "id-quill",
+      "category": "identity",
+      "age_days": 40,
+      "access_count": 3,
+      "summary": "Quill is second in command under the owner and the de facto project manager; opinions are wanted, not just execution."
+    },
+    {
+      "id": "r-daughter",
+      "category": "relationship",
+      "age_days": 50,
+      "access_count": 1,
+      "summary": "Mara is the owner's daughter; she sells succulents and was the first advertising client, and she is done with her web store as of August."
+    },
+    {
+      "id": "r-photographer",
+      "category": "relationship",
+      "age_days": 55,
+      "access_count": 1,
+      "summary": "Dorian is a high school friend reconnected after decades, a machinist and photographer whose pictures fill the training gallery."
+    },
+    {
+      "id": "r-drummer",
+      "category": "relationship",
+      "age_days": 90,
+      "access_count": 0,
+      "summary": "Cal is a blues drummer collaborating on a 3D printed drummers multi-tool with a drum key and a 7/16 inch socket."
+    },
+    {
+      "id": "dec-gallery",
+      "category": "decision",
+      "age_days": 40,
+      "access_count": 4,
+      "summary": "Decision: the gallery is free plus donations, not a store; the owner killed selling in July and never wants monetization proposed again."
+    },
+    {
+      "id": "dec-model",
+      "category": "decision",
+      "age_days": 15,
+      "access_count": 3,
+      "summary": "Decision: the coding agent runs the top tier model daily; conserve by lean sessions, not by dropping tiers."
+    },
+    {
+      "id": "dec-sec",
+      "category": "decision",
+      "age_days": 2,
+      "access_count": 1,
+      "summary": "Decision: security notices route to the coding agent first for triage; the Windows coder executes exact work orders."
+    },
+    {
+      "id": "dec-ip-art",
+      "category": "decision",
+      "age_days": 20,
+      "access_count": 1,
+      "summary": "Decision: art using third party characters is always free and unwatermarked, never priced."
+    },
+    {
+      "id": "dec-ranker",
+      "category": "decision",
+      "age_days": 1,
+      "access_count": 0,
+      "summary": "Decision: the recall ranker anchors similarity on the pool's best hit over a fixed span of 0.20 cosine, after the raw term proved inert."
+    },
+    {
+      "id": "cs-framework-behind",
+      "category": "current_state",
+      "age_days": 3,
+      "access_count": 1,
+      "summary": "Current state: Pip's agent framework is one release behind; the upgrade is gated on the owner's word."
+    },
+    {
+      "id": "cs-apt",
+      "category": "current_state",
+      "age_days": 2,
+      "access_count": 0,
+      "summary": "Current state: 48 operating system security updates are pending on Anvil, waiting on the owner."
+    },
+    {
+      "id": "cs-promo",
+      "category": "current_state",
+      "age_days": 3,
+      "access_count": 0,
+      "summary": "Current state: the memory library's launch promotion on social media ends around the second of the month."
+    },
+    {
+      "id": "cs-pdf",
+      "category": "current_state",
+      "age_days": 1,
+      "access_count": 0,
+      "summary": "Current state: the PDF library was upgraded to 6.16.2 after three advisories; the next scan should clear it."
+    },
+    {
+      "id": "idea-doc",
+      "category": "idea",
+      "age_days": 90,
+      "access_count": 0,
+      "summary": "Idea: a documentary cut from the pre-2025 chat archive, cross referenced against the memory corpus, with the owner as tiebreaker."
+    },
+    {
+      "id": "idea-voice",
+      "category": "idea",
+      "age_days": 100,
+      "access_count": 0,
+      "summary": "Idea: a voice library of the owner's stories, recorded in short takes and indexed by the memory server."
+    },
+    {
+      "id": "idea-stick",
+      "category": "idea",
+      "age_days": 30,
+      "access_count": 1,
+      "summary": "Idea: a memory stick that carries a lane's facts between machines, syncing facts but never vector geometry."
+    },
+    {
+      "id": "sl-tests",
+      "category": "session_log",
+      "age_days": 1,
+      "access_count": 0,
+      "summary": "Session log: ran the test suite, 724 passed, pushed the branch, updated the lane file."
+    },
+    {
+      "id": "sl-inbox",
+      "category": "session_log",
+      "age_days": 1,
+      "access_count": 0,
+      "summary": "Session log: checked the bus inbox, empty; read the security digest; nothing owed."
+    },
+    {
+      "id": "dk-port",
+      "category": "topology",
+      "age_days": 30,
+      "access_count": 20,
+      "summary": "The dashboard for the experimental Windows desk agent listens on port 18789 on Bellows; a test bed only."
+    },
+    {
+      "id": "dk-backup-hourly",
+      "category": "topology",
+      "age_days": 20,
+      "access_count": 3,
+      "summary": "Hourly local backup of Pip's workspace runs on Anvil; it is separate from the nightly rsync."
+    },
+    {
+      "id": "dk-lockup-old",
+      "category": "incident",
+      "age_days": 400,
+      "access_count": 0,
+      "summary": "Incident: years ago the old desktop froze weekly because of a bad power supply; replaced, closed."
+    },
+    {
+      "id": "dk-archive-tool",
+      "category": "unknown",
+      "age_days": 100,
+      "access_count": 2,
+      "summary": "The archive helper script names and ledgers each copy it makes under the archive directory."
+    },
+    {
+      "id": "dk-old-address",
+      "category": "current_state",
+      "age_days": 300,
+      "access_count": 5,
+      "summary": "Current state: Bellows answers on the LAN address 192.0.2.6."
+    },
+    {
+      "id": "unk-blob",
+      "category": "unknown",
+      "age_days": 250,
+      "access_count": 0,
+      "summary": "migration blob: misc notes about ports and machines and agents with no clear owner"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "prompt": "which machine hosts the memory server and on what port",
+      "expected": [
+        "m-bellows"
+      ],
+      "note": "needle; dk-port shares 'port' and is worn (access 20)"
+    },
+    {
+      "id": "q02",
+      "prompt": "how do I ssh into the windows workstation",
+      "expected": [
+        "m-bellows-ssh"
+      ],
+      "note": "paraphrase: 'windows workstation' vs 'Bellows'"
+    },
+    {
+      "id": "q03",
+      "prompt": "is forge still alive",
+      "expected": [
+        "m-forge-dead"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q04",
+      "prompt": "where is Pip's dashboard",
+      "expected": [
+        "m-pip"
+      ],
+      "note": "decoy dk-port (dashboard, worn path)"
+    },
+    {
+      "id": "q05",
+      "prompt": "what does the message bus run on",
+      "expected": [
+        "m-bus"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q06",
+      "prompt": "when does the nightly backup run",
+      "expected": [
+        "m-backup"
+      ],
+      "note": "decoy dk-backup-hourly"
+    },
+    {
+      "id": "q07",
+      "prompt": "what should I do before deleting a file",
+      "expected": [
+        "d-archive"
+      ],
+      "note": "old doctrine vs dk-archive-tool"
+    },
+    {
+      "id": "q08",
+      "prompt": "found a leaked api key in a config, should I archive it",
+      "expected": [
+        "d-secrets"
+      ],
+      "note": "trap: 'archive' pulls d-archive; the answer is the carve-out"
+    },
+    {
+      "id": "q09",
+      "prompt": "the brain file and the memory server disagree, which one wins",
+      "expected": [
+        "d-brain-wins"
+      ],
+      "note": "needle, 320 days old"
+    },
+    {
+      "id": "q10",
+      "prompt": "something broke, should I mention it quietly or make noise",
+      "expected": [
+        "d-scream"
+      ],
+      "note": "paraphrase"
+    },
+    {
+      "id": "q11",
+      "prompt": "can I stage everything with one git command",
+      "expected": [
+        "d-git-add"
+      ],
+      "note": "paraphrase: 'stage everything' vs 'git add -A'"
+    },
+    {
+      "id": "q12",
+      "prompt": "the health endpoint returned 200 so the service is fine, right",
+      "expected": [
+        "d-body"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q13",
+      "prompt": "we just restarted, do we need to re-fire the alarm trap",
+      "expected": [
+        "d-untested"
+      ],
+      "note": "paraphrase"
+    },
+    {
+      "id": "q14",
+      "prompt": "why did the laptop freeze",
+      "expected": [
+        "i-lockup",
+        "i-gpu"
+      ],
+      "note": "multi-hit; decoy dk-lockup-old"
+    },
+    {
+      "id": "q15",
+      "prompt": "I killed my own terminal with pkill",
+      "expected": [
+        "i-pkill"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q16",
+      "prompt": "powershell script fails to parse on the windows box",
+      "expected": [
+        "i-ps1"
+      ],
+      "note": "paraphrase: 'windows box' vs 'Bellows'"
+    },
+    {
+      "id": "q17",
+      "prompt": "the updater said restarted but the gateway process looks old",
+      "expected": [
+        "i-restart"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q18",
+      "prompt": "who is the owner",
+      "expected": [
+        "id-owner"
+      ],
+      "note": "needle, high access"
+    },
+    {
+      "id": "q19",
+      "prompt": "who runs the project day to day",
+      "expected": [
+        "id-quill"
+      ],
+      "note": "paraphrase: 'runs day to day' vs 'project manager'"
+    },
+    {
+      "id": "q20",
+      "prompt": "tell me about the owner's daughter",
+      "expected": [
+        "r-daughter"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q21",
+      "prompt": "who takes the photos in the training gallery",
+      "expected": [
+        "r-photographer"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q22",
+      "prompt": "the drummer's multi-tool project",
+      "expected": [
+        "r-drummer"
+      ],
+      "note": "needle, never recalled"
+    },
+    {
+      "id": "q23",
+      "prompt": "should we add a checkout to the gallery",
+      "expected": [
+        "dec-gallery"
+      ],
+      "note": "paraphrase: 'checkout' vs 'store / selling'"
+    },
+    {
+      "id": "q24",
+      "prompt": "which model tier should the coding agent use",
+      "expected": [
+        "dec-model"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q25",
+      "prompt": "who handles security advisories first",
+      "expected": [
+        "dec-sec"
+      ],
+      "note": "paraphrase: 'advisories' vs 'notices'"
+    },
+    {
+      "id": "q26",
+      "prompt": "can we charge for fan art of a cartoon character",
+      "expected": [
+        "dec-ip-art"
+      ],
+      "note": "paraphrase: 'fan art of a cartoon character' vs 'third party characters'"
+    },
+    {
+      "id": "q27",
+      "prompt": "how does the ranker normalize similarity",
+      "expected": [
+        "dec-ranker"
+      ],
+      "note": "needle, fresh, never recalled"
+    },
+    {
+      "id": "q28",
+      "prompt": "is the agent framework up to date",
+      "expected": [
+        "cs-framework-behind"
+      ],
+      "note": "paraphrase"
+    },
+    {
+      "id": "q29",
+      "prompt": "pending OS security updates",
+      "expected": [
+        "cs-apt"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q30",
+      "prompt": "the documentary idea",
+      "expected": [
+        "idea-doc"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q31",
+      "prompt": "recording the owner's stories",
+      "expected": [
+        "idea-voice"
+      ],
+      "note": "paraphrase"
+    },
+    {
+      "id": "q32",
+      "prompt": "carrying memory between machines on a usb stick",
+      "expected": [
+        "idea-stick"
+      ],
+      "note": "paraphrase"
+    },
+    {
+      "id": "q33",
+      "prompt": "what is Bellows' network address",
+      "expected": [
+        "m-bellows-ssh"
+      ],
+      "note": "stale decoy dk-old-address: 300 days, worn, wrong"
+    },
+    {
+      "id": "q34",
+      "prompt": "did the pdf library advisories get fixed",
+      "expected": [
+        "cs-pdf"
+      ],
+      "note": "needle"
+    },
+    {
+      "id": "q35",
+      "prompt": "when does the social media promotion end",
+      "expected": [
+        "cs-promo"
+      ],
+      "note": "needle"
+    }
+  ]
+}

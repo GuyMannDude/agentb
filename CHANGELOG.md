@@ -30,6 +30,34 @@ constants are sized to the raw scale and would collapse on normalised input.
 Same experiment, free finding: cache_hits over 1,865 served chunks were 99.7%
 VEC, 0.3% L1, zero HOT/L2/L3/MEM0 (feeds review item E3).
 
+## Unreleased — Recall harness: the gate for ranker changes (review item E2)
+
+Experiment One's replay could only re-order the ten memories that had been
+served; it could not say whether the RIGHT ten were selected, and the fix was
+first tuned on that visible pool before review caught it. The instrument that
+was missing is now `tests/recall/`: 44 fictional memories (a made-up workshop
+fleet, so nothing from a real corpus lands in the repo) with categories, ages
+and access counts, 35 queries with known right answers — needles, paraphrases,
+multi-hit, and decoys that share words or topic with the query but are wrong —
+embedded ONCE by the production embedder (nomic, same task prefixes the server
+applies) and cached in `embeddings.json`, so the suite runs offline in two
+seconds on real geometry. Every query is served through the real `/context`
+handler against a fresh store with `recall_stats` restored to the fixture's
+counts first, so trials are independent; the score is recall@5 and MRR, floored
+by measured gates in `fixtures.json`: the first honest run (recall@5 0.971,
+MRR 0.901) minus one full query miss, so floors of 0.942 / 0.872 — one rank
+moving is churn, two queries lost is a regression; never tuned to pass. A control runs the same fixtures with the
+similarity weight at zero and must fall BELOW the gate (it does: recall@5
+0.314, MRR 0.120) — a check that cannot fail is not a check. The harness also
+settles the selection question Experiment One left open: the pre-E1 ranker
+(raw tier relevance) scores recall@5 0.429 / MRR 0.303 / top-1 23% on these
+fixtures against 0.971 / 0.901 / 86% for the anchored cosine span, with twenty
+queries improving and none regressing. `python tests/recall/embed_fixtures.py`
+tops up the cache when fixtures change; `--all` rebuilds it after an embedder
+change, and the harness refuses a cache built by a different model. Explore
+mode has no fixtures yet — its success criterion is not "best match first"
+and arrives with the explore rescale spec (review item E4).
+
 ## Unreleased — Dream contradiction triage: non-competing flags become drift notes
 
 The dreamer's verified-vs-extracted contradiction fan-out had a lifetime score
