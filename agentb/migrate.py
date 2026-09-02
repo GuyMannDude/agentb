@@ -247,9 +247,10 @@ async def _embed_or_abort(embed, text: str) -> tuple[list[float], str]:
 
 
 def _wipe_caches(data_dir: Path) -> int:
-    """Delete L1 bundles + the L2 index — they hold OLD-space document
-    embeddings that would be cosine-compared against NEW-space queries.
-    L3 re-embeds live, so it self-heals. Returns files removed."""
+    """Delete leftover L1 bundles + L2 index files. Nothing reads them since
+    E3 (the tiers are gone); a store from before then may still carry them,
+    and a reindex is the natural moment to leave no old-space vectors on
+    disk. L3 re-embeds live, so it self-heals. Returns files removed."""
     removed = 0
     l1 = data_dir / "cache" / "l1"
     if l1.is_dir():

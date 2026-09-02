@@ -11,8 +11,6 @@ Contract under test:
     the previous contents on a failed write.
   - analyst (note create + mark processed) and classify (reclassify) go
     through atomic_write_text.
-  - L2Index.add never evicts more than one entry per add — a legacy over-cap
-    index must not be truncated on first touch.
 """
 from __future__ import annotations
 
@@ -24,9 +22,8 @@ from pathlib import Path
 import pytest
 
 from agentb.analyst import analyze_tenant
-from agentb.cache import L2Index
 from agentb.classify import reclassify_memory_dir
-from agentb.config import AnalysisConfig, CacheConfig
+from agentb.config import AnalysisConfig
 from agentb.fsutil import atomic_write_text
 from agentb.vec import VecStore
 
@@ -161,37 +158,3 @@ def test_classify_reclassify_write_is_atomic(tmp_path, monkeypatch):
 
 
 # ── F3: legacy over-cap L2 index must not be truncated on first add ──
-
-def _l2_entry(i: int) -> dict:
-    return {"id": f"legacy{i}", "content": f"c{i}", "source": "s",
-            "embedding": [0.1], "metadata": {}, "created_at": float(i)}
-
-
-def test_l2_add_never_mass_evicts_legacy_entries(tmp_path):
-    index_dir = tmp_path / "l2"
-    index_dir.mkdir()
-    legacy = [_l2_entry(i) for i in range(10)]
-    (index_dir / "index.json").write_text(json.dumps(legacy))
-
-    l2 = L2Index(index_dir, CacheConfig(l2_max_entries=5))
-    assert l2.size == 10
-
-    asyncio.run(l2.add("new content", "test", [0.2]))
-    # 11 entries, cap 5: eviction must be SKIPPED, not drop 6 legacy entries
-    assert l2.size == 11
-    on_disk = json.loads((index_dir / "index.json").read_text())
-    assert len(on_disk) == 11
-
-
-def test_l2_add_still_evicts_one_at_the_cap(tmp_path):
-    index_dir = tmp_path / "l2"
-    index_dir.mkdir()
-    at_cap = [_l2_entry(i) for i in range(5)]
-    (index_dir / "index.json").write_text(json.dumps(at_cap))
-
-    l2 = L2Index(index_dir, CacheConfig(l2_max_entries=5))
-    asyncio.run(l2.add("new content", "test", [0.2]))
-    # normal steady-state: oldest single entry evicted, cap held
-    assert l2.size == 5
-    ids = [e["id"] for e in l2.entries]
-    assert "legacy0" not in ids

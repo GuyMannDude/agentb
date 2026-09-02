@@ -2,8 +2,6 @@
 
 - facts_store: BEGIN IMMEDIATE makes save()'s read-check-write atomic across
   writers — concurrent saves used to race into an uncaught IntegrityError.
-- L2Index: atomic _save (crash mid-write used to wipe the index) + the new
-  l2_max_entries cap (the index was unbounded).
 - migrate._sqlite_snapshot: WAL-safe backup — shutil.copy2 missed
   uncheckpointed -wal pages.
 - classify: re-reads the memory JSON before writing so seconds of LLM latency
@@ -18,14 +16,11 @@ import threading
 
 import pytest
 
-from agentb.cache import L2Index
 from agentb.classify import reclassify_memory_dir
-from agentb.config import CacheConfig
 from agentb.facts_store import FactsStore
 from agentb.migrate import _sqlite_snapshot
 from agentb.redact import redact_text
 
-VEC = [0.1] * 768
 
 
 # ── facts_store: cross-writer atomicity ──
@@ -75,55 +70,6 @@ def test_save_and_demote_still_work_single_writer(tmp_path):
     d = store.demote("igor", "os", reason="test demote")
     assert d.written
     assert store.get("igor", "os", include_false=True).confidence == "false"
-
-
-# ── L2Index: atomic save + cap ──
-
-def test_l2_save_is_atomic_no_tmp_left_behind(tmp_path):
-    l2 = L2Index(tmp_path / "l2", CacheConfig())
-    asyncio.run(l2.add("some content", "test", list(VEC)))
-    index_file = tmp_path / "l2" / "index.json"
-    assert index_file.exists()
-    assert not (tmp_path / "l2" / "index.json.tmp").exists()
-    assert json.loads(index_file.read_text())  # valid JSON, one entry
-
-
-def test_l2_cap_evicts_oldest_first(tmp_path):
-    cfg = CacheConfig(l2_max_entries=3)
-    l2 = L2Index(tmp_path / "l2", cfg)
-    ids = [asyncio.run(l2.add(f"content {i}", "test", list(VEC)))
-           for i in range(5)]
-    assert l2.size == 3
-    kept = {e["id"] for e in l2.entries}
-    assert kept == set(ids[2:]), "eviction must drop the oldest entries"
-    # And the cap survives a reload from disk.
-    l2b = L2Index(tmp_path / "l2", cfg)
-    assert l2b.size == 3
-
-
-def test_l2_cap_zero_disables(tmp_path):
-    l2 = L2Index(tmp_path / "l2", CacheConfig(l2_max_entries=0))
-    for i in range(4):
-        asyncio.run(l2.add(f"content {i}", "test", list(VEC)))
-    assert l2.size == 4
-
-
-def test_l2_concurrent_adds_all_land_and_index_stays_valid(tmp_path):
-    # _save now snapshots on the loop and writes in a worker thread under a
-    # lock — concurrent adds must all end up on disk, with no torn file.
-    cfg = CacheConfig(l2_max_entries=10)
-    l2 = L2Index(tmp_path / "l2", cfg)
-
-    async def _add_many():
-        await asyncio.gather(*[
-            l2.add(f"concurrent {i}", "test", list(VEC)) for i in range(8)
-        ])
-
-    asyncio.run(_add_many())
-    assert l2.size == 8
-    on_disk = json.loads((tmp_path / "l2" / "index.json").read_text())
-    assert len(on_disk) == 8
-    assert not (tmp_path / "l2" / "index.json.tmp").exists()
 
 
 # ── migrate: WAL-safe sqlite snapshot ──

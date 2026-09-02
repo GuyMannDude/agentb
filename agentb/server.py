@@ -42,7 +42,7 @@ from agentb.config import (
     ExpansionConfig,
 )
 from agentb.providers import create_resilient_reasoning, create_resilient_embedding
-from agentb.cache import L1Cache, L2Index, l3_scan, ContextChunk
+from agentb.cache import l3_scan, ContextChunk
 from agentb.fsutil import atomic_write_text as _atomic_write_text
 from agentb.sessions import SessionManager, SessionConfig
 from agentb.provenance import (
@@ -344,11 +344,7 @@ class TenantManager:
 
         data_dir = get_agent_data_dir(self.config, agent_id)
         memory_dir = data_dir / "memory"
-        l1_dir = data_dir / "cache" / "l1"
-        l2_dir = data_dir / "cache" / "l2"
-
-        for d in [memory_dir, l1_dir, l2_dir]:
-            d.mkdir(parents=True, exist_ok=True)
+        memory_dir.mkdir(parents=True, exist_ok=True)
 
         # Session config from agent settings or defaults
         session_cfg = SessionConfig()
@@ -367,8 +363,6 @@ class TenantManager:
         tenant = {
             "data_dir": data_dir,
             "memory_dir": memory_dir,
-            "l1": L1Cache(l1_dir, self.config.cache),
-            "l2": L2Index(l2_dir, self.config.cache),
             "sessions": SessionManager(data_dir, session_cfg),
             "vec": vec_store,
             "vec_mode": vec_mode,
@@ -1461,7 +1455,6 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             vec_store.delete(old_id)
         log.info(f"Writeback: {req.session_id} → {memory_id} (agent: {req.agent_id or 'default'}, source={source_used}, category={category_used})")
 
-        l1_updated = 0
         try:
             if embedding is None:
                 raise RuntimeError("embedding unavailable; raw memory retained unindexed")
@@ -1498,7 +1491,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         return WritebackResponse(
             status="archived", memory_id=memory_id, agent_id=req.agent_id,
-            l1_bundles_updated=l1_updated,
+            l1_bundles_updated=0,  # wire compatibility: the L1 tier is gone
             message=f"Session {req.session_id} archived for agent '{req.agent_id or 'default'}'.",
             category_used=category_used,
             category_suggested=category_suggested_field,

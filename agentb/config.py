@@ -80,8 +80,6 @@ class PersonaConfig:
     context_bias: str = "neutral"        # factual | neutral | associative
     max_confidence_for_pass: float = 0.7
     allow_speculative: bool = False
-    l1_similarity_override: Optional[float] = None
-    l2_similarity_override: Optional[float] = None
     custom_system_prompt: str = ""
 
 
@@ -93,7 +91,6 @@ DEFAULT_PERSONAS = {
     "strict": PersonaConfig(
         name="strict", preflight="aggressive", context_bias="factual",
         max_confidence_for_pass=0.9, allow_speculative=False,
-        l1_similarity_override=0.8, l2_similarity_override=0.6,
         custom_system_prompt=(
             "You are in STRICT mode. Aggressively fact-check all claims. "
             "Flag any unverified numbers, costs, dates, or API references. "
@@ -103,7 +100,6 @@ DEFAULT_PERSONAS = {
     "creative": PersonaConfig(
         name="creative", preflight="permissive", context_bias="associative",
         max_confidence_for_pass=0.5, allow_speculative=True,
-        l1_similarity_override=0.6, l2_similarity_override=0.35,
         custom_system_prompt=(
             "You are in CREATIVE mode. The agent is brainstorming or doing creative work. "
             "Do NOT flag speculative ideas as inaccurate. Only WARN on hard contradictions "
@@ -123,10 +119,6 @@ class StorageConfig:
 
 @dataclass
 class CacheConfig:
-    l1_max_bundles: int = 50
-    l1_ttl_seconds: int = 86400
-    l1_similarity_threshold: float = 0.75
-    l2_similarity_threshold: float = 0.5
     l3_similarity_threshold: float = 0.4
     # v4.1.1: L3 is the disk-walk escape hatch that EMBEDS every prefilter-passing
     # file — O(store size) ollama calls. Harmless when L3 rarely runs, but a
@@ -135,11 +127,6 @@ class CacheConfig:
     # first) so L3 stays bounded. Interim until vec category-pushdown (#468) keeps
     # session_log out of VEC's top-k so L3 isn't reached at all.
     l3_max_candidates: int = 80
-    # L2 semantic index cap (oldest-first eviction, mirrors l1_max_bundles).
-    # Each entry carries a full embedding and the index is one JSON file
-    # rewritten per add + cosine-scanned per search — unbounded growth under
-    # continuous auto-capture degrades every request. 0 disables the cap.
-    l2_max_entries: int = 2000
     # #468: category-filtered VEC search over-fetches top_k * this from the kNN
     # then filters by the category column, so a session_log-dominated store still
     # returns enough on-category hits to fill the budget without the L3 disk-walk.
@@ -396,8 +383,6 @@ def _build_persona(name: str, data: dict) -> PersonaConfig:
         context_bias=data.get("context_bias", "neutral"),
         max_confidence_for_pass=data.get("max_confidence_for_pass", 0.7),
         allow_speculative=data.get("allow_speculative", False),
-        l1_similarity_override=data.get("l1_similarity_override"),
-        l2_similarity_override=data.get("l2_similarity_override"),
         custom_system_prompt=data.get("custom_system_prompt", ""),
     )
 

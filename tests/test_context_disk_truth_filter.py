@@ -14,8 +14,6 @@ unit-test the L1 plumbing and the helper directly.
 """
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import json
 import time
 
@@ -27,7 +25,7 @@ from agentb.config import (
     AgentBConfig, ResilientProviderConfig, ProviderConfig,
     CacheConfig, ServerConfig, ClassificationConfig, DEFAULT_PERSONAS,
 )
-from agentb.cache import L1Cache, ContextChunk, resolve_disk_truth
+from agentb.cache import ContextChunk, resolve_disk_truth
 
 # Fixed 768-dim vector — fake provider embeds everything to this, so the query
 # matches every stored memory and the metadata filter alone decides what returns.
@@ -116,48 +114,6 @@ def test_l2_residue_is_not_a_recall_tier(client, tmp_path):
     assert hits["L2"] == 0 and hits["L1"] == 0 and hits["HOT"] == 0 and hits["VEC"] == 0
 
 
-def _seed_l1_and_disk(tmp_path, memory_id, content, disk_category, cached_category):
-    """Seed an L1 bundle (with a stale cached category) and its memory JSON (with
-    the canonical category) on disk. L2/VEC left empty so L1 is the tier under test."""
-    base = tmp_path / "agents" / "default"
-    mem_dir = base / "memory"
-    l1_dir = base / "cache" / "l1"
-    mem_dir.mkdir(parents=True, exist_ok=True)
-    l1_dir.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    (mem_dir / f"{memory_id}.json").write_text(json.dumps({
-        "id": memory_id, "summary": content, "key_facts": [],
-        "category": disk_category, "source": "tool", "created_at": now,
-    }))
-    bid = hashlib.sha256(content.encode()).hexdigest()[:12]
-    (l1_dir / f"{bid}.json").write_text(json.dumps({
-        "id": bid, "content": content, "source": f"precache:{memory_id}",
-        "embedding": list(VEC), "created_at": now,
-        "memory_id": memory_id, "category": cached_category,
-    }))
-
-
-def test_l1_residue_is_not_a_recall_tier(client, tmp_path):
-    # Bundle cached as 'topology' but the memory was reclassified to 'session_log' on disk.
-    _seed_l1_and_disk(tmp_path, "m-l1", "raw auto-capture activity dump",
-                      disk_category="session_log", cached_category="topology")
-
-    r = client.post("/context", json={"prompt": "activity", "max_results": 5})
-    assert r.status_code == 200, r.text
-    assert "session_log" not in [c.get("category") for c in r.json()["chunks"]]
-    assert r.json()["cache_hits"]["L1"] == 0
-
-    # Opt back in → reachable, but only through the L3 disk-walk (VEC empty,
-    # L1 no longer a tier — its bundle is a dead write, not a recall path).
-    r2 = client.post("/context", json={"prompt": "activity", "max_results": 5,
-                                       "exclude_categories": []})
-    assert r2.status_code == 200, r2.text
-    assert "session_log" in [c.get("category") for c in r2.json()["chunks"]]
-    hits = r2.json()["cache_hits"]
-    assert hits["L3"] >= 1
-    assert hits["L1"] == 0 and hits["L2"] == 0 and hits["HOT"] == 0 and hits["VEC"] == 0
-
-
 def test_resolve_disk_truth_overrides_stale_chunk_category(tmp_path):
     mem_dir = tmp_path / "memory"
     mem_dir.mkdir()
@@ -184,12 +140,3 @@ def test_resolve_disk_truth_overrides_stale_chunk_category(tmp_path):
     # through L2 after the June-9 dedup sweep.
     ghost = ContextChunk("z", "l2-memory", 0.9, "L2", memory_id="nope")
     assert resolve_disk_truth(ghost, mem_dir) is None
-
-
-def test_l1_add_search_round_trips_memory_id_and_category(tmp_path):
-    l1 = L1Cache(tmp_path / "l1", CacheConfig())
-    asyncio.run(
-        l1.add("a bundle", "precache:m1", list(VEC), memory_id="m1", category="topology")
-    )
-    hits = l1.search(list(VEC), top_k=3)
-    assert hits and hits[0].memory_id == "m1" and hits[0].category == "topology"

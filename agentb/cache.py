@@ -1,20 +1,18 @@
 """
-AgentB Cache Hierarchy v0.3.0
-L1/L2/L3 with persona-aware similarity thresholds.
+Mnemo Cortex recall helpers: ContextChunk, disk-truth resolution and the L3
+disk-walk escape hatch. The L1 bundle cache and L2 index that lived here were
+retired from recall in E3 and deleted in its follow-up (2026-09).
 """
 
 import asyncio
 import json
-import os
 import time
-import hashlib
 import logging
 from pathlib import Path
 from typing import Optional, Callable, Awaitable
 
 import numpy as np
 
-from agentb.config import CacheConfig, PersonaConfig
 
 log = logging.getLogger("agentb.cache")
 
@@ -117,184 +115,6 @@ def resolve_disk_truth(chunk: ContextChunk, memory_dir: Path) -> Optional[Contex
         chunk.age_days = round((time.time() - float(created_at)) / 86400.0, 1)
         chunk.stale_warning = compute_stale_warning(chunk.category, created_at) if chunk.category else None
     return chunk
-
-
-class L1Cache:
-    def __init__(self, cache_dir: Path, config: CacheConfig):
-        self.cache_dir = cache_dir
-        self.config = config
-        self.bundles: list[dict] = []
-        self._load()
-
-    def _load(self):
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.bundles = []
-        for f in sorted(self.cache_dir.glob("*.json")):
-            try:
-                self.bundles.append(json.loads(f.read_text(encoding="utf-8")))
-            except Exception as e:
-                log.warning(f"L1 load error {f}: {e}")
-        log.info(f"L1 cache: {len(self.bundles)} bundles")
-
-    def search(self, query_embedding: list[float], top_k: int = 3,
-               persona: Optional[PersonaConfig] = None) -> list[ContextChunk]:
-        threshold = self.config.l1_similarity_threshold
-        if persona and persona.l1_similarity_override is not None:
-            threshold = persona.l1_similarity_override
-
-        now = time.time()
-        scored = []
-        for bundle in self.bundles:
-            age = now - bundle.get("created_at", 0)
-            if age > self.config.l1_ttl_seconds:
-                continue
-            if not bundle.get("embedding"):
-                continue
-            sim = cosine_similarity(query_embedding, bundle["embedding"])
-            if sim >= threshold:
-                scored.append((sim, bundle))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        # v4.0.2: carry memory_id + category so /context can disk-truth-validate
-        # the category filter. An L1 bundle with no memory_id can't be tied back
-        # to its memory JSON, so session_log leaked past the filter.
-        return [ContextChunk(b["content"], b.get("source", "l1-cache"), s, "L1",
-                             memory_id=b.get("memory_id"), category=b.get("category"),
-                             created_at=b.get("created_at"))
-                for s, b in scored[:top_k]]
-
-    async def add(self, content: str, source: str, embedding: list[float],
-                  memory_id: Optional[str] = None, category: Optional[str] = None) -> str:
-        bundle_id = hashlib.sha256(content.encode()).hexdigest()[:12]
-        bundle = {"id": bundle_id, "content": content, "source": source,
-                  "embedding": embedding, "created_at": time.time(),
-                  "memory_id": memory_id, "category": category}
-        self.bundles.append(bundle)
-        if len(self.bundles) > self.config.l1_max_bundles:
-            self.bundles.sort(key=lambda b: b.get("created_at", 0))
-            evicted = self.bundles.pop(0)
-            (self.cache_dir / f"{evicted['id']}.json").unlink(missing_ok=True)
-        (self.cache_dir / f"{bundle_id}.json").write_text(json.dumps(bundle, default=str), encoding="utf-8")
-        return bundle_id
-
-    @property
-    def size(self) -> int:
-        return len(self.bundles)
-
-
-class L2Index:
-    def __init__(self, index_dir: Path, config: CacheConfig):
-        self.index_dir = index_dir
-        self.config = config
-        self.entries: list[dict] = []
-        # Orders concurrent saves so a slower older write can't land on disk
-        # after a newer one.
-        self._save_lock = asyncio.Lock()
-        self._load()
-
-    def _load(self):
-        self.index_dir.mkdir(parents=True, exist_ok=True)
-        index_file = self.index_dir / "index.json"
-        if index_file.exists():
-            try:
-                self.entries = json.loads(index_file.read_text(encoding="utf-8"))
-                log.info(f"L2 index: {len(self.entries)} entries")
-            except Exception as e:
-                log.warning(f"L2 load error: {e}")
-
-    def _write_snapshot(self, entries: list[dict]):
-        # Atomic tmp+replace (same pattern as trajectory.py): truncate-then-
-        # write here meant a crash mid-write wiped the whole L2 index.
-        index_file = self.index_dir / "index.json"
-        tmp = index_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(entries, default=str), encoding="utf-8")
-        os.replace(tmp, index_file)
-
-    async def _save(self):
-        # Each entry carries a ~6 KB embedding, so dumps of the whole index
-        # can hold the event loop for hundreds of ms. Snapshot on the loop
-        # (under the lock, so a later save always carries newer state) and
-        # serialize+write in a worker thread.
-        async with self._save_lock:
-            snapshot = list(self.entries)
-            await asyncio.to_thread(self._write_snapshot, snapshot)
-
-    def search(self, query_embedding: list[float], top_k: int = 5,
-               persona: Optional[PersonaConfig] = None) -> list[ContextChunk]:
-        from agentb.provenance import compute_stale_warning
-
-        threshold = self.config.l2_similarity_threshold
-        if persona and persona.l2_similarity_override is not None:
-            threshold = persona.l2_similarity_override
-
-        now = time.time()
-        scored = []
-        for entry in self.entries:
-            if not entry.get("embedding"):
-                continue
-            sim = cosine_similarity(query_embedding, entry["embedding"])
-            if sim > threshold:
-                scored.append((sim, entry))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        out: list[ContextChunk] = []
-        for s, e in scored[:top_k]:
-            meta = e.get("metadata") or {}
-            created_at = e.get("created_at")
-            age_days = None
-            if created_at:
-                age_days = round((now - float(created_at)) / 86400.0, 1)
-            category = meta.get("category")
-            stale = compute_stale_warning(category, created_at) if category else None
-            out.append(ContextChunk(
-                e["content"], e.get("source", "l2-memory"), s, "L2",
-                memory_id=meta.get("memory_id"),
-                provenance_source=meta.get("provenance_source"),
-                category=category,
-                additional_tags=meta.get("additional_tags") or [],
-                age_days=age_days,
-                stale_warning=stale,
-                created_at=created_at,
-            ))
-        return out
-
-    async def add(self, content: str, source: str, embedding: list[float],
-                  metadata: Optional[dict] = None) -> str:
-        entry_id = hashlib.sha256(content.encode()).hexdigest()[:12]
-        self.entries.append({"id": entry_id, "content": content, "source": source,
-                            "embedding": embedding, "metadata": metadata or {},
-                            "created_at": time.time()})
-        # Oldest-first eviction (mirrors L1): every entry carries a ~6 KB
-        # embedding and _save rewrites the whole file, so an uncapped index
-        # under continuous auto-capture grows without bound — memory, per-
-        # write disk churn, and per-search scan time all degrade linearly.
-        max_entries = self.config.l2_max_entries
-        if max_entries > 0 and len(self.entries) > max_entries:
-            overflow = len(self.entries) - max_entries
-            if overflow > 1:
-                # A single add only ever overflows by 1. More means the index
-                # was loaded already over the cap — a legacy pre-v4.1 store
-                # (read-only in prod, entries exist nowhere else). Evicting
-                # here would silently destroy them on the first add() a future
-                # code path wires up, so keep them and say so loudly; cap
-                # enforcement resumes once a backfill retires the legacy index.
-                log.warning(
-                    f"L2 index holds {len(self.entries)} entries (cap "
-                    f"{max_entries}); skipping eviction of {overflow} legacy "
-                    f"entries — backfill and retire the legacy index instead")
-            else:
-                # Reassign instead of sorting in place: _save snapshots the
-                # list on the loop, and a concurrent add() must never reorder
-                # a list a snapshot was just taken from.
-                self.entries = sorted(
-                    self.entries, key=lambda e: e.get("created_at", 0)
-                )[-max_entries:]
-        await self._save()
-        return entry_id
-
-    @property
-    def size(self) -> int:
-        return len(self.entries)
 
 
 async def l3_scan(

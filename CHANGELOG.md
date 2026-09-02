@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — `L1Cache` and `L2Index` deleted
+
+With `/preflight` on VEC and the writers gone (previous entry), nothing
+read or wrote the L1 bundle cache or the L2 index. Both classes are
+deleted from `agentb/cache.py` along with the tenant wiring
+(`cache/l1`, `cache/l2` are no longer created), the `CacheConfig` fields
+`l1_max_bundles`, `l1_ttl_seconds`, `l1_similarity_threshold`,
+`l2_similarity_threshold`, `l2_max_entries`, the persona
+`l1_similarity_override` / `l2_similarity_override` fields (the strict and
+creative personas carried values for them), and the four lines
+`agentb init` wrote for them. Existing `config.yaml` files that still
+carry those keys keep loading: the loader copies only the keys the
+dataclass has. `migrate.py` still wipes leftover `cache/l1` and `cache/l2`
+files on a reindex, now as legacy cleanup rather than to prevent
+cross-space comparison. Eighteen tests that existed only to exercise the
+two classes are removed (`TestL1Cache`, `TestL2Index`, the L2-based
+tenant-isolation and persona-threshold tests, the L2 atomic-save and cap
+tests, the L1 disk-truth seeding tests); the L2 *residue* test stays — a
+pre-E3 store may still hold an `index.json`, and recall must keep ignoring
+it. 715 passed; E2 and E4 harnesses byte-identical.
+
 ## Unreleased — E3 follow-up: `/preflight` reads VEC; the dead L1 writers and `search_hot` are gone
 
 E3 retired HOT, L1 and L2 from `/context` but, by the non-bundling rule,

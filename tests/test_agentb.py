@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from agentb.config import (
     AgentBConfig, ProviderConfig, ResilientProviderConfig, CacheConfig,
-    PersonaConfig, AgentConfig, ServerConfig, StorageConfig,
+    AgentConfig, ServerConfig, StorageConfig,
     load_config, get_agent_data_dir, get_persona, DEFAULT_PERSONAS,
 )
 from agentb.providers import (
@@ -21,7 +21,7 @@ from agentb.providers import (
     create_resilient_reasoning, create_resilient_embedding,
     EmbeddingRefused,
 )
-from agentb.cache import L1Cache, L2Index, l3_scan, cosine_similarity, ContextChunk
+from agentb.cache import l3_scan, cosine_similarity
 
 
 # ─────────────────────────────────────────────
@@ -31,7 +31,7 @@ from agentb.cache import L1Cache, L2Index, l3_scan, cosine_similarity, ContextCh
 @pytest.fixture
 def tmp_data_dir(tmp_path):
     """Create a temporary data directory structure."""
-    for sub in ["memory", "cache/l1", "cache/l2", "logs"]:
+    for sub in ["memory", "logs"]:
         (tmp_path / sub).mkdir(parents=True)
     return tmp_path
 
@@ -549,92 +549,6 @@ class TestCosine:
         assert cosine_similarity([0, 0, 0], [1, 2, 3]) == 0.0
 
 
-class TestL1Cache:
-    def test_add_and_search(self, tmp_data_dir, sample_embedding, similar_embedding):
-        l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.7))
-        asyncio.run(
-            l1.add("Easter gnomes $20-30", "test", sample_embedding)
-        )
-        assert l1.size == 1
-
-        results = l1.search(similar_embedding, top_k=3)
-        assert len(results) >= 1
-        assert results[0].cache_tier == "L1"
-        assert "Easter gnomes" in results[0].content
-
-    def test_no_match_below_threshold(self, tmp_data_dir, sample_embedding, different_embedding):
-        l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.95))
-        asyncio.run(
-            l1.add("test content", "test", sample_embedding)
-        )
-        results = l1.search(different_embedding, top_k=3)
-        # Different random vector — likely below 0.95 threshold
-        # (statistically near-certain but not guaranteed)
-        assert len(results) <= 1
-
-    def test_eviction_at_max(self, tmp_data_dir, sample_embedding):
-        l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_max_bundles=2))
-        asyncio.run(l1.add("first", "s1", sample_embedding))
-        asyncio.run(l1.add("second", "s2", sample_embedding))
-        asyncio.run(l1.add("third", "s3", sample_embedding))
-        assert l1.size == 2  # oldest evicted
-
-    def test_stale_bundles_skipped(self, tmp_data_dir, sample_embedding):
-        l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_ttl_seconds=0))
-        asyncio.run(
-            l1.add("stale content", "test", sample_embedding)
-        )
-        time.sleep(0.01)
-        results = l1.search(sample_embedding)
-        assert len(results) == 0  # all expired
-
-    def test_persona_overrides_threshold(self, tmp_data_dir, sample_embedding, similar_embedding):
-        l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.99))
-        asyncio.run(
-            l1.add("test", "test", sample_embedding)
-        )
-        # Default threshold too high
-        strict_results = l1.search(similar_embedding)
-        
-        # Creative persona lowers threshold
-        creative = PersonaConfig(name="creative", l1_similarity_override=0.5)
-        creative_results = l1.search(similar_embedding, persona=creative)
-        assert len(creative_results) >= len(strict_results)
-
-    def test_disk_persistence(self, tmp_data_dir, sample_embedding):
-        l1_dir = tmp_data_dir / "cache" / "l1"
-        l1 = L1Cache(l1_dir, CacheConfig())
-        asyncio.run(
-            l1.add("persistent content", "test", sample_embedding)
-        )
-        json_files = list(l1_dir.glob("*.json"))
-        assert len(json_files) == 1
-
-        # Reload from disk
-        l1_reloaded = L1Cache(l1_dir, CacheConfig())
-        assert l1_reloaded.size == 1
-
-
-class TestL2Index:
-    def test_add_and_search(self, tmp_data_dir, sample_embedding, similar_embedding):
-        l2 = L2Index(tmp_data_dir / "cache" / "l2", CacheConfig())
-        asyncio.run(
-            l2.add("Stormtrooper bunnies launch", "session:123", sample_embedding)
-        )
-        results = l2.search(similar_embedding)
-        assert len(results) >= 1
-        assert results[0].cache_tier == "L2"
-
-    def test_index_persistence(self, tmp_data_dir, sample_embedding):
-        l2_dir = tmp_data_dir / "cache" / "l2"
-        l2 = L2Index(l2_dir, CacheConfig())
-        asyncio.run(
-            l2.add("test entry", "test", sample_embedding)
-        )
-        assert (l2_dir / "index.json").exists()
-
-        l2_reloaded = L2Index(l2_dir, CacheConfig())
-        assert l2_reloaded.size == 1
 
 
 # ─────────────────────────────────────────────
@@ -739,34 +653,6 @@ class TestMultiTenant:
         assert "rocky" in str(rocky_dir)
         assert "bw" in str(bw_dir)
 
-    def test_isolated_memories(self, tmp_data_dir, sample_embedding):
-        """Two agents writing to their own L2 indexes don't see each other's data."""
-        rocky_dir = tmp_data_dir / "agents" / "rocky" / "cache" / "l2"
-        bw_dir = tmp_data_dir / "agents" / "bw" / "cache" / "l2"
-        rocky_dir.mkdir(parents=True)
-        bw_dir.mkdir(parents=True)
-
-        rocky_l2 = L2Index(rocky_dir, CacheConfig())
-        bw_l2 = L2Index(bw_dir, CacheConfig())
-
-        asyncio.run(
-            rocky_l2.add("Easter bunnies at $20", "session:r1", sample_embedding)
-        )
-        asyncio.run(
-            bw_l2.add("Shopify order #1234", "session:b1", sample_embedding)
-        )
-
-        rocky_results = rocky_l2.search(sample_embedding)
-        bw_results = bw_l2.search(sample_embedding)
-
-        # Each only sees their own data
-        rocky_content = " ".join(r.content for r in rocky_results)
-        bw_content = " ".join(r.content for r in bw_results)
-        assert "Easter" in rocky_content
-        assert "Shopify" not in rocky_content
-        assert "Shopify" in bw_content
-        assert "Easter" not in bw_content
-
     def test_read_only_agent(self, basic_config):
         shared = basic_config.agents.get("shared")
         assert shared is not None
@@ -794,23 +680,7 @@ class TestPersonas:
         assert creative.max_confidence_for_pass == 0.5
         assert creative.preflight == "permissive"
         assert creative.allow_speculative
-        assert creative.l1_similarity_override == 0.6
 
-    def test_persona_affects_search_threshold(self, tmp_data_dir, sample_embedding, similar_embedding):
-        """Creative persona surfaces more results than strict."""
-        l1 = L1Cache(tmp_data_dir / "cache" / "l1", CacheConfig(l1_similarity_threshold=0.85))
-        asyncio.run(
-            l1.add("brainstorm ideas", "test", sample_embedding)
-        )
-
-        strict = PersonaConfig(name="strict", l1_similarity_override=0.9)
-        creative = PersonaConfig(name="creative", l1_similarity_override=0.5)
-
-        strict_hits = l1.search(similar_embedding, persona=strict)
-        creative_hits = l1.search(similar_embedding, persona=creative)
-
-        # Creative should find at least as many (likely more) results
-        assert len(creative_hits) >= len(strict_hits)
 
 
 # ─────────────────────────────────────────────
