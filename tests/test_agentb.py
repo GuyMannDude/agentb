@@ -870,22 +870,6 @@ class TestSessionManager:
         r2 = sm.ingest("Second", "Response 2")
         assert r1["session_id"] != r2["session_id"]
 
-    def test_search_hot(self, tmp_data_dir):
-        from agentb.sessions import SessionManager, SessionConfig
-        sm = SessionManager(tmp_data_dir, SessionConfig())
-        sm.ingest("Tell me about Easter bunnies", "Easter bunnies are $20-30 each")
-        sm.ingest("What about Shopify?", "Shopify orders are up 15%")
-        results = sm.search_hot("Easter")
-        assert len(results) >= 1
-        assert "Easter" in results[0]["prompt"] or "Easter" in results[0]["response"]
-
-    def test_search_hot_no_cross_contamination(self, tmp_data_dir):
-        from agentb.sessions import SessionManager, SessionConfig
-        sm = SessionManager(tmp_data_dir, SessionConfig())
-        sm.ingest("Secret agent stuff", "Classified response")
-        results = sm.search_hot("Shopify")
-        assert len(results) == 0
-
     def test_get_recent_context(self, tmp_data_dir):
         from agentb.sessions import SessionManager, SessionConfig
         sm = SessionManager(tmp_data_dir, SessionConfig())

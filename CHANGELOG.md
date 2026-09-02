@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — E3 follow-up: `/preflight` reads VEC; the dead L1 writers and `search_hot` are gone
+
+E3 retired HOT, L1 and L2 from `/context` but, by the non-bundling rule,
+left three things standing that only made sense while those tiers were
+read (tracked in `snag-mnemo-l1-dead-writes-after-e3`): the maintenance
+loop's L1 precache step (embed the ten most recent memories into bundles,
+every cycle, every tenant), the `/writeback` per-project bundle writer (one
+embed per referenced project), and `/preflight`'s memory block, which read
+L1 and L2 (top 2 each) at the persona's L1 cosine threshold — default 0.75,
+a bar the embedder's on-topic cosines (~0.6–0.74) essentially never
+cleared, so the reasoner's "MEMORY CONTEXT" was empty in practice. Now:
+`/preflight` shows the reasoner the two nearest memories from the same VEC
+index `/context` serves (a small improvement, not just a cleanup; a test
+pins that the block arrives and is VEC-sourced); both L1 writers are
+removed (`l1_bundles_updated` stays on the wire and reports 0, like the
+retired `cache_hits` keys); `SessionManager.search_hot`, with zero
+production callers since E3, is removed with its two tests. The
+maintenance-loop concurrency test that used the precache step as its
+mid-cycle trigger now hooks session archival, which still runs for every
+tenant. The `L1Cache` and `L2Index` classes, their config fields and the
+persona overrides are now unread and unwritten; they come out in the next
+entry. 733 passed; E2 and E4 harnesses byte-identical.
+
 ## Unreleased — Explore mode reads the pool-normalised similarity; band constants are span fractions (review item E4)
 
 `/context` with `mode: "explore"` (the serendipity lens, v4.8) scored its

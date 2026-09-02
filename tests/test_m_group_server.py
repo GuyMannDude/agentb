@@ -42,20 +42,6 @@ class FakeEmbedding:
     async def health_check(self): return True
 
 
-class TenantCreatingEmbedding(FakeEmbedding):
-    """Simulates a live request creating a tenant while a maintenance cycle
-    is mid-iteration: the first embed after arm() inserts a new tenant."""
-    def __init__(self):
-        self.tenant_mgr = None
-        self.armed = False
-
-    async def embed(self, text, *, use_breaker=True, task_type="document"):
-        if self.armed and self.tenant_mgr is not None:
-            self.armed = False
-            self.tenant_mgr.get("newcomer")
-        return list(VEC)
-
-
 class VerdictReasoning:
     """Returns a canned reply and records every prompt it was shown."""
     active_label = "fake/reason"
@@ -138,24 +124,48 @@ def test_body_under_cap_still_works(tmp_path):
 # ── M2: maintenance cycle vs. concurrent tenant creation ──
 
 def test_maintenance_cycle_survives_tenant_created_mid_cycle(tmp_path):
-    embedder = TenantCreatingEmbedding()
-    app = make_app(tmp_path, embedder=embedder)
+    app = make_app(tmp_path)
     with TestClient(app) as c:
-        # Two tenants with a memory each so precache has embeds to run.
         assert c.post("/writeback", json=_writeback_body("cc"),
                       headers=_auth(MASTER)).status_code == 200
         assert c.post("/writeback", json=_writeback_body("rocky"),
                       headers=_auth(MASTER)).status_code == 200
 
-        embedder.tenant_mgr = app.state.tenants
-        embedder.armed = True
+        # A live request creates a tenant while the cycle is inside another
+        # tenant's step. (The L1 precache step that used to host this
+        # trigger went with the tier; session archival runs for every tenant.)
+        tenants = app.state.tenants
+        real_archive = tenants._tenants["cc"]["sessions"].archive_hot_sessions
+
+        async def creating_archive(summarize):
+            tenants.get("newcomer")
+            return await real_archive(summarize)
+
+        tenants._tenants["cc"]["sessions"].archive_hot_sessions = creating_archive
         # Pre-fix this raised RuntimeError("dictionary changed size during
         # iteration") out of the cycle and killed the maintenance loop.
         asyncio.run(app.state.maintenance_cycle(1))
 
-        assert "newcomer" in app.state.tenants._tenants
+        assert "newcomer" in tenants._tenants
         # And the next cycle picks the newcomer up without incident.
         asyncio.run(app.state.maintenance_cycle(2))
+
+
+# ── E3 follow-up: preflight's memory block comes from VEC ──
+
+def test_preflight_memory_context_comes_from_vec(tmp_path):
+    reasoner = VerdictReasoning()
+    app = make_app(tmp_path, reasoner=reasoner)
+    with TestClient(app) as c:
+        assert c.post("/writeback", json=_writeback_body("cc", summary="the anvil laptop is the launchpad"),
+                      headers=_auth(MASTER)).status_code == 200
+        r = c.post("/preflight", json={"prompt": "which machine is the launchpad",
+                                       "draft_response": "the anvil", "agent_id": "cc"},
+                   headers=_auth(MASTER))
+        assert r.status_code == 200, r.text
+    assert reasoner.prompts, "reasoner never saw a prompt"
+    assert "MEMORY CONTEXT:" in reasoner.prompts[-1]
+    assert "[VEC] " in reasoner.prompts[-1] and "the anvil laptop is the launchpad" in reasoner.prompts[-1]
 
 
 # ── M4: preflight fails UNAVAILABLE, not PASS ──

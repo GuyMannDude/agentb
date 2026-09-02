@@ -237,68 +237,6 @@ class SessionManager:
                 pass
         return sessions
 
-    def search_hot(self, query: str, max_results: int = 10) -> list[dict]:
-        """
-        Search hot session logs via text matching.
-        Searches prompts, responses, AND tool call commands/output.
-        Fast but not semantic — for hot data, speed > precision.
-        """
-        query_lower = query.lower()
-        results = []
-
-        for session_file in sorted(self.hot_dir.glob("*.jsonl"), reverse=True):
-            try:
-                with open(session_file) as f:
-                    for line in f:
-                        try:
-                            entry = json.loads(line)
-                            if entry.get("_type") != "exchange":
-                                continue
-
-                            # Build searchable text from all fields
-                            prompt = entry.get("prompt", "")
-                            response = entry.get("response", "")
-                            metadata = entry.get("metadata", {})
-                            actions = metadata.get("actions", [])
-                            thinking = metadata.get("thinking_summary", "")
-
-                            # Searchable text includes actions and thinking
-                            search_text = f"{prompt} {response}"
-                            action_summaries = []
-                            for action in actions:
-                                cmd = action.get("command", "")
-                                output = action.get("output", "")
-                                action_summaries.append(
-                                    f"[{action.get('tool','?')}] {cmd} → {output}"
-                                )
-                                search_text += f" {cmd} {output}"
-                            if thinking:
-                                search_text += f" {thinking}"
-
-                            if query_lower in search_text.lower():
-                                result = {
-                                    "session_id": session_file.stem,
-                                    "timestamp": entry.get("timestamp", ""),
-                                    "prompt": prompt[:200],
-                                    "response": response[:200],
-                                    "tier": "hot",
-                                }
-                                # Attach action summaries if present
-                                if action_summaries:
-                                    result["actions"] = action_summaries[:5]
-                                if thinking:
-                                    result["thinking"] = thinking[:150]
-
-                                results.append(result)
-                                if len(results) >= max_results:
-                                    return results
-                        except json.JSONDecodeError:
-                            continue
-            except Exception as e:
-                log.warning(f"Hot search error on {session_file}: {e}")
-
-        return results
-
     def get_session_transcript(self, session_id: str) -> list[dict]:
         """Get full transcript of a session."""
         # session_id is interpolated into a path below — reject traversal /

@@ -1224,7 +1224,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         start = time.time()
         persona = get_persona(config, req.persona, req.agent_id)
         tenant = tenants.get(req.agent_id)
-        l1, l2 = tenant["l1"], tenant["l2"]
+        vec_store: VecStore = tenant["vec"]
 
         # Same redaction choke point as /writeback + /ingest: the prompt and
         # draft go verbatim to the (possibly remote) reasoner, and this was
@@ -1240,14 +1240,18 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         user_prompt = f"USER'S PROMPT:\n{prompt}\n\nAGENT'S DRAFT RESPONSE:\n{draft}\n\nReview and provide your preflight verdict as JSON."
 
-        # Cross-reference memory
+        # Cross-reference memory. Until the E3 follow-up this read the L1
+        # precache bundles and the L2 index (top 2 each, cosine >= the
+        # persona's L1 threshold, default 0.75 — a bar the embedder's
+        # on-topic cosines (~0.6-0.74) essentially never cleared, so the
+        # block was empty in practice). Both tiers are retired from recall
+        # (E3); the reasoner now sees the two nearest memories from the same
+        # VEC index /context serves.
         try:
             query_embedding = await embedder.embed(prompt, task_type="query")
-            l1_hits = l1.search(query_embedding, top_k=2, persona=persona)
-            l2_hits = l2.search(query_embedding, top_k=2, persona=persona)
-            context_chunks = l1_hits + l2_hits
-            if context_chunks:
-                context_text = "\n\n".join(f"[{c.cache_tier}] {c.content}" for c in context_chunks)
+            hits = vec_store.search(query_embedding, top_k=2) if vec_store.count() > 0 else []
+            if hits:
+                context_text = "\n\n".join(f"[VEC] {h.text}" for h in hits)
                 user_prompt = f"MEMORY CONTEXT:\n{context_text}\n\n{user_prompt}"
         except Exception as e:
             log.warning(f"Preflight context retrieval failed: {e}")
@@ -1332,7 +1336,6 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         tenant = tenants.get(req.agent_id)
         memory_dir = tenant["memory_dir"]
-        l1 = tenant["l1"]
         vec_store: VecStore = tenant["vec"]
 
         ts = req.timestamp or datetime.now(timezone.utc).isoformat()
@@ -1484,14 +1487,10 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 log.error(f"vec_index dim mismatch on writeback {memory_id}: {e}")
                 raise HTTPException(500, f"vec index dim mismatch: {e}")
 
-            for project in req.projects_referenced:
-                pc = f"Project: {project}\nSession: {req.session_id}\nSummary: {summary}\n"
-                pfacts = [f for f in key_facts if project.lower() in f.lower()]
-                if pfacts:
-                    pc += "Facts:\n" + "\n".join(f"- {f}" for f in pfacts)
-                pe = await embedder.embed(pc, use_breaker=not req.batch, task_type="document")
-                await l1.add(pc, f"project:{project}", pe)
-                l1_updated += 1
+            # E3 follow-up: the per-project L1 bundles this used to write
+            # (one embed per referenced project) fed a tier /context no
+            # longer reads — dead writes. `l1_bundles_updated` stays on the
+            # wire and reports 0.
         except HTTPException:
             raise
         except Exception as e:
@@ -1500,7 +1499,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         return WritebackResponse(
             status="archived", memory_id=memory_id, agent_id=req.agent_id,
             l1_bundles_updated=l1_updated,
-            message=f"Session {req.session_id} archived for agent '{req.agent_id or 'default'}'. {l1_updated} L1 bundles updated.",
+            message=f"Session {req.session_id} archived for agent '{req.agent_id or 'default'}'.",
             category_used=category_used,
             category_suggested=category_suggested_field,
             category_match_keywords=category_match_keywords_field,
@@ -1885,26 +1884,9 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             sessions = tenant["sessions"]
             memory_dir = tenant["memory_dir"]
 
-            # Precache L1 bundles. use_breaker=False: this is background
-            # batch work — it must not trip or be blocked by the breaker
-            # that guards live /context (batch-vs-live isolation doctrine).
-            try:
-                l1 = tenant["l1"]
-                recent = sorted(memory_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)[:10]
-                for mem_file in recent:
-                    mem = json.loads(mem_file.read_text(encoding="utf-8"))
-                    content = mem.get("summary", "")
-                    if not content:
-                        continue
-                    bid = hashlib.sha256(content.encode()).hexdigest()[:12]
-                    if bid in {b.get("id") for b in l1.bundles}:
-                        continue
-                    embedding = await embedder.embed(content, use_breaker=False, task_type="document")
-                    mem_id = mem.get("id", mem_file.stem)
-                    await l1.add(content, f"precache:{mem_id}", embedding,
-                                 memory_id=mem_id, category=mem.get("category"))
-            except Exception as e:
-                log.warning(f"Precache error for '{tenant_key}': {e}")
+            # E3 follow-up: the L1 precache step that ran here (embed the 10
+            # most recent memories into bundles every cycle) is gone — the
+            # tier it filled is no longer read by /context or /preflight.
 
             # Archive expired hot sessions → warm, summarizing each with
             # the reasoner so warm sessions carry a real summary instead of
