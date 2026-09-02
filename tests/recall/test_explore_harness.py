@@ -184,7 +184,10 @@ def test_explore_gate(tmp_path, world):
 
 def _demote_first_adjacent(row: dict) -> dict:
     """Same served list, first adjacent id one slot lower, still inside the
-    window. Set metrics cannot see it; adj_mrr must."""
+    window. Set metrics cannot see it; adj_mrr must. Caveat: when the top
+    two served ids are both adjacent the swap leaves adj_rr at 1.0, so the
+    control is a little weaker than "every query demoted" — it still fails
+    the gate by a wide margin (0.436 vs 0.580, 2026-09-02)."""
     served = list(row["explore"])
     idx = next((i for i, m in enumerate(served) if m in row["adjacent"]), None)
     if idx is not None and idx + 1 < len(served):

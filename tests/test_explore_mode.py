@@ -41,10 +41,13 @@ def test_noise_band_is_hard_zero():
     assert s == 0.0, "below the floor is noise, not serendipity"
 
 
-def test_beyond_the_pool_span_is_noise_whatever_the_floor():
+def test_beyond_the_pool_span_is_noise_whatever_the_floor(monkeypatch):
     # E4: a hit a full SIMILARITY_SPAN below the pool's best normalises to
     # 0.0 — off-topic by the pool's own geometry, so it is zeroed even if a
-    # future floor were loosened past 1.0.
+    # future floor were loosened past 1.0. Loosen it here, or the floor cut
+    # zeroes the case first and the guard is never reached (review, E4).
+    from agentb import ranking
+    monkeypatch.setattr(ranking, "EXPLORE_FLOOR", 1.5)
     s = explore_score(similarity=0.0, top_similarity=1.0, category="idea", access_count=0)
     assert s == 0.0
 

@@ -38,9 +38,15 @@ from tests.recall.test_recall_harness import _make_client, _seed  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--offset", nargs="+", type=float, default=[0.0, 0.2, 0.3, 0.4, 0.5])
-    ap.add_argument("--scale", nargs="+", type=float, default=[0.3, 0.5, 0.65, 0.8, 1.0])
-    ap.add_argument("--floor", nargs="+", type=float, default=[0.6, 0.8, 1.0])
+    # Defaults = the union of the two grids swept on 2026-09-02 (coarse 5×5×3,
+    # then fine 7×4×3 around the middle; 159 points, tables in RESULTS.md),
+    # so a re-run lands on the shipped point (0.05 / 0.30 / 0.80) and the
+    # runner-up (floor 0.90). 8×8×5 = 320 runs, ~15 minutes.
+    ap.add_argument("--offset", nargs="+", type=float,
+                    default=[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5])
+    ap.add_argument("--scale", nargs="+", type=float,
+                    default=[0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0])
+    ap.add_argument("--floor", nargs="+", type=float, default=[0.6, 0.7, 0.8, 0.9, 1.0])
     args = ap.parse_args()
 
     fixtures, explore, vectors = load_fixtures(), load_explore_fixtures(), load_cache()["vectors"]

@@ -29,7 +29,8 @@ explore scored by best-match-first can only pass by collapsing into focus:
 not), **adj MRR** (its rank-sensitive twin), **precision** (served items
 that are on-topic — the noise floor) and **divergence** (Jaccard distance
 from focus@5 — anti-collapse). Grid of 159 points
-(`tools/experiments/e4-explore-rescale/sweep.py`); selection rule fixed
+(`tools/experiments/e4-explore-rescale/sweep.py`; both tables in
+`RESULTS.md` beside it); selection rule fixed
 before the pick: most explore-only finds subject to precision ≥ focus
 mode's own precision on the same queries (0.525) and divergence ≥ 0.5.
 Result: offset 0.05, scale 0.30, floor 0.80 — on real embedder geometry
@@ -42,7 +43,7 @@ thirds of what explore served was noise; it is now cleaner than focus on
 these queries), adj recall@5 0.335 → 0.506, adj MRR 0.369 → 0.611,
 differential 0.563 → 0.438 per query (the raw lens found more explore-only
 items, amid the noise), divergence 0.706 → 0.512 (explore and focus share
-about two of five). Gate floors are the measured run minus one granularity
+three of five on average and differ by two). Gate floors are the measured run minus one granularity
 unit on one query; three controls prove they can fail — and two of them
 taught something. Demoting every first adjacent item one rank fails adj MRR
 alone (0.436), the set metrics unmoved. Removing the adjacency term lands
