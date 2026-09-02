@@ -27,6 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures.json"
+EXPLORE_FIXTURES = HERE / "explore_fixtures.json"  # E4: explore queries over the same memories
 EMBEDDINGS = HERE / "embeddings.json"
 EMBED_MODEL = "nomic-embed-text"
 # Bump whenever the embed INPUT changes without a model rename (task prefixes,
@@ -45,6 +46,10 @@ def load_fixtures() -> dict:
     return json.loads(FIXTURES.read_text(encoding="utf-8"))
 
 
+def load_explore_fixtures() -> dict:
+    return json.loads(EXPLORE_FIXTURES.read_text(encoding="utf-8"))
+
+
 def load_cache() -> dict:
     if not EMBEDDINGS.exists():
         return {"model": EMBED_MODEL, "cache_version": CACHE_VERSION, "dim": None, "vectors": {}}
@@ -54,7 +59,9 @@ def load_cache() -> dict:
 def wanted(fixtures: dict) -> list[tuple[str, str]]:
     docs = [("document", m["summary"]) for m in fixtures["memories"]]
     queries = [("query", q["prompt"]) for q in fixtures["queries"]]
-    return docs + queries
+    # E4: the explore harness asks its own questions of the same memories.
+    explore = [("query", q["prompt"]) for q in load_explore_fixtures()["queries"]]
+    return docs + queries + explore
 
 
 async def _embed_all(pairs: list[tuple[str, str]], url: str) -> list[list[float]]:

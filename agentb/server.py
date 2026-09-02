@@ -976,10 +976,9 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             # taking writes in v4.1. Each removed tier also carried its own
             # relevance scale (HOT a 0.75 sentinel, L1 cosine ≥0.75) into a
             # pool whose VEC hits top out near 0.58; the mixing is now down to
-            # VEC and L3 (L3 emits raw cosine — focus mode normalises both via
-            # pool_similarities, explore mode still reads them raw, see
-            # snag-mnemo-explore-constants-raw-scale). The cache_hits keys stay
-            # for wire compatibility; they report zero.
+            # VEC and L3 (L3 emits raw cosine — both modes normalise the pool
+            # via pool_similarities since E4). The cache_hits keys stay for
+            # wire compatibility; they report zero.
 
             # Intra-pass cross-tier dedup: a memory written via /writeback is
             # in the vec index AND on disk where the L3 walk finds it. Without
@@ -1151,15 +1150,21 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             # novelty over familiarity. Zero-scored chunks are the noise band
             # and must not pad the results.
             access = vec_store.access_counts([c.memory_id for c in all_chunks if c.memory_id])
-            top_sim = max((c.relevance for c in all_chunks), default=0.0)
+            # E4: the lens reads the same pool-normalised similarity focus
+            # mode scores on (cosine, every tier on one scale, anchored on
+            # the pool's best hit — ranking.py), so the band constants are
+            # span fractions and an L3 hit's raw cosine can no longer set a
+            # top the VEC band cannot reach. Wire `relevance` unchanged.
+            sims = pool_similarities([(c.relevance, c.cache_tier) for c in all_chunks])
+            top_sim = max(sims, default=0.0)
             scored = [
                 (explore_score(
-                    similarity=c.relevance,
+                    similarity=sim,
                     top_similarity=top_sim,
                     category=c.category,
                     access_count=access.get(c.memory_id, 0) if c.memory_id else 0,
                 ), c)
-                for c in all_chunks
+                for sim, c in zip(sims, all_chunks)
             ]
             all_chunks = [c for s, c in sorted(
                 scored, key=lambda sc: sc[0], reverse=True) if s > 0.0]

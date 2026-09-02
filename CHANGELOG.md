@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased — Explore mode reads the pool-normalised similarity; band constants are span fractions (review item E4)
+
+`/context` with `mode: "explore"` (the serendipity lens, v4.8) scored its
+adjacency band on the raw tier relevance — VEC's `1/(1+L2)` — with band
+constants sized to that scale (offset 0.03, scale 0.05, floor 0.08). Two
+problems, both found in the Experiment One review and tracked as
+`snag-mnemo-explore-constants-raw-scale`: the constants were relative in
+anchor but absolute in size, so an embedder change silently retuned the
+lens; and after E1 focus mode scored on a cosine, pool-anchored similarity
+(`pool_similarities`, span 0.20) while explore still read raw relevance, so
+an L3 hit (raw cosine, ~0.74 for the same true similarity a VEC hit reports
+as ~0.58) entering the same pool set a top the whole VEC band sat below,
+and the floor zeroed the pool. E3 made that coexistence rare (L3 runs only
+when VEC served nothing); it did not make it impossible.
+
+Explore now reads the same `pool_similarities` output focus reads — every
+tier on one cosine scale, the pool's best hit at 1.0 — and the three band
+constants are fractions of `SIMILARITY_SPAN`. Wire `relevance` unchanged.
+A hit a full span below the top normalises to 0.0 and is zeroed whatever
+the floor says. Per the spec the constants were not ported from the raw
+numbers: they were re-derived by a new harness, `tests/recall/
+test_explore_harness.py`, with explore's own fixtures (16 queries over the
+E2 world, each with a curated ADJACENCY SET labelled from the world's ground
+truth before any explore output was read) and its own criterion, because
+explore scored by best-match-first can only pass by collapsing into focus:
+**differential** (adjacency-set items explore@5 serves that focus@5 does
+not), **adj MRR** (its rank-sensitive twin), **precision** (served items
+that are on-topic — the noise floor) and **divergence** (Jaccard distance
+from focus@5 — anti-collapse). Grid of 159 points
+(`tools/experiments/e4-explore-rescale/sweep.py`); selection rule fixed
+before the pick: most explore-only finds subject to precision ≥ focus
+mode's own precision on the same queries (0.525) and divergence ≥ 0.5.
+Result: offset 0.05, scale 0.30, floor 0.80 — on real embedder geometry
+the on-topic band is ~0.07 cosine wide, so "one step sideways" is 0.01
+cosine and the adjacency term is a 0.06-cosine band-pass that novelty and
+importance then re-order.
+
+Measured, pre-E4 → E4 (same 16 queries): precision 0.322 → 0.556 (two
+thirds of what explore served was noise; it is now cleaner than focus on
+these queries), adj recall@5 0.335 → 0.506, adj MRR 0.369 → 0.611,
+differential 0.563 → 0.438 per query (the raw lens found more explore-only
+items, amid the noise), divergence 0.706 → 0.512 (explore and focus share
+about two of five). Gate floors are the measured run minus one granularity
+unit on one query; three controls prove they can fail — and two of them
+taught something. Demoting every first adjacent item one rank fails adj MRR
+alone (0.436), the set metrics unmoved. Removing the adjacency term lands
+EXACTLY on the differential floor (it loses one find, the headroom is one)
+and fails on adj MRR (0.506) and precision (0.381): differential is the
+existence claim, precision and rank are the discriminators. A
+similarity-only lens fails divergence (0.418) while finding adjacent items
+at least as well as the live lens (adj MRR 0.630, precision 0.562): the
+band floor plus similarity locates the adjacency band by itself; the live
+lens's measured edge is divergence and one more explore-only find over 16
+queries. Modest, real, and now instrumented. Two queries still collapse
+into focus entirely (same five ids, reordered) — recorded, not hidden.
+
+Focus mode is untouched: the E2 harness is byte-identical across the change
+(recall@5 0.971 / MRR 0.901 / hard-subset MRR 0.422). `test_explore_mode.py`
+geometry was moved to the normalised scale (the "far" fixture now sits a
+full span below the top, where the old 0.32 L2 step landed inside the new
+band). `embed_fixtures.py` embeds the explore queries into the same cache
+(95 vectors). Not changed: the 0.55 / 0.30 / 0.15 weights (carried per the
+spec; the similarity-only control suggests the adjacency TARGET term earns
+less than assumed — a re-check for a later experiment, not this one).
+
 ## Unreleased — Recall pool is VEC-only: HOT, L1 and L2 retired from `/context` (review item E3)
 
 `/context` pooled five tiers — HOT (keyword search over live session logs, a

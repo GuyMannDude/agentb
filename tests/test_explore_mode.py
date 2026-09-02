@@ -26,7 +26,7 @@ from tests.test_ranking import (  # reuse the endpoint harness
 # ── unit: explore_score geometry ────────────────────────────────────────────
 
 def test_adjacent_beats_bullseye():
-    top = 0.62
+    top = 1.0  # E4: the lens reads pool-normalised similarity; the best hit is 1.0
     at_target = explore_score(similarity=top - EXPLORE_OFFSET, top_similarity=top,
                               category=None, access_count=0)
     at_top = explore_score(similarity=top, top_similarity=top,
@@ -35,24 +35,32 @@ def test_adjacent_beats_bullseye():
 
 
 def test_noise_band_is_hard_zero():
-    top = 0.62
+    top = 1.0
     s = explore_score(similarity=top - EXPLORE_FLOOR - 0.01, top_similarity=top,
                       category="idea", access_count=0)
     assert s == 0.0, "below the floor is noise, not serendipity"
 
 
+def test_beyond_the_pool_span_is_noise_whatever_the_floor():
+    # E4: a hit a full SIMILARITY_SPAN below the pool's best normalises to
+    # 0.0 — off-topic by the pool's own geometry, so it is zeroed even if a
+    # future floor were loosened past 1.0.
+    s = explore_score(similarity=0.0, top_similarity=1.0, category="idea", access_count=0)
+    assert s == 0.0
+
+
 def test_novelty_prefers_rarely_recalled():
-    fresh = explore_score(similarity=0.59, top_similarity=0.62,
+    fresh = explore_score(similarity=0.95, top_similarity=1.0,
                           category="idea", access_count=0)
-    worn = explore_score(similarity=0.59, top_similarity=0.62,
+    worn = explore_score(similarity=0.95, top_similarity=1.0,
                          category="idea", access_count=50)
     assert fresh > worn
 
 
 def test_idea_outranks_session_log_in_explore():
-    idea = explore_score(similarity=0.59, top_similarity=0.62,
+    idea = explore_score(similarity=0.95, top_similarity=1.0,
                          category="idea", access_count=0)
-    log = explore_score(similarity=0.59, top_similarity=0.62,
+    log = explore_score(similarity=0.95, top_similarity=1.0,
                         category="session_log", access_count=0)
     assert idea > log
 
@@ -85,12 +93,13 @@ def client(tmp_path):
 
 
 def test_explore_mode_reorders_and_focus_is_default(tmp_path, client):
-    # bullseye: exact query vector (relevance 1.0). adjacent: a small step
-    # sideways (VecStore maps relevance ≈ 1/(1+L2), so a 0.05 perturbation
-    # lands ~0.95 — inside the explore band). far: a big step (~0.76 — the
-    # noise band). All same category so ordering is pure lens geometry.
-    adjacent = list(VEC_A); adjacent[1] = 0.05
-    far = list(VEC_A); far[1] = 0.32
+    # bullseye: exact query vector (cosine 1.0). adjacent: a small step
+    # sideways (L2 0.1 → cosine 0.995 → 0.975 on the pool-normalised scale,
+    # inside the explore band and closer to its target than the bullseye).
+    # far: L2 0.7 → cosine 0.755, a full SIMILARITY_SPAN below the top — the
+    # noise band. All same category so ordering is pure lens geometry.
+    adjacent = list(VEC_A); adjacent[1] = 0.1
+    far = list(VEC_A); far[1] = 0.7
     _seed_vec_memory(tmp_path, "bullseye", "the exact thing you asked about",
                      "decision", distance_vec=list(VEC_A))
     _seed_vec_memory(tmp_path, "adjacent", "the thing this reminds you of",

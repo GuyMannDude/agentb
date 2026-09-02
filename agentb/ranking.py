@@ -138,7 +138,7 @@ def pool_similarities(hits: list[tuple[float, str]]) -> list[float]:
     return [max(0.0, 1.0 - (top - c) / SIMILARITY_SPAN) for c in cos]
 
 
-# ── Explore mode (v4.8, the serendipity lens) ──────────────────────────────
+# ── Explore mode (v4.8, the serendipity lens; rescaled in E4, 2026-09) ─────
 # Focus recall answers "what matches best right now"; explore answers "what
 # does this remind the store of". Three deliberate inversions of focus logic:
 #   adjacency — prefer the band just BELOW the top hit (near, not identical);
@@ -147,13 +147,30 @@ def pool_similarities(hits: list[tuple[float, str]]) -> list[float]:
 #              serendipitous one). Explore results still bump access counts,
 #              so repeated exploring naturally rotates through the idea space.
 #
-# The band constants are RELATIVE to the pool's top similarity, never absolute
-# scores — absolute thresholds sat inside the embedder's compressed noise band
-# once before (v4.3.0 relevance_floor, fired 0×) and the S110 re-embed moved
-# the whole band. Relative geometry survives an embedder change.
-EXPLORE_OFFSET = 0.03   # target = top_sim - offset: "one step sideways"
-EXPLORE_SCALE = 0.05    # how fast adjacency falls off around the target
-EXPLORE_FLOOR = 0.08    # sim below top_sim - floor is the noise band: hard zero
+# The band constants are FRACTIONS OF SIMILARITY_SPAN, applied to the same
+# pool-normalised similarity focus mode scores on (pool_similarities: the
+# pool's best hit is 1.0, a hit SIMILARITY_SPAN cosine below it is 0.0, every
+# tier on one cosine scale). Until E4 they were magnitudes on VEC's raw
+# 1/(1+L2) relevance — relative in anchor, absolute in size — so an embedder
+# change silently retuned the lens, and an L3 hit (raw cosine) entering the
+# same pool set a top the VEC band could not reach and the floor zeroed the
+# whole pool (snag-mnemo-explore-constants-raw-scale). The values below were
+# set by the explore harness (tests/recall/test_explore_harness.py, grid in
+# tools/experiments/e4-explore-rescale/sweep.py) against explore's own
+# criterion — differential over focus, precision, anti-collapse — not ported
+# from the raw numbers (0.03 / 0.05 / 0.08).
+# Sweep result (2026-09-02, 16 explore queries over the E2 world, 159 grid
+# points): the target sits a small step below the top — on real embedder
+# geometry the on-topic band is ~0.07 cosine wide, so "one step sideways" is
+# 0.01 cosine, and the adjacency term works as a band-pass 0.06 cosine wide
+# that novelty and importance then re-order. Selection rule, fixed before
+# the pick: most explore-only adjacent finds subject to precision >= focus
+# mode's own precision on the same queries (0.525) and Jaccard divergence
+# from focus >= 0.5. Runner-up (floor 0.9) found more but let precision fall
+# below focus's.
+EXPLORE_OFFSET = 0.05   # target = top - offset: "one step sideways"
+EXPLORE_SCALE = 0.30    # how fast adjacency falls off around the target
+EXPLORE_FLOOR = 0.80    # sim below top - floor is the noise band: hard zero
 W_EXPLORE_ADJACENCY = 0.55
 W_EXPLORE_IMPORTANCE = 0.30
 W_EXPLORE_NOVELTY = 0.15
@@ -169,8 +186,11 @@ def explore_score(
     sim = max(0.0, min(1.0, similarity))
     top = max(sim, min(1.0, top_similarity))
 
-    if sim < top - EXPLORE_FLOOR:
-        return 0.0  # noise band — serendipity is adjacency, not randomness
+    if sim <= 0.0 or sim < top - EXPLORE_FLOOR:
+        # noise band — serendipity is adjacency, not randomness. A hit at 0.0
+        # sits a full SIMILARITY_SPAN below the pool's best: off-topic by the
+        # pool's own geometry, whatever the floor says.
+        return 0.0
 
     target = top - EXPLORE_OFFSET
     adjacency = max(0.0, 1.0 - abs(sim - target) / EXPLORE_SCALE)
