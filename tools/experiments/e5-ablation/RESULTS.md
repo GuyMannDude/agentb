@@ -1,4 +1,4 @@
-# E5 — explore weight + band-width ablation — RESULTS (2026-09-02, S296)
+# E5 — explore weight + band-width ablation — RESULTS (2026-09-02, S296; class redefined S297)
 
 Spec: `brain/spec-mnemo-explore-e5-ablation.md` (Opie). Builder: CC. Grid: `sweep.py`,
 60 runs (H0 + 9 weight sets × 6 widths) over the 23-query explore fixture set
@@ -43,17 +43,40 @@ bought with −0.04 precision and −0.05 adjMRR against H0. That is the measure
 price of serendipity at the shipped constants. Whether to pay it is a product
 question, not a constant.
 
-## The per-query anti-collapse floor does NOT land
+## The per-query anti-collapse floor — redefined (S297, Opie #3194), and it lands
 
-Under the computed definition (adjacency has any member outside focus@5),
-**20 of 23 queries are divergence-class** — the class is too loose to gate on;
-it is nearly the whole set. Three collapse at the shipped point (e03, e12, e23)
-and nothing clears them without an adjMRR regression. Opie's coverage
-predictions e19 and e22 compute as divergence-class (computed wins, per #3188).
-Recommendation: redefine the class as "adjacency has a member outside focus@5
-**that sits inside the band (span ≥ 0.65)**" — a member the lens *could* serve.
-m-backup (span 0.350) fails that test; e03 becomes coverage-class and the
-collapse is honest, not a miss.
+The first cut (S296) — divergence-class = "adjacency has any member outside
+focus@5" — made **20 of 23** queries divergence-class: too loose to gate on.
+Redefinition, accepted by Opie in #3194: the outside-focus member must also sit
+**inside the shipped band (span ≥ 0.65)** — a member the lens could actually
+serve (H2 showed widening the band to reach the others destroys divergence).
+Span is `pool_similarities` INPUT geometry, shared by focus and explore, so the
+class is not read off the explore output under test. Computed in `sweep.py`
+the way `/context` does (L2 on the seeded vectors → 1/(1+d) → anchored on the
+pool's best hit, session_log never in the pool); cross-check: m-backup on e03
+computes 0.350, the value the S296 E4 probe measured by a different route.
+
+**Tally under the new definition: 3 divergence-class / 20 coverage** — e02
+(d-archive, span 0.772), e08 (d-secrets, 0.962), e23 (d-archive, 0.835).
+Opie's "non-trivial-but-real" range was 3–8; this is the floor of it. Small but
+it has a tooth: **e23 collapses at the shipped point** (the lens serves focus's
+five and misses a servable adjacent member at span 0.835) and stays collapsed
+at every width. e03 and e12 become coverage-class (m-backup 0.350, d-git-add
+0.549 — below the band): their collapses are honest, not misses. Next-nearest
+misses: e18 d-brain-wins 0.558, e10 m-pip 0.546 — a band edge at 0.55 would
+make them divergence-class; 0.65 is the shipped band's own edge, not tuned.
+Label disagreements (computed wins, per #3188): e18, e20, e24 predicted
+divergence, compute coverage.
+
+**Selection re-run under the new class: still NO feasible point — the verdict
+stands.** With e03/e12 reclassified, two grid points clear the guardrails and
+zero collapses: imp=0 at width 0.80 and 1.00 (divergence 0.408, adjMRR 0.529,
+adjR@5 0.483, precision 0.535). Both sit BELOW the H0 sim-only control on
+divergence (0.419): they are focus with a novelty tiebreak, not a lens. The
+docstring's H0 control ("explore must beat it on divergence or it is not
+earning its complexity") had been stated since S296 but not branched on in
+code — it is now the fifth feasibility term. Before the redefinition no point
+reached it, so the S296 table's verdict is unchanged by the fix.
 
 ## What changed in the repo
 
@@ -62,6 +85,9 @@ collapse is honest, not a miss.
 - `tests/recall/test_explore_harness.py`: integrity check — no expected/adjacent
   id may be `session_log` (hidden by `/context` by default).
 - `tools/experiments/e5-ablation/sweep.py`: the grid. Re-run lands on this table.
+  S297: `query_spans` + span-aware `classify` (band edge `BAND_MIN` captured at
+  import from the shipped constants), per-query class/span print, H0 control
+  enforced in the selection rule. No runtime change; live 4.16.0 unaffected.
 - Constants: **unchanged.** `agentb/ranking.py` is byte-identical to 4.16.0.
 
 ## Grid (abridged — full table: run `sweep.py`)
