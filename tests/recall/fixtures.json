@@ -17,11 +17,23 @@
     "(recall@5 0.9714, MRR 0.9010, 35 queries, 2026-09-01, ranker E1) minus one",
     "full query miss (1/35), so one rank moving is churn and two queries lost",
     "is a regression. Re-baseline only with a ranker change that the report",
-    "shows improving; write the new measured values here when you do."
+    "shows improving; write the new measured values here when you do.",
+    "",
+    "hard: true marks the queries where the first honest run did NOT serve the",
+    "answer at rank 1 (q06/q08/q13/q19/q33) plus the multi-hit q14 — the cases",
+    "that discriminate. The primary floors average 35 queries, so a regression",
+    "on these six can hide behind the easy majority (Opie, #3167). gate.",
+    "hard_mrr_min floors MRR over that subset alone; headroom = one rank step",
+    "at the top (rr 1.0 -> 0.5) on one hard query = 0.5 / 6, finer than the",
+    "primary's one-query headroom, which on this subset is the same as the",
+    "primary gate and therefore adds nothing.",
+    "First honest hard-subset run: MRR 0.4222 (6 queries, 2026-09-02, ranker E1,",
+    "same serving as the primary baseline) minus 0.0833 = 0.338."
   ],
   "gate": {
     "recall_at_5_min": 0.942,
-    "mrr_min": 0.872
+    "mrr_min": 0.872,
+    "hard_mrr_min": 0.338
   },
   "memories": [
     {
@@ -162,7 +174,7 @@
       "category": "identity",
       "age_days": 200,
       "access_count": 8,
-      "summary": "The owner is a 73 year old maker in a coastal town who prints seasonal collectibles; not a developer of modern stacks, but deep computing roots."
+      "summary": "The owner is a retired maker who prints small seasonal collectibles; not a developer of modern stacks, but deep computing roots."
     },
     {
       "id": "id-quill",
@@ -380,7 +392,8 @@
       "expected": [
         "m-backup"
       ],
-      "note": "decoy dk-backup-hourly"
+      "note": "decoy dk-backup-hourly",
+      "hard": true
     },
     {
       "id": "q07",
@@ -396,7 +409,8 @@
       "expected": [
         "d-secrets"
       ],
-      "note": "trap: 'archive' pulls d-archive; the answer is the carve-out"
+      "note": "trap: 'archive' pulls d-archive; the answer is the carve-out",
+      "hard": true
     },
     {
       "id": "q09",
@@ -436,7 +450,8 @@
       "expected": [
         "d-untested"
       ],
-      "note": "paraphrase"
+      "note": "paraphrase",
+      "hard": true
     },
     {
       "id": "q14",
@@ -445,7 +460,8 @@
         "i-lockup",
         "i-gpu"
       ],
-      "note": "multi-hit; decoy dk-lockup-old"
+      "note": "multi-hit; decoy dk-lockup-old",
+      "hard": true
     },
     {
       "id": "q15",
@@ -485,7 +501,8 @@
       "expected": [
         "id-quill"
       ],
-      "note": "paraphrase: 'runs day to day' vs 'project manager'"
+      "note": "paraphrase: 'runs day to day' vs 'project manager'",
+      "hard": true
     },
     {
       "id": "q20",
@@ -597,7 +614,8 @@
       "expected": [
         "m-bellows-ssh"
       ],
-      "note": "stale decoy dk-old-address: 300 days, worn, wrong"
+      "note": "stale decoy dk-old-address: 300 days, worn, wrong",
+      "hard": true
     },
     {
       "id": "q34",

@@ -165,28 +165,37 @@ def run_harness(client: TestClient, index_path: Path, fixtures: dict) -> list[di
             "served": served,
             "expected": expected,
             "note": q["note"],
+            "hard": bool(q.get("hard")),
         })
     return rows
 
 
 def summarize(rows: list[dict]) -> dict:
     n = len(rows)
+    hard = [r for r in rows if r["hard"]]
     return {
         "queries": n,
         "recall_at_5": sum(r["recall"] for r in rows) / n,
         "mrr": sum(r["rr"] for r in rows) / n,
         "top1": sum(1 for r in rows if r["rr"] == 1.0) / n,
         "misses": [r["id"] for r in rows if r["recall"] < 1.0],
+        # The discriminating subset (fixtures.json: hard=true). Averaged over
+        # 35 queries a rank move on one of these is noise; over the subset it
+        # is the signal. See _about in fixtures.json.
+        "hard_n": len(hard),
+        "hard_mrr": sum(r["rr"] for r in hard) / len(hard) if hard else None,
     }
 
 
 def report(rows: list[dict], summary: dict, title: str) -> str:
     lines = [f"── {title} ──",
              f"recall@{TOP_K} {summary['recall_at_5']:.3f}   MRR {summary['mrr']:.3f}   "
-             f"top-1 {summary['top1']:.0%}   n={summary['queries']}"]
+             f"top-1 {summary['top1']:.0%}   n={summary['queries']}   "
+             f"hard MRR {summary['hard_mrr']:.3f} (n={summary['hard_n']})"]
     for r in rows:
         flag = " " if r["recall"] == 1.0 else "✗"
-        lines.append(f"{flag} {r['id']}  rr={r['rr']:.2f}  served={r['served']}  want={r['expected']}  {r['note']}")
+        mark = "H" if r["hard"] else " "
+        lines.append(f"{flag}{mark}{r['id']}  rr={r['rr']:.2f}  served={r['served']}  want={r['expected']}  {r['note']}")
     return "\n".join(lines)
 
 
@@ -221,6 +230,11 @@ def test_recall_gate(tmp_path, world):
         f"recall@{TOP_K} {summary['recall_at_5']:.3f} fell below gate {gate['recall_at_5_min']}\n{text}")
     assert summary["mrr"] >= gate["mrr_min"], (
         f"MRR {summary['mrr']:.3f} fell below gate {gate['mrr_min']}\n{text}")
+    assert gate["hard_mrr_min"] is not None and summary["hard_n"] > 0, (
+        "hard-subset gate unset — mark the discriminating queries hard=true and record the floor")
+    assert summary["hard_mrr"] >= gate["hard_mrr_min"], (
+        f"hard-subset MRR {summary['hard_mrr']:.3f} fell below gate {gate['hard_mrr_min']} — "
+        f"a regression on the discriminating queries, masked by the easy majority\n{text}")
 
 
 def test_gate_can_fail_when_similarity_is_removed(tmp_path, world):
@@ -239,3 +253,6 @@ def test_gate_can_fail_when_similarity_is_removed(tmp_path, world):
         f"control recall@{TOP_K} {summary['recall_at_5']:.3f} passed the gate — the harness cannot fail")
     assert summary["mrr"] < gate["mrr_min"], (
         f"control MRR {summary['mrr']:.3f} passed the gate {gate['mrr_min']} — the harness cannot fail")
+    assert summary["hard_mrr"] < gate["hard_mrr_min"], (
+        f"control hard-subset MRR {summary['hard_mrr']:.3f} passed the gate {gate['hard_mrr_min']} — "
+        "the hard gate cannot fail")
