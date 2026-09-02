@@ -160,6 +160,7 @@ def _assert_gate(summary: dict, gate: dict, text: str) -> None:
 def test_explore_fixture_integrity(world):
     fixtures, explore, vectors = world
     ids = {m["id"] for m in fixtures["memories"]}
+    by_id = {m["id"]: m for m in fixtures["memories"]}
     seen = set()
     for q in explore["queries"]:
         assert q["id"] not in seen, f"duplicate query id {q['id']}"
@@ -171,6 +172,10 @@ def test_explore_fixture_integrity(world):
         assert not set(q["adjacent"]) & set(q["expected"]), (
             f"{q['id']}: an id cannot be both the bullseye and adjacent to it")
         assert cache_key("query", q["prompt"]) in vectors, f"{q['id']}: no vector — run {REGEN}"
+        hidden = [m for m in q["expected"] + q["adjacent"] if by_id[m]["category"] == "session_log"]
+        assert not hidden, (
+            f"{q['id']}: {hidden} are session_log — /context hides that category by default, so the "
+            "fixture can never score (E5: e17 was unservable for exactly this reason)")
 
 
 def test_explore_gate(tmp_path, world):

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — E5 explore ablation: negative result, constants unchanged, fixtures 16→23
+
+Problem: E4 left a standing question — does explore's adjacency term earn its
+0.55 weight, or is the edge coming from novelty or band width? Fix: a 60-run
+ablation (`tools/experiments/e5-ablation/`) over a 23-query fixture set. Verdict:
+no point satisfies the pre-fixed selection rule; band width hurts (falsified),
+novelty buys divergence only by trading precision, and the shipped lens stays.
+The explore gate is re-baselined on the 23 (fixture change, disclosed); the
+fixture integrity test now rejects `session_log` targets, which `/context`
+hides by default (one of the eight new fixtures was unservable for that reason).
+
 ## v4.16.0 — Recall science: VEC-only pool, explore rescale, L1/L2 retired (2026-09-02)
 
 Problem: the recall ranker was carrying inert and dead machinery — a similarity term that never moved rank, three cache tiers nothing read, explore-mode constants on a raw scale an embedder change silently retuned, and a `/preflight` memory lookup whose threshold sat above the embedder's band. Fix: the review items below, each gated by a measured harness. Sections are in reverse order of landing.

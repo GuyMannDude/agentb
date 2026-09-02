@@ -1,315 +1,437 @@
 {
-  "_about": [
-    "E4 explore harness fixtures (S295, 2026-09-02). Same fictional workshop",
-    "world as fixtures.json — the memories are loaded from there, only the",
-    "queries live here. Explore mode is the serendipity lens: it must surface",
-    "the ADJACENT memory (on-topic, one step sideways, rarely recalled) that a",
-    "best-match ranker buries. So explore cannot be scored by best-match-first;",
-    "that would collapse it into focus.",
-    "",
-    "Each query names: expected (the bullseye ids focus should serve — not",
-    "credited to explore), adjacent (the ADJACENCY SET: curated from the",
-    "world's ground truth, i.e. what a person who knows the world would call",
-    "'related, not the answer' — labelled BEFORE any explore output was read,",
-    "per doctrine-probe-for-the-answer), ok (on-topic neighbours that earn no",
-    "credit but are not noise). Everything else served is noise.",
-    "",
-    "Per query, with E = explore@5 and F = focus@5 on the same prompt:",
-    "  adj_recall  = |E ∩ adjacent| / |adjacent|",
-    "  adj_rr      = 1 / rank in E of the first adjacent id (0 if none)",
-    "  differential= |(E ∩ adjacent) − F|   — adjacent items ONLY explore found",
-    "  precision   = |E ∩ (expected ∪ adjacent ∪ ok)| / |E|   — the noise floor",
-    "  divergence  = 1 − |E ∩ F| / |E ∪ F|   — anti-collapse (explore ≠ focus)",
-    "The gate floors the MEANS. differential is the number that proves explore",
-    "earns its existence; adj_mrr is the rank-sensitive twin the demotion",
-    "control can move; precision keeps the gates shut to junk; divergence",
-    "fails if explore quietly became focus.",
-    "",
-    "gate: measured floors, never tuned to pass. First honest run (2026-09-02,",
-    "16 queries, E4 lens offset 0.05 / scale 0.30 / floor 0.80 on the pool-",
-    "normalised scale): differential 0.4375/query, adj MRR 0.6115, adj",
-    "recall@5 0.506, precision 0.5563, divergence 0.5119. Headroom = one",
-    "granularity unit on one query (1/16, 0.5/16, 0.2/16, 0.2/16): one rank",
-    "move is churn, a second is a regression. Reference on the same queries:",
-    "focus mode precision 0.525, adjacency recall@5 0.498. Pre-E4 (raw-scale",
-    "lens): differential 0.5625, adj MRR 0.369, adj recall 0.335, precision",
-    "0.322, divergence 0.706 — more explore-only finds, but two thirds of what",
-    "it served was noise. Re-baseline only with a lens change the report shows",
-    "improving; write the new measured values here when you do.",
-    "",
-    "Controls (same run): first-adjacent-demoted → adj MRR 0.436 (fails), set",
-    "metrics unchanged. adjacency weight 0 → differential 0.375 (ON the floor:",
-    "loses exactly one find), adj MRR 0.506 + precision 0.381 (fail). Similarity-",
-    "only lens → divergence 0.418 (fails) while adj MRR 0.630 / precision 0.562",
-    "PASS: similarity + band floor finds the adjacency band by itself; the live",
-    "lens's edge is divergence and one extra explore-only find."
-  ],
-  "gate": {
-    "differential_min": 0.375,
-    "adj_mrr_min": 0.5802,
-    "precision_min": 0.5438,
-    "divergence_min": 0.4995
+ "_about": [
+  "E4 explore harness fixtures (S295, 2026-09-02). Same fictional workshop",
+  "world as fixtures.json — the memories are loaded from there, only the",
+  "queries live here. Explore mode is the serendipity lens: it must surface",
+  "the ADJACENT memory (on-topic, one step sideways, rarely recalled) that a",
+  "best-match ranker buries. So explore cannot be scored by best-match-first;",
+  "that would collapse it into focus.",
+  "",
+  "Each query names: expected (the bullseye ids focus should serve — not",
+  "credited to explore), adjacent (the ADJACENCY SET: curated from the",
+  "world's ground truth, i.e. what a person who knows the world would call",
+  "'related, not the answer' — labelled BEFORE any explore output was read,",
+  "per doctrine-probe-for-the-answer), ok (on-topic neighbours that earn no",
+  "credit but are not noise). Everything else served is noise.",
+  "",
+  "Per query, with E = explore@5 and F = focus@5 on the same prompt:",
+  "  adj_recall  = |E ∩ adjacent| / |adjacent|",
+  "  adj_rr      = 1 / rank in E of the first adjacent id (0 if none)",
+  "  differential= |(E ∩ adjacent) − F|   — adjacent items ONLY explore found",
+  "  precision   = |E ∩ (expected ∪ adjacent ∪ ok)| / |E|   — the noise floor",
+  "  divergence  = 1 − |E ∩ F| / |E ∪ F|   — anti-collapse (explore ≠ focus)",
+  "The gate floors the MEANS. differential is the number that proves explore",
+  "earns its existence; adj_mrr is the rank-sensitive twin the demotion",
+  "control can move; precision keeps the gates shut to junk; divergence",
+  "fails if explore quietly became focus.",
+  "",
+  "gate: measured floors, never tuned to pass. First honest run (2026-09-02,",
+  "16 queries, E4 lens offset 0.05 / scale 0.30 / floor 0.80 on the pool-",
+  "normalised scale): differential 0.4375/query, adj MRR 0.6115, adj",
+  "recall@5 0.506, precision 0.5563, divergence 0.5119. Headroom = one",
+  "granularity unit on one query (1/16, 0.5/16, 0.2/16, 0.2/16): one rank",
+  "move is churn, a second is a regression. Reference on the same queries:",
+  "focus mode precision 0.525, adjacency recall@5 0.498. Pre-E4 (raw-scale",
+  "lens): differential 0.5625, adj MRR 0.369, adj recall 0.335, precision",
+  "0.322, divergence 0.706 — more explore-only finds, but two thirds of what",
+  "it served was noise. Re-baseline only with a lens change the report shows",
+  "improving; write the new measured values here when you do.",
+  "",
+  "Controls (same run): first-adjacent-demoted → adj MRR 0.436 (fails), set",
+  "metrics unchanged. adjacency weight 0 → differential 0.375 (ON the floor:",
+  "loses exactly one find), adj MRR 0.506 + precision 0.381 (fail). Similarity-",
+  "only lens → divergence 0.418 (fails) while adj MRR 0.630 / precision 0.562",
+  "PASS: similarity + band floor finds the adjacency band by itself; the live",
+  "lens's edge is divergence and one extra explore-only find.",
+  "",
+  "E5 re-baseline (2026-09-02, S296): fixture set grew 16 -> 23 (Opie's e18-e24;",
+  "e17 dropped because its expected AND adjacent ids are session_log, which",
+  "/context hides by default -- unservable; e20 lost sl-tests for the same",
+  "reason). The LENS did not change. Measured at the shipped E4 lens on the 23:",
+  "differential 0.3478/query, adj MRR 0.5232, adj recall@5",
+  "0.4609, precision 0.4826, divergence 0.5302. Floors = measured",
+  "minus one granularity unit on one query (n=23). Focus on the same 23: precision",
+  "0.4783. The new queries are harder for BOTH lenses; the 16-query floors above",
+  "are history, not a regression. E5 sweep verdict: tools/experiments/e5-ablation/RESULTS.md."
+ ],
+ "gate": {
+  "differential_min": 0.3043,
+  "adj_mrr_min": 0.5014,
+  "precision_min": 0.4739,
+  "divergence_min": 0.5215
+ },
+ "queries": [
+  {
+   "id": "e01",
+   "prompt": "the laptop keeps freezing",
+   "expected": [
+    "i-lockup",
+    "i-gpu"
+   ],
+   "adjacent": [
+    "dk-lockup-old",
+    "m-anvil"
+   ],
+   "ok": [
+    "cs-apt",
+    "i-restart"
+   ],
+   "note": "the old desktop's PSU freeze is the serendipity; focus treats it as a decoy"
   },
-  "queries": [
-    {
-      "id": "e01",
-      "prompt": "the laptop keeps freezing",
-      "expected": [
-        "i-lockup",
-        "i-gpu"
-      ],
-      "adjacent": [
-        "dk-lockup-old",
-        "m-anvil"
-      ],
-      "ok": [
-        "cs-apt",
-        "i-restart"
-      ],
-      "note": "the old desktop's PSU freeze is the serendipity; focus treats it as a decoy"
-    },
-    {
-      "id": "e02",
-      "prompt": "how are we backed up",
-      "expected": [
-        "m-backup"
-      ],
-      "adjacent": [
-        "dk-backup-hourly",
-        "d-archive",
-        "idea-stick"
-      ],
-      "ok": [
-        "m-bellows"
-      ],
-      "note": "hourly local + archive doctrine + the stick idea are all backup-adjacent"
-    },
-    {
-      "id": "e03",
-      "prompt": "archiving",
-      "expected": [
-        "d-archive"
-      ],
-      "adjacent": [
-        "dk-archive-tool",
-        "d-secrets",
-        "m-backup"
-      ],
-      "ok": [
-        "dk-backup-hourly"
-      ],
-      "note": "the carve-out and the helper script sit one step from the doctrine"
-    },
-    {
-      "id": "e04",
-      "prompt": "the windows workstation",
-      "expected": [
-        "m-bellows"
-      ],
-      "adjacent": [
-        "m-bellows-ssh",
-        "dk-port",
-        "dk-old-address",
-        "i-ps1"
-      ],
-      "ok": [
-        "m-backup",
-        "unk-blob"
-      ],
-      "note": "everything that lives on or happened to Bellows, stale address included"
-    },
-    {
-      "id": "e05",
-      "prompt": "people in the owner's life",
-      "expected": [
-        "r-daughter"
-      ],
-      "adjacent": [
-        "r-photographer",
-        "r-drummer",
-        "id-owner"
-      ],
-      "ok": [
-        "id-quill"
-      ],
-      "note": "relationships fan out from any one person"
-    },
-    {
-      "id": "e06",
-      "prompt": "selling things through the gallery",
-      "expected": [
-        "dec-gallery"
-      ],
-      "adjacent": [
-        "dec-ip-art",
-        "r-photographer",
-        "r-daughter"
-      ],
-      "ok": [],
-      "note": "pricing rule, whose photos, the first client"
-    },
-    {
-      "id": "e07",
-      "prompt": "after a restart or an upgrade",
-      "expected": [
-        "i-restart"
-      ],
-      "adjacent": [
-        "d-untested",
-        "d-body",
-        "cs-framework-behind"
-      ],
-      "ok": [
-        "cs-apt",
-        "i-lockup"
-      ],
-      "note": "the doctrines you re-fire after a restart"
-    },
-    {
-      "id": "e08",
-      "prompt": "security posture",
-      "expected": [
-        "dec-sec"
-      ],
-      "adjacent": [
-        "d-secrets",
-        "cs-apt",
-        "cs-pdf"
-      ],
-      "ok": [
-        "m-bellows-ssh",
-        "d-git-add"
-      ],
-      "note": "routing decision is the bullseye; the live exposures are adjacent"
-    },
-    {
-      "id": "e09",
-      "prompt": "the coding agent's job",
-      "expected": [
-        "id-quill"
-      ],
-      "adjacent": [
-        "dec-model",
-        "dec-sec",
-        "m-anvil"
-      ],
-      "ok": [
-        "dec-ranker"
-      ],
-      "note": "what the agent runs on, which model, what routes to it"
-    },
-    {
-      "id": "e10",
-      "prompt": "ports and network addresses",
-      "expected": [
-        "m-bellows",
-        "unk-blob"
-      ],
-      "adjacent": [
-        "dk-port",
-        "m-pip",
-        "m-bus",
-        "m-bellows-ssh",
-        "dk-old-address"
-      ],
-      "ok": [
-        "m-forge-dead"
-      ],
-      "note": "a hub topic: five memories carry a port or an address"
-    },
-    {
-      "id": "e11",
-      "prompt": "the documentary",
-      "expected": [
-        "idea-doc"
-      ],
-      "adjacent": [
-        "idea-voice",
-        "id-owner",
-        "r-photographer"
-      ],
-      "ok": [
-        "idea-stick"
-      ],
-      "note": "the sibling idea and the people it would be about"
-    },
-    {
-      "id": "e12",
-      "prompt": "shell and scripting mistakes",
-      "expected": [
-        "i-pkill"
-      ],
-      "adjacent": [
-        "d-git-add",
-        "i-ps1"
-      ],
-      "ok": [
-        "d-scream"
-      ],
-      "note": "three ways a one-liner bit us"
-    },
-    {
-      "id": "e13",
-      "prompt": "the memory server",
-      "expected": [
-        "m-bellows"
-      ],
-      "adjacent": [
-        "dec-ranker",
-        "d-brain-wins",
-        "idea-stick",
-        "cs-promo"
-      ],
-      "ok": [
-        "m-backup",
-        "unk-blob"
-      ],
-      "note": "what the server decides, what outranks it, where it is going"
-    },
-    {
-      "id": "e14",
-      "prompt": "machines that are gone",
-      "expected": [
-        "m-forge-dead"
-      ],
-      "adjacent": [
-        "dk-old-address",
-        "dk-lockup-old",
-        "m-bellows-ssh"
-      ],
-      "ok": [],
-      "note": "dead addresses and dead boxes; the stale LAN address is exactly the reminder"
-    },
-    {
-      "id": "e15",
-      "prompt": "doctrines about being honest when things break",
-      "expected": [
-        "d-scream"
-      ],
-      "adjacent": [
-        "d-body",
-        "d-untested",
-        "d-brain-wins"
-      ],
-      "ok": [
-        "i-restart"
-      ],
-      "note": "the sibling doctrines about not trusting a green light"
-    },
-    {
-      "id": "e16",
-      "prompt": "the gpu",
-      "expected": [
-        "i-gpu"
-      ],
-      "adjacent": [
-        "m-bellows",
-        "i-lockup"
-      ],
-      "ok": [
-        "m-anvil"
-      ],
-      "note": "the other GPU in the fleet and the incident this one caused"
-    }
-  ]
+  {
+   "id": "e02",
+   "prompt": "how are we backed up",
+   "expected": [
+    "m-backup"
+   ],
+   "adjacent": [
+    "dk-backup-hourly",
+    "d-archive",
+    "idea-stick"
+   ],
+   "ok": [
+    "m-bellows"
+   ],
+   "note": "hourly local + archive doctrine + the stick idea are all backup-adjacent"
+  },
+  {
+   "id": "e03",
+   "prompt": "archiving",
+   "expected": [
+    "d-archive"
+   ],
+   "adjacent": [
+    "dk-archive-tool",
+    "d-secrets",
+    "m-backup"
+   ],
+   "ok": [
+    "dk-backup-hourly"
+   ],
+   "note": "the carve-out and the helper script sit one step from the doctrine"
+  },
+  {
+   "id": "e04",
+   "prompt": "the windows workstation",
+   "expected": [
+    "m-bellows"
+   ],
+   "adjacent": [
+    "m-bellows-ssh",
+    "dk-port",
+    "dk-old-address",
+    "i-ps1"
+   ],
+   "ok": [
+    "m-backup",
+    "unk-blob"
+   ],
+   "note": "everything that lives on or happened to Bellows, stale address included"
+  },
+  {
+   "id": "e05",
+   "prompt": "people in the owner's life",
+   "expected": [
+    "r-daughter"
+   ],
+   "adjacent": [
+    "r-photographer",
+    "r-drummer",
+    "id-owner"
+   ],
+   "ok": [
+    "id-quill"
+   ],
+   "note": "relationships fan out from any one person"
+  },
+  {
+   "id": "e06",
+   "prompt": "selling things through the gallery",
+   "expected": [
+    "dec-gallery"
+   ],
+   "adjacent": [
+    "dec-ip-art",
+    "r-photographer",
+    "r-daughter"
+   ],
+   "ok": [],
+   "note": "pricing rule, whose photos, the first client"
+  },
+  {
+   "id": "e07",
+   "prompt": "after a restart or an upgrade",
+   "expected": [
+    "i-restart"
+   ],
+   "adjacent": [
+    "d-untested",
+    "d-body",
+    "cs-framework-behind"
+   ],
+   "ok": [
+    "cs-apt",
+    "i-lockup"
+   ],
+   "note": "the doctrines you re-fire after a restart"
+  },
+  {
+   "id": "e08",
+   "prompt": "security posture",
+   "expected": [
+    "dec-sec"
+   ],
+   "adjacent": [
+    "d-secrets",
+    "cs-apt",
+    "cs-pdf"
+   ],
+   "ok": [
+    "m-bellows-ssh",
+    "d-git-add"
+   ],
+   "note": "routing decision is the bullseye; the live exposures are adjacent"
+  },
+  {
+   "id": "e09",
+   "prompt": "the coding agent's job",
+   "expected": [
+    "id-quill"
+   ],
+   "adjacent": [
+    "dec-model",
+    "dec-sec",
+    "m-anvil"
+   ],
+   "ok": [
+    "dec-ranker"
+   ],
+   "note": "what the agent runs on, which model, what routes to it"
+  },
+  {
+   "id": "e10",
+   "prompt": "ports and network addresses",
+   "expected": [
+    "m-bellows",
+    "unk-blob"
+   ],
+   "adjacent": [
+    "dk-port",
+    "m-pip",
+    "m-bus",
+    "m-bellows-ssh",
+    "dk-old-address"
+   ],
+   "ok": [
+    "m-forge-dead"
+   ],
+   "note": "a hub topic: five memories carry a port or an address"
+  },
+  {
+   "id": "e11",
+   "prompt": "the documentary",
+   "expected": [
+    "idea-doc"
+   ],
+   "adjacent": [
+    "idea-voice",
+    "id-owner",
+    "r-photographer"
+   ],
+   "ok": [
+    "idea-stick"
+   ],
+   "note": "the sibling idea and the people it would be about"
+  },
+  {
+   "id": "e12",
+   "prompt": "shell and scripting mistakes",
+   "expected": [
+    "i-pkill"
+   ],
+   "adjacent": [
+    "d-git-add",
+    "i-ps1"
+   ],
+   "ok": [
+    "d-scream"
+   ],
+   "note": "three ways a one-liner bit us"
+  },
+  {
+   "id": "e13",
+   "prompt": "the memory server",
+   "expected": [
+    "m-bellows"
+   ],
+   "adjacent": [
+    "dec-ranker",
+    "d-brain-wins",
+    "idea-stick",
+    "cs-promo"
+   ],
+   "ok": [
+    "m-backup",
+    "unk-blob"
+   ],
+   "note": "what the server decides, what outranks it, where it is going"
+  },
+  {
+   "id": "e14",
+   "prompt": "machines that are gone",
+   "expected": [
+    "m-forge-dead"
+   ],
+   "adjacent": [
+    "dk-old-address",
+    "dk-lockup-old",
+    "m-bellows-ssh"
+   ],
+   "ok": [],
+   "note": "dead addresses and dead boxes; the stale LAN address is exactly the reminder"
+  },
+  {
+   "id": "e15",
+   "prompt": "doctrines about being honest when things break",
+   "expected": [
+    "d-scream"
+   ],
+   "adjacent": [
+    "d-body",
+    "d-untested",
+    "d-brain-wins"
+   ],
+   "ok": [
+    "i-restart"
+   ],
+   "note": "the sibling doctrines about not trusting a green light"
+  },
+  {
+   "id": "e16",
+   "prompt": "the gpu",
+   "expected": [
+    "i-gpu"
+   ],
+   "adjacent": [
+    "m-bellows",
+    "i-lockup"
+   ],
+   "ok": [
+    "m-anvil"
+   ],
+   "note": "the other GPU in the fleet and the incident this one caused"
+  },
+  {
+   "id": "e18",
+   "prompt": "keeping facts in sync across machines",
+   "expected": [
+    "idea-stick"
+   ],
+   "adjacent": [
+    "d-brain-wins",
+    "m-backup"
+   ],
+   "ok": [
+    "m-bus",
+    "idea-voice"
+   ],
+   "note": "d-brain-wins (now-vs-then conflict rule) is the cross-category divergence target; m-backup is rsync sync",
+   "class": "divergence"
+  },
+  {
+   "id": "e19",
+   "prompt": "friends the owner collaborates with on projects",
+   "expected": [
+    "r-photographer"
+   ],
+   "adjacent": [
+    "r-drummer"
+   ],
+   "ok": [
+    "id-owner",
+    "r-daughter"
+   ],
+   "note": "reconnected-friend collaborators (gallery photos, 3D-printed drum tool); relationship cluster, distinct query-angle from e05",
+   "class": "coverage"
+  },
+  {
+   "id": "e20",
+   "prompt": "how the launch and promotion are going",
+   "expected": [
+    "cs-promo"
+   ],
+   "adjacent": [
+    "cs-pdf"
+   ],
+   "ok": [
+    "dec-gallery"
+   ],
+   "note": "cs-pdf (advisory cleared pre-scan) and sl-tests (branch pushed) are release-readiness, low surface overlap with 'promotion' - divergence targets (E5: sl-tests removed — session_log is hidden from /context by default, unservable)",
+   "class": "divergence"
+  },
+  {
+   "id": "e21",
+   "prompt": "what is waiting on the owner's go-ahead",
+   "expected": [
+    "cs-apt"
+   ],
+   "adjacent": [
+    "cs-framework-behind"
+   ],
+   "ok": [
+    "cs-pdf",
+    "dec-gallery"
+   ],
+   "note": "both 'gated on the owner' current_states; direct cluster",
+   "class": "coverage"
+  },
+  {
+   "id": "e22",
+   "prompt": "the agents running on Anvil",
+   "expected": [
+    "m-pip"
+   ],
+   "adjacent": [
+    "m-anvil",
+    "cs-framework-behind"
+   ],
+   "ok": [
+    "id-quill"
+   ],
+   "note": "Pip + its host Anvil + Pip's framework state; direct agent/topology cluster",
+   "class": "coverage"
+  },
+  {
+   "id": "e23",
+   "prompt": "command-line habits that keep us out of trouble",
+   "expected": [
+    "d-git-add"
+   ],
+   "adjacent": [
+    "i-pkill",
+    "d-archive"
+   ],
+   "ok": [
+    "i-ps1"
+   ],
+   "note": "i-pkill is an incident (different category) illustrating a CLI footgun - divergence target; d-archive is the safe-destructive doctrine",
+   "class": "divergence"
+  },
+  {
+   "id": "e24",
+   "prompt": "making sure a service is really up, not just answering",
+   "expected": [
+    "d-body"
+   ],
+   "adjacent": [
+    "i-restart",
+    "d-untested"
+   ],
+   "ok": [
+    "d-scream"
+   ],
+   "note": "i-restart is the incident where 'reported up' was false - cross-category illustration of d-body, the divergence target",
+   "class": "divergence"
+  }
+ ]
 }
