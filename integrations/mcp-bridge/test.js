@@ -151,9 +151,11 @@ if (AUTH_TOKEN) await test("Empty query returns HTTP error (not crash)", async (
       max_results: 1,
     }),
   });
-  // Mnemo rejects empty prompts (400 or 500) — that's fine, we just
-  // verify the server doesn't hang or crash without responding
-  console.log(`         status: ${res.status} (server rejects empty query)`);
+  // Server v4.17.1+: a blank prompt is refused at the door (422). Before
+  // 2026-09-03 this case only printed the status — it could not fail, and
+  // the live server was answering 200 with a chunk recalled against nothing.
+  if (res.ok) throw new Error(`server served an empty prompt with HTTP ${res.status} (needs server >= 4.17.1)`);
+  console.log(`         status: ${res.status} (empty prompt refused)`);
 });
 
 // 7. Invalid endpoint returns HTTP error

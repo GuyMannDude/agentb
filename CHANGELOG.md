@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.17.1 — `/context` refuses an empty prompt (2026-09-03)
+
+Problem: `POST /context` with `prompt: ""` (or whitespace only) returned
+HTTP 200 and, in explore mode, one chunk — a "memory" recalled against
+nothing. Every other request model already requires a non-empty string;
+this one had `prompt: str` with no floor. Found by the mcp-bridge
+integration suite, whose "empty query" case had been printing the status
+instead of asserting it, so the gap had been reported as a pass.
+Fix: `ContextRequest.prompt` carries `min_length=1` and a validator that
+rejects whitespace-only, so the request fails at the door with 422 like the
+rest. No recall path changed. Bridge 2.24.3 makes its case assert non-2xx.
+
 ## v4.17.0 — Business / artist mode: the persona picks the recall lens (2026-09-02)
 
 Problem: Guy wanted one switch, set once, between a literal memory for

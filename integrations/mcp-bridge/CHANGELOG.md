@@ -12,6 +12,17 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.24.3 — 2026-09-03 — test suite: the empty-query case now asserts
+
+**Problem.** "Empty query returns HTTP error (not crash)" only printed the
+status code, so it passed on anything — and the live server was in fact
+answering HTTP 200 with one chunk for `prompt: ""`. A check that can only
+report clean is not a check.
+
+**Fix.** The case fails on any 2xx. Server v4.17.1 refuses a blank prompt
+with 422; against an older server this case now fails honestly instead of
+printing "server rejects empty query" over a 200. Test-only release.
+
 ## 2.24.2 — 2026-09-03 — test suite: unscoped-search case asserted a retired contract
 
 **Problem.** `npm test` had been reporting 6 passed / 1 failed for weeks

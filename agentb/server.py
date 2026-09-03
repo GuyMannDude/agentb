@@ -33,7 +33,7 @@ from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agentb import __version__
 from agentb.config import (
@@ -101,7 +101,7 @@ class IngestResponse(BaseModel):
 
 
 class ContextRequest(BaseModel):
-    prompt: str = Field(..., description="The prompt to search context for")
+    prompt: str = Field(..., min_length=1, description="The prompt to search context for")
     agent_id: Optional[str] = Field(None, description="Agent ID for tenant isolation")
     persona: Optional[str] = Field(None, description="Persona mode: default, strict, creative")
     max_results: int = Field(5, ge=1, le=20)
@@ -164,6 +164,16 @@ class ContextRequest(BaseModel):
         None, description="Drop chunks older than N days. None = no age cap."
     )
 
+
+    # v4.17.1: an empty or whitespace-only prompt embedded fine and came back
+    # with a "memory" (explore mode served one chunk for ""). There is nothing
+    # to recall against; refuse at the door like every other request model.
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prompt must not be empty or whitespace-only")
+        return v
 
 class ContextChunkResponse(BaseModel):
     content: str
