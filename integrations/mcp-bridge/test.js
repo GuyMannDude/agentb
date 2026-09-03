@@ -1,5 +1,5 @@
 // Verification tests for the Mnemo Cortex MCP bridge.
-// Run: MNEMO_URL=http://artforge:50001 node test.js
+// Run: MNEMO_URL=http://<mnemo-host>:50001 node test.js
 // Default: http://localhost:50001
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -44,11 +44,11 @@ await test("Health check", async () => {
   const res = await fetch(`${MNEMO_URL}/health`);
   const data = await res.json();
   if (data.status !== "ok") throw new Error(`status: ${data.status}`);
-  console.log(`         ${data.memory_entries} memories in store`);
+  console.log(`         server v${data.version}`);
 });
 
 if (!AUTH_TOKEN) {
-  console.log("  SKIP (no auth token): Write memory; Recall memory; Cross-agent search; Empty query handling");
+  console.log("  SKIP (no auth token): Write memory; Recall memory; Unscoped search; Empty query handling");
 }
 
 // 2. Write a test memory
@@ -94,8 +94,14 @@ if (AUTH_TOKEN) await test("Recall memory", async () => {
   console.log(`         ${data.total_found} memories found`);
 });
 
-// 4. Cross-agent search
-if (AUTH_TOKEN) await test("Cross-agent search", async () => {
+// 4. Unscoped search (no agent_id). Since server v4.x a multi-tenant
+// install refuses this with an explicit 400 — lane = tenant, and the
+// server will neither invent a tenant nor return a misleading empty 200
+// (doctrine-cortex-stick). A legacy single-tenant install still answers
+// 200 with chunks. Either is the contract; anything else is a failure.
+// (Before 2026-09-03 this case expected chunks unconditionally and had
+// been failing against every multi-tenant server.)
+if (AUTH_TOKEN) await test("Unscoped search: refused on multi-tenant, served on single-tenant", async () => {
   const res = await fetch(`${MNEMO_URL}/context`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...AUTH_HEADERS },
@@ -105,8 +111,17 @@ if (AUTH_TOKEN) await test("Cross-agent search", async () => {
     }),
   });
   const data = await res.json();
-  if (!data.chunks) throw new Error("No chunks field");
-  console.log(`         ${data.total_found} memories found across all agents`);
+  if (res.status === 400) {
+    if (!/agent_id is required/.test(data.detail || ""))
+      throw new Error(`400 without the agent_id message: ${JSON.stringify(data).slice(0, 120)}`);
+    console.log("         multi-tenant server refused unscoped search (400, as designed)");
+    return;
+  }
+  if (res.status === 200 && data.chunks) {
+    console.log(`         single-tenant server served ${data.total_found} memories`);
+    return;
+  }
+  throw new Error(`unexpected status ${res.status}: ${JSON.stringify(data).slice(0, 120)}`);
 });
 
 // ── Failure cases ──────────────────────────────────────────────

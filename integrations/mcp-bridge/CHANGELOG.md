@@ -12,6 +12,25 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.24.2 — 2026-09-03 — test suite: unscoped-search case asserted a retired contract
+
+**Problem.** `npm test` had been reporting 6 passed / 1 failed for weeks
+("Cross-agent search: No chunks field"). The case POSTed `/context` with no
+`agent_id` and expected chunks back. The server has not honoured that since
+lane-is-tenant landed: on a multi-tenant install it answers HTTP 400
+"agent_id is required on a multi-tenant installation; unscoped /context
+search is not supported" — deliberately, so a caller can never mistake an
+invented tenant or an empty 200 for a real answer. The bridge itself never
+sends an unscoped request (share mode self-scopes to its own agent), so
+only the test was wrong. Snag `snag-mcp-bridge-cross-agent-test-fails-2026-09-02`.
+
+**Fix.** The case is now "Unscoped search: refused on multi-tenant, served on
+single-tenant" — a 400 carrying the agent_id message passes, a 200 with
+chunks passes (legacy single-tenant), anything else fails. Also: the health
+line printed `undefined memories in store` (the field left `/health` long
+ago) and now prints the server version; the run comment named the dead
+artforge host. No bridge behaviour changed — test-only release.
+
 ## 2.24.1 — 2026-08-25 — boot budget rebalance: 500 more active.md → doctrines.md
 
 **Problem.** Three doctrines landed in one evening — CC's
