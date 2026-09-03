@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased — E5 explore ablation: negative result, constants unchanged, fixtures 16→23
+## v4.17.0 — Business / artist mode: the persona picks the recall lens (2026-09-02)
+
+Problem: Guy wanted one switch, set once, between a literal memory for
+business work and an open, associative one for art — not a per-query knob.
+The per-query `mode` already existed (v4.8 explore), but every call that
+named no mode got focus, and the persona field that already declared this
+axis (`context_bias`: factual / neutral / associative) was read by nothing.
+Fix: a `/context` call that names no `mode` now takes the lens from its
+persona — strict and default (factual / neutral) -> focus, creative
+(associative) -> explore — and a new top-level `default_persona` config key
+is the server-wide switch (validated against the configured personas at
+load; fails loud on a typo). `/health` reports the value in force instead of
+a literal, and every `/context` response names which lens served in a new
+`mode` field. An explicit `mode` on the call still wins; nothing changes for
+callers that pass one, and an unconfigured server stays on focus. Persona
+`strict` = business mode, `creative` = artist mode.
+
+### E5 explore ablation: negative result, constants unchanged, fixtures 16→23
 
 Problem: E4 left a standing question — does explore's adjacency term earn its
 0.55 weight, or is the edge coming from novelty or band width? Fix: a 60-run

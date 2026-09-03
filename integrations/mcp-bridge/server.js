@@ -570,9 +570,11 @@ server.registerTool(
       .enum(["focus", "explore"])
       .optional()
       .describe(
-        "Recall lens. 'focus' (default): best match wins. 'explore': the serendipity lens — " +
+        "Recall lens. 'focus': best match wins. 'explore': the serendipity lens — " +
         "what does this remind the store of; prefers the adjacent similarity band, ignores recency, " +
-        "favors rarely-recalled memories. Use for brainstorming and idea recall."
+        "favors rarely-recalled memories. Omitted: the server's persona decides " +
+        "(strict/default -> focus, creative -> explore; business vs artist mode). " +
+        "Use explore for brainstorming and idea recall."
       ),
     expand: z
       .boolean()

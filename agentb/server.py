@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from agentb import __version__
 from agentb.config import (
-    load_config, AgentBConfig, get_agent_data_dir, get_persona, PersonaConfig,
+    load_config, AgentBConfig, get_agent_data_dir, get_persona, persona_recall_mode, PersonaConfig,
     validate_agent_id,
     ExpansionConfig,
 )
@@ -105,15 +105,17 @@ class ContextRequest(BaseModel):
     agent_id: Optional[str] = Field(None, description="Agent ID for tenant isolation")
     persona: Optional[str] = Field(None, description="Persona mode: default, strict, creative")
     max_results: int = Field(5, ge=1, le=20)
-    mode: str = Field(
-        "focus",
+    mode: Optional[str] = Field(
+        None,
         pattern="^(focus|explore)$",
         description=(
-            "Recall lens. 'focus' (default): best match wins — similarity + "
-            "recency + importance + access. 'explore' (the serendipity lens): "
-            "what does this remind the store of — prefers the adjacent "
-            "similarity band, ignores recency, favors rarely-recalled "
-            "memories. Use explore for brainstorming and idea recall."
+            "Recall lens. 'focus': best match wins — similarity + recency + "
+            "importance + access. 'explore' (the serendipity lens): what does "
+            "this remind the store of — prefers the adjacent similarity band, "
+            "ignores recency, favors rarely-recalled memories. Omitted: the "
+            "persona decides (context_bias associative -> explore, else focus; "
+            "the response's `mode` names which lens served). "
+            "Use explore for brainstorming and idea recall."
         ),
     )
     # v3 provenance + decay filters (all optional)
@@ -184,6 +186,8 @@ class ContextResponse(BaseModel):
     total_found: int
     latency_ms: float
     cache_hits: dict
+    # v4.17 — which lens served: the request's mode, or the persona's when omitted
+    mode: str = "focus"
     agent_id: Optional[str]
     persona: str
     provider_used: str
@@ -871,7 +875,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             reasoning={**reasoner.status, "healthy": r_ok},
             embedding={**embedder.status, "healthy": e_ok},
             agents_configured=list(config.agents.keys()) + tenants.active_tenants,
-            default_persona="default",
+            default_persona=config.default_persona,
             sessions=total_sessions,
             capture=gate.status(),
         )
@@ -895,6 +899,9 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             )
         start = time.time()
         persona = get_persona(config, req.persona, req.agent_id)
+        # v4.17: the lens is the caller's if named, else the persona's
+        # (strict/default -> focus, creative -> explore). Reported back as `mode`.
+        mode = req.mode or persona_recall_mode(persona)
         tenant = tenants.get(req.agent_id)
         memory_dir = tenant["memory_dir"]
         vec_store: VecStore = tenant["vec"]
@@ -940,7 +947,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # Over-fetch so post-filter trims don't leave us short. Explore mode
         # fetches wider: its candidates live below the top hit, so a narrow
         # pool would leave the adjacent band empty.
-        pool_factor = 5 if req.mode == "explore" else 3
+        pool_factor = 5 if mode == "explore" else 3
         overfetch = max(req.max_results * pool_factor, req.max_results + 5)
 
         cache_hits = {"HOT": 0, "L1": 0, "VEC": 0, "L2": 0, "L3": 0, "MEM0": 0}
@@ -1139,7 +1146,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # its own self-contained scoring (module constants, no RankingConfig)
         # and therefore works even with composite ranking disabled — a recall
         # mode that silently no-ops would be a silent degradation.
-        if req.mode == "explore":
+        if mode == "explore":
             # Serendipity lens: adjacency to the pool's top hit, no recency,
             # novelty over familiarity. Zero-scored chunks are the noise band
             # and must not pad the results.
@@ -1206,6 +1213,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             total_found=len(selected),
             latency_ms=round(latency, 1),
             cache_hits=cache_hits,
+            mode=mode,
             agent_id=req.agent_id,
             persona=persona.name,
             provider_used=embedder.active_label,

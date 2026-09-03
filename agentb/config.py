@@ -77,6 +77,9 @@ class ResilientProviderConfig:
 class PersonaConfig:
     name: str = "default"
     preflight: str = "balanced"          # aggressive | balanced | permissive
+    # v4.17: context_bias picks the recall LENS when a /context call names no
+    # mode — associative -> explore (the serendipity lens), factual/neutral ->
+    # focus. "Business mode" = strict, "artist mode" = creative (Guy, 2026-09-02).
     context_bias: str = "neutral"        # factual | neutral | associative
     max_confidence_for_pass: float = 0.7
     allow_speculative: bool = False
@@ -304,6 +307,10 @@ class AgentBConfig:
     log_level: str = "info"
     agents: dict[str, AgentConfig] = field(default_factory=dict)
     personas: dict[str, PersonaConfig] = field(default_factory=dict)
+    # v4.17: the persona every call without an explicit persona/agent persona
+    # gets — the one server-wide switch between business (strict) and artist
+    # (creative) mode. Validated against `personas` at load; /health reports it.
+    default_persona: str = "default"
 
 
 def _resolve_env(value) -> str:
@@ -481,6 +488,7 @@ def _parse_config(raw: dict) -> AgentBConfig:
         for name, pdata in raw["personas"].items():
             if pdata:
                 cfg.personas[name] = _build_persona(name, pdata)
+    cfg.default_persona = str(raw.get("default_persona") or "default")
     if "agents" in raw and raw["agents"]:
         for name, adata in raw["agents"].items():
             if adata:
@@ -510,6 +518,10 @@ def _apply_defaults(cfg: AgentBConfig) -> AgentBConfig:
     for name, persona in DEFAULT_PERSONAS.items():
         if name not in cfg.personas:
             cfg.personas[name] = persona
+    if cfg.default_persona not in cfg.personas:
+        raise ValueError(
+            f"default_persona {cfg.default_persona!r} is not a configured persona "
+            f"(have: {sorted(cfg.personas)})")
     return cfg
 
 
@@ -534,6 +546,12 @@ def get_persona(cfg: AgentBConfig, persona_name: Optional[str] = None,
         agent_persona = cfg.agents[agent_id].persona
         if agent_persona in cfg.personas:
             return cfg.personas[agent_persona]
-    return cfg.personas.get("default", DEFAULT_PERSONAS["default"])
+    return cfg.personas.get(cfg.default_persona, DEFAULT_PERSONAS["default"])
+
+
+def persona_recall_mode(persona: PersonaConfig) -> str:
+    """The recall lens a persona implies when the caller names none:
+    associative -> explore, anything else -> focus."""
+    return "explore" if persona.context_bias == "associative" else "focus"
 
 

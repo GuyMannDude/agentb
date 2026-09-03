@@ -22,6 +22,15 @@
 data_dir: ~/.agentb
 log_level: info
 
+# ── Default persona: the business / artist switch (v4.17) ──
+# The persona every recall gets unless the call (or the agent entry below)
+# names one. Its context_bias picks the recall lens when a call names no
+# mode: strict / default -> focus (literal, best match wins); creative ->
+# explore (the serendipity lens: adjacent, rarely-recalled, no recency).
+# Business mode: strict.  Artist mode: creative.  Restart to apply;
+# /health reports the value in force.
+default_persona: default
+
 # ── Reasoning Provider (with fallback chain) ──
 # Used for preflight checks, summarization, and Dreamer synthesis.
 # If primary fails, falls through to fallbacks. Sparks default ships
