@@ -15,7 +15,12 @@ load; fails loud on a typo). `/health` reports the value in force instead of
 a literal, and every `/context` response names which lens served in a new
 `mode` field. An explicit `mode` on the call still wins; nothing changes for
 callers that pass one, and an unconfigured server stays on focus. Persona
-`strict` = business mode, `creative` = artist mode.
+`strict` = business mode, `creative` = artist mode. Review follow-ups, same
+release: an `agents:` entry that names no `persona:` now follows
+`default_persona` (it used to be pinned to the literal "default", which
+would have masked the switch for every named tenant), and the ChatGPT gate
+no longer pins `mode: focus` on every forwarded recall (it forwards mode
+only when the caller passed one, like the MCP bridge).
 
 ### E5 explore ablation: negative result, constants unchanged, fixtures 16→23
 

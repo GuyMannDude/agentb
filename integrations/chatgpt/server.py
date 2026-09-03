@@ -47,7 +47,10 @@ class RecallRequest(BaseModel):
     agent_id: str | None = None  # accepted but always ignored
     max_results: int = Field(default=5, ge=1, le=10)
     category: str | None = None
-    mode: Literal["focus", "explore"] = "focus"
+    # None = omitted upstream, so the server's persona picks the lens (v4.17:
+    # strict/default -> focus, creative -> explore). A "focus" default here
+    # would pin every ChatGPT recall to focus and make artist mode dead.
+    mode: Literal["focus", "explore"] | None = None
 
 
 class SaveRequest(BaseModel):

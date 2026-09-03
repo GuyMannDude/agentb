@@ -28,7 +28,8 @@ log_level: info
 # mode: strict / default -> focus (literal, best match wins); creative ->
 # explore (the serendipity lens: adjacent, rarely-recalled, no recency).
 # Business mode: strict.  Artist mode: creative.  Restart to apply;
-# /health reports the value in force.
+# /health reports the value in force. An `agents:` entry that sets its
+# own `persona:` pins that agent; one that does not follows this switch.
 default_persona: default
 
 # ── Reasoning Provider (with fallback chain) ──

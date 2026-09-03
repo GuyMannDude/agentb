@@ -129,3 +129,98 @@ def test_invalid_mode_is_rejected():
     import pydantic
     with pytest.raises(pydantic.ValidationError):
         ContextRequest(prompt="x", mode="wander")
+
+
+# ── v4.17: the persona picks the lens when the caller names none ──────────
+
+def _seed_lens_world(tmp_path):
+    adjacent = list(VEC_A); adjacent[1] = 0.1
+    _seed_vec_memory(tmp_path, "bullseye", "the exact thing you asked about",
+                     "decision", distance_vec=list(VEC_A))
+    _seed_vec_memory(tmp_path, "adjacent", "the thing this reminds you of",
+                     "decision", distance_vec=adjacent)
+
+
+def test_creative_persona_defaults_to_explore(tmp_path, client):
+    _seed_lens_world(tmp_path)
+    r = client.post("/context", json={"prompt": "the exact thing", "max_results": 2,
+                                      "persona": "creative"})
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "explore"
+    assert [c["memory_id"] for c in r.json()["chunks"]][0] == "adjacent"
+
+
+def test_strict_and_default_personas_default_to_focus(tmp_path, client):
+    _seed_lens_world(tmp_path)
+    for persona in ("strict", "default", None):
+        body = {"prompt": "the exact thing", "max_results": 2}
+        if persona:
+            body["persona"] = persona
+        r = client.post("/context", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["mode"] == "focus", persona
+        assert [c["memory_id"] for c in r.json()["chunks"]][0] == "bullseye", persona
+
+
+def test_explicit_mode_beats_persona(tmp_path, client):
+    _seed_lens_world(tmp_path)
+    r = client.post("/context", json={"prompt": "the exact thing", "max_results": 2,
+                                      "persona": "creative", "mode": "focus"})
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "focus"
+    assert [c["memory_id"] for c in r.json()["chunks"]][0] == "bullseye"
+
+
+def test_default_persona_config_is_the_server_wide_switch():
+    from agentb.config import _parse_config, get_persona, persona_recall_mode
+    cfg = _parse_config({"default_persona": "creative"})
+    assert get_persona(cfg).name == "creative"
+    assert persona_recall_mode(get_persona(cfg)) == "explore"
+    assert persona_recall_mode(get_persona(_parse_config({}))) == "focus"
+    with pytest.raises(ValueError, match="default_persona"):
+        _parse_config({"default_persona": "artist"})
+
+
+def test_named_agent_without_persona_follows_the_switch():
+    # Review finding (S297): an agents: entry used to be pinned to the literal
+    # "default" persona, which masked default_persona for every named tenant.
+    from agentb.config import _parse_config, get_persona
+    cfg = _parse_config({"default_persona": "creative",
+                         "agents": {"cc": {"data_dir": "~/x"},
+                                    "biz": {"data_dir": "~/y", "persona": "strict"}}})
+    assert get_persona(cfg, None, "cc").name == "creative"      # follows the switch
+    assert get_persona(cfg, None, "biz").name == "strict"       # pinned itself
+    assert get_persona(cfg, "default", "cc").name == "default"  # explicit call wins
+
+
+def test_health_reports_the_configured_default_persona(tmp_path):
+    cfg = AgentBConfig(
+        reasoning=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="x")),
+        embedding=ResilientProviderConfig(primary=ProviderConfig(provider="ollama", model="nomic-embed-text")),
+        cache=CacheConfig(), server=ServerConfig(host="127.0.0.1", port=50098),
+        data_dir=str(tmp_path), classification=ClassificationConfig(enabled=False),
+        personas=dict(DEFAULT_PERSONAS), default_persona="creative",
+    )
+    with patch("agentb.server.create_resilient_embedding", return_value=FakeEmbedding()), \
+         patch("agentb.server.create_resilient_reasoning", return_value=FakeReasoning()):
+        from agentb.server import create_app
+        with TestClient(create_app(cfg)) as c:
+            assert c.get("/health").json()["default_persona"] == "creative"
+            r = c.post("/context", json={"prompt": "anything", "max_results": 2})
+            assert r.status_code == 200, r.text
+            assert r.json()["mode"] == "explore"
+
+
+def test_chatgpt_gate_forwards_mode_only_when_given():
+    # Review finding (S297): the gate defaulted mode to "focus", so every
+    # forwarded recall carried an explicit lens and the persona never applied.
+    import importlib.util
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "integrations" / "chatgpt" / "server.py"
+    spec = importlib.util.spec_from_file_location("chatgpt_gate_for_lens_test", src)
+    gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
+    RecallRequest = gate.RecallRequest
+    omitted = RecallRequest(prompt="x").model_dump(exclude={"agent_id"}, exclude_none=True)
+    assert "mode" not in omitted
+    given = RecallRequest(prompt="x", mode="explore").model_dump(exclude={"agent_id"}, exclude_none=True)
+    assert given["mode"] == "explore"

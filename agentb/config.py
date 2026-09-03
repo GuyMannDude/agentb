@@ -286,7 +286,9 @@ class ServerConfig:
 @dataclass
 class AgentConfig:
     data_dir: str = ""
-    persona: str = "default"
+    # None = the agent never chose; it follows `default_persona` (v4.17). A
+    # literal "default" here would silently pin the agent to focus.
+    persona: Optional[str] = None
     read_only: bool = False
 
 
@@ -494,7 +496,7 @@ def _parse_config(raw: dict) -> AgentBConfig:
             if adata:
                 cfg.agents[name] = AgentConfig(
                     data_dir=_resolve_path(adata.get("data_dir", "")),
-                    persona=adata.get("persona", "default"),
+                    persona=adata.get("persona") or None,
                     read_only=adata.get("read_only", False),
                 )
     return _apply_defaults(cfg)
@@ -544,7 +546,7 @@ def get_persona(cfg: AgentBConfig, persona_name: Optional[str] = None,
         return cfg.personas[persona_name]
     if agent_id and agent_id in cfg.agents:
         agent_persona = cfg.agents[agent_id].persona
-        if agent_persona in cfg.personas:
+        if agent_persona and agent_persona in cfg.personas:
             return cfg.personas[agent_persona]
     return cfg.personas.get(cfg.default_persona, DEFAULT_PERSONAS["default"])
 
