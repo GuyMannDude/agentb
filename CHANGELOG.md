@@ -20,7 +20,11 @@ release: an `agents:` entry that names no `persona:` now follows
 `default_persona` (it used to be pinned to the literal "default", which
 would have masked the switch for every named tenant), and the ChatGPT gate
 no longer pins `mode: focus` on every forwarded recall (it forwards mode
-only when the caller passed one, like the MCP bridge).
+only when the caller passed one, like the MCP bridge). Scope note (Opie
+review #3199): `default_persona` switches the whole persona, so artist mode
+is the explore lens AND the creative persona's permissive `/preflight`
+posture; business mode is focus AND strict's aggressive posture. One
+posture end to end, by design — not a lens-only flag.
 
 ### E5 explore ablation: negative result, constants unchanged, fixtures 16→23
 

@@ -30,6 +30,10 @@ log_level: info
 # Business mode: strict.  Artist mode: creative.  Restart to apply;
 # /health reports the value in force. An `agents:` entry that sets its
 # own `persona:` pins that agent; one that does not follows this switch.
+# NOTE: this switches the WHOLE persona, not only the lens — the same
+# persona also sets /preflight's validation posture (strict = aggressive,
+# a high bar for PASS; creative = permissive, speculative ideas are not
+# flagged). Business/artist is one posture end to end, by design.
 default_persona: default
 
 # ── Reasoning Provider (with fallback chain) ──
