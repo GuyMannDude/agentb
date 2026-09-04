@@ -289,16 +289,35 @@ def candidate_mount_roots(extra: Optional[list[str]] = None) -> list[Path]:
     return roots
 
 
+def _is_file_quiet(p: Path) -> bool:
+    """is_file() that treats an unreadable path as absent. A sibling mount
+    owned by root (a drive mid-mount, an autofs stub) raises PermissionError
+    from stat(); the watcher must skip it, not die."""
+    try:
+        return p.is_file()
+    except OSError:
+        return False
+
+
+def _is_dir_quiet(p: Path) -> bool:
+    try:
+        return p.is_dir()
+    except OSError:
+        return False
+
+
 def find_stick(extra_roots: Optional[list[str]] = None) -> Optional[Path]:
     """Locate a provisioned stick: a cortex/passport.json under a mount root
-    (or the root itself being the stick dir). Returns the cortex/ dir."""
+    (or the root itself being the stick dir). Returns the cortex/ dir.
+    Unreadable candidates are skipped — the stick is never the only thing
+    plugged into a machine."""
     for root in candidate_mount_roots(extra_roots):
-        if (root / "passport.json").is_file() and root.name == STICK_DIRNAME:
+        if root.name == STICK_DIRNAME and _is_file_quiet(root / "passport.json"):
             return root
-        if not root.is_dir():
+        if not _is_dir_quiet(root):
             continue
         direct = root / STICK_DIRNAME
-        if (direct / "passport.json").is_file():
+        if _is_file_quiet(direct / "passport.json"):
             return direct
         try:
             children = list(root.iterdir())
@@ -306,7 +325,7 @@ def find_stick(extra_roots: Optional[list[str]] = None) -> Optional[Path]:
             continue
         for mount in children:
             cand = mount / STICK_DIRNAME
-            if (cand / "passport.json").is_file():
+            if _is_file_quiet(cand / "passport.json"):
                 return cand
     return None
 

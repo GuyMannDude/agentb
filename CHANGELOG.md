@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.17.2 — Cortex Stick: discovery skips unreadable mounts (2026-09-04)
+
+Problem: `stick watch` scans every mount under the user's media root for a
+`cortex/passport.json`. A sibling drive the user cannot read — root-owned
+while mid-mount, an autofs stub — made `Path.is_file()` raise
+`PermissionError` from `stat()`, and the watcher died. systemd restarted it
+15 s later, so each crash was a silent gap plus a stack trace in the
+journal; on IGOR it happened three times across two months, each on a
+different drive. Found while reading the watcher journal for Guy's first
+look at the product.
+Fix: discovery treats an unreadable candidate as absent (`_is_file_quiet`
+/ `_is_dir_quiet` swallow `OSError` at the probe, nowhere else). Regression
+test provisions a stick beside a `chmod 0` sibling and asserts discovery
+returns the stick and never raises. No sync path changed.
+
 ## v4.17.1 — `/context` refuses an empty prompt (2026-09-03)
 
 Problem: `POST /context` with `prompt: ""` (or whitespace only) returned

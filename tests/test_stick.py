@@ -15,12 +15,14 @@ The whole product is the merge matrix:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from agentb.stick import (
     StickError,
+    find_stick,
     init_stick,
     sha256_file,
     sync,
@@ -867,3 +869,28 @@ def test_notify_desktop_survives_subprocess_failure(monkeypatch):
         lambda name: "/usr/bin/notify-send" if name == "notify-send" else None)
     monkeypatch.setattr(subprocess, "run", boom)
     cli._notify_desktop("t", "b")  # must not raise
+
+
+# ── discovery ──────────────────────────────────────────────────────────────
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
+                    reason="needs POSIX permissions as a non-root user")
+def test_find_stick_skips_unreadable_sibling_mount(tmp_path, monkeypatch):
+    """A root-owned sibling mount (drive mid-mount, autofs stub) must be
+    skipped, not crash the watcher. Live specimen: cortex-stick-watch died
+    three times on /media/guy/<other-drive>/cortex/passport.json EACCES."""
+    monkeypatch.setattr("agentb.stick.DEFAULT_MOUNT_ROOTS", [])
+    root = tmp_path / "media"
+    locked = root / "aaa-locked" / "cortex"
+    locked.mkdir(parents=True)
+    (locked / "passport.json").write_text("{}")
+    locked.chmod(0)
+    try:
+        # only the unreadable candidate: no stick, and no exception
+        assert find_stick([str(root)]) is None
+        good = root / "zzz-stick"
+        good.mkdir()
+        init_stick(good)
+        assert find_stick([str(root)]) == good / "cortex"
+    finally:
+        locked.chmod(0o755)
