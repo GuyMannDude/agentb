@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.17.4 — Cortex Stick: the watcher outlives a failed sync (2026-09-04)
+
+Problem: the first real two-desk carry failed silently. On the Windows desk
+the store's files carried inherited ACLs an unelevated process cannot read
+(a leftover of the machine's own migration history); the sync's scan raised
+`PermissionError`, which is not a `StickError`, so `stick watch` died with a
+traceback in a log nobody watches. Task Scheduler restarted it, it found the
+stick again, died again — 57 times in twenty minutes — and the human standing
+at the desk saw nothing at all. The absence of a toast was the only signal.
+Fix: the watch loop catches any exception from a sync, prints the traceback,
+raises a `sync FAILED, nothing moved` toast, and then waits for the next
+plug-in (or the re-sync interval) instead of hammering the same failure every
+poll. Proven live against a chmod-0 host file: the failure is announced and
+the watcher is still running afterwards. Nothing moved is literal — the crash
+is in the plan pass, before any byte is written.
+
 ## v4.17.3 — Cortex Stick: Windows toast + honest "brain: not configured" (2026-09-04)
 
 Problem: the zero-terminal courier was half a product — `stick watch

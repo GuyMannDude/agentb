@@ -1770,7 +1770,22 @@ def stick_watch_cmd(poll, interval, notify):
         if stick_dir and (not present or time.time() - last_sync >= interval):
             console.print(f"[dim]{time.strftime('%H:%M:%S')}[/] "
                           f"stick {'present' if present else 'detected'} — syncing")
-            _stick_run_sync(str(stick_dir), (), None, False, False, notify=notify)
+            try:
+                _stick_run_sync(str(stick_dir), (), None, False, False,
+                                notify=notify)
+            except Exception as e:   # noqa: BLE001 — the watcher must outlive one bad sync
+                # A refusal is a StickError and already toasted inside; this
+                # is the unexpected kind (an unreadable host file, a codec
+                # dependency gone). Before 4.17.4 it killed the watcher with
+                # a traceback nobody saw — the human's only signal was the
+                # ABSENCE of a toast. Now: traceback to the log, a toast to
+                # the human, and wait for the next plug-in (or `interval`)
+                # instead of hammering the same failure every poll.
+                console.print_exception()
+                console.print(f"[red]sync FAILED:[/] {type(e).__name__}: {e}")
+                if notify:
+                    _notify_desktop("Cortex Stick — sync FAILED, nothing moved",
+                                    f"{type(e).__name__}: {str(e)[:160]}")
             last_sync = time.time()
         if not stick_dir and present:
             console.print(f"[dim]{time.strftime('%H:%M:%S')}[/] "
