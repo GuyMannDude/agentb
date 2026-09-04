@@ -902,5 +902,5 @@ def test_sync_without_brain_repo_reports_not_configured(tmp_path):
     host = tmp_path / "hostA"
     write_mem(host, "cc", "m1", "hello")
     stick = init_stick(tmp_path / "stick")
-    r = sync(host, stick)
+    r = sync(host, stick, host_id="host-a", pad=False)
     assert r.brain == "not configured"
