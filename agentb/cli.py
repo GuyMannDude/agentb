@@ -1433,15 +1433,41 @@ def _stick_report(report) -> None:
 def _notify_desktop(title: str, body: str) -> None:
     """Best-effort desktop toast for unattended watch mode.
 
-    Linux notify-send or macOS osascript; silently a no-op when neither
-    exists (or the session bus is gone) — the console line remains the
-    source of truth, this is just the glanceable copy.
+    Linux notify-send, macOS osascript, or a Windows toast through the
+    WinRT notifier (no module install; needs an interactive session, which
+    is why the Task Scheduler unit runs "only when the user is logged on");
+    silently a no-op when none applies (or the session bus is gone) — the
+    console line remains the source of truth, this is just the glanceable
+    copy.
     """
+    import os
     import shutil
     import subprocess
     body = body.replace('"', "'")
     try:
-        if shutil.which("notify-send"):
+        if os.name == "nt":
+            from xml.sax.saxutils import escape
+            xml = ('<toast><visual><binding template="ToastGeneric">'
+                   f'<text>{escape(title)}</text><text>{escape(body)}</text>'
+                   '</binding></visual></toast>')
+            ps = (
+                "[Windows.UI.Notifications.ToastNotificationManager, "
+                "Windows.UI.Notifications, ContentType = WindowsRuntime] "
+                "| Out-Null; "
+                "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom."
+                "XmlDocument, ContentType = WindowsRuntime] | Out-Null; "
+                "$x = New-Object Windows.Data.Xml.Dom.XmlDocument; "
+                f"$x.LoadXml('{xml}'); "
+                "$id = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}"
+                "\\WindowsPowerShell\\v1.0\\powershell.exe'; "
+                "[Windows.UI.Notifications.ToastNotificationManager]::"
+                "CreateToastNotifier($id).Show("
+                "[Windows.UI.Notifications.ToastNotification]::new($x))"
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                timeout=15, check=False, capture_output=True)
+        elif shutil.which("notify-send"):
             subprocess.run(
                 ["notify-send", "--app-name=Cortex Stick",
                  "--icon=drive-removable-media", title, body],
@@ -1501,7 +1527,7 @@ def _stick_run_sync(mount, tenants, brain, force, dry_run, notify=False):
             if report.facts_to_host or report.facts_to_stick:
                 bits.append(f"facts {report.facts_to_host} in / "
                             f"{report.facts_to_stick} out")
-            if report.brain not in ("skipped", "clean"):
+            if report.brain not in ("not configured", "skipped", "clean"):
                 bits.append(f"brain {report.brain}")
             if report.conflicts:
                 bits.append(f"⚠ {len(report.conflicts)} conflict(s)")

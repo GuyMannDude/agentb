@@ -566,7 +566,7 @@ class SyncReport:
     merged_jsonl: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    brain: str = "skipped"
+    brain: str = "not configured"   # no brain_repo on this host
     facts_to_host: int = 0
     facts_to_stick: int = 0
 

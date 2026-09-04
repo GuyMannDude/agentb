@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.17.3 — Cortex Stick: Windows toast + honest "brain: not configured" (2026-09-04)
+
+Problem: the zero-terminal courier was half a product — `stick watch
+--notify` toasted on Linux and macOS only, so the Windows desk of a
+two-desk setup needed a terminal to know what crossed. And on any host
+with no brain repo configured the report said `brain: skipped`, which reads
+as a failure for what is a non-event (found in Guy's first look: the brain
+rides GitHub here, the stick channel is simply unused).
+Fix: `_notify_desktop` gains a Windows branch that raises a toast through
+the WinRT notifier from a `powershell` subprocess — no module to install,
+needs an interactive session, which is why the Task Scheduler unit must run
+"only when the user is logged on". `SyncReport.brain` defaults to
+`not configured`; `skipped` now means only "configured but not a git repo".
+Test added for the default. No sync path changed.
+
 ## v4.17.2 — Cortex Stick: discovery skips unreadable mounts (2026-09-04)
 
 Problem: `stick watch` scans every mount under the user's media root for a

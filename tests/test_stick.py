@@ -894,3 +894,13 @@ def test_find_stick_skips_unreadable_sibling_mount(tmp_path, monkeypatch):
         assert find_stick([str(root)]) == good / "cortex"
     finally:
         locked.chmod(0o755)
+
+
+def test_sync_without_brain_repo_reports_not_configured(tmp_path):
+    """The toast used to say "brain: skipped" on a host that simply has no
+    brain repo configured — reads like a failure. It is a non-event."""
+    host = tmp_path / "hostA"
+    write_mem(host, "cc", "m1", "hello")
+    stick = init_stick(tmp_path / "stick")
+    r = sync(host, stick)
+    assert r.brain == "not configured"
