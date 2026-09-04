@@ -1513,8 +1513,16 @@ def _eject_stick(stick_dir, extra_roots=None) -> tuple[bool, str]:
             system = os.environ.get("SystemDrive", "C:")
             if drive.upper() == system.upper():
                 return False, f"{drive} is the system drive — refusing to eject"
-            ps = ("(New-Object -ComObject Shell.Application).Namespace(17)"
-                  f".ParseName('{drive}').InvokeVerb('Eject')")
+            # The verb is offered as "E&ject" (accelerator ampersand) and
+            # InvokeVerb('Eject') matched nothing while returning 0 — proven
+            # on the first Windows eject (S304). Enumerate, strip '&', DoIt.
+            ps = ("$it = (New-Object -ComObject Shell.Application).Namespace(17)"
+                  f".ParseName('{drive}'); "
+                  "if (-not $it) { Write-Error 'drive not found in shell'; exit 2 }; "
+                  "$v = @($it.Verbs() | Where-Object { ($_.Name -replace '&','') "
+                  "-ieq 'Eject' }); "
+                  "if ($v.Count -eq 0) { Write-Error 'no Eject verb offered'; exit 3 }; "
+                  "$v[0].DoIt()")
             argv = ["powershell", "-NoProfile", "-NonInteractive",
                     "-Command", ps]
             still_present = lambda: _volume_present_nt(drive)  # noqa: E731
@@ -1551,7 +1559,8 @@ def _eject_stick(stick_dir, extra_roots=None) -> tuple[bool, str]:
             if not still_present():
                 return True, "ejected"
             time.sleep(0.5)
-        return False, "eject command returned 0 but the volume is still mounted"
+        return False, ("eject command returned 0 but the volume is still mounted "
+                       "— something holds it open (a cloud-sync client?)")
     except Exception as e:           # noqa: BLE001 — a sync already landed; never raise past it
         return False, f"{type(e).__name__}: {e}"
 

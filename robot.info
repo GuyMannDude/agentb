@@ -24,7 +24,7 @@
   "tagline": "Cognitive coprocessor with active memory for AI agents — local-first, decay-aware, cross-agent dreaming.",
   "summary": "Cognitive coprocessor with active memory that gives AI agents persistent recall across sessions. Local SQLite + FTS5 working memory plus a structured Facts table (entity/attribute/value triples with a three-state confidence ladder) for the lookups semantic search gets wrong. Every memory record carries provenance (source + category) and decays on a category-aware schedule — topology facts age fast, doctrine stays perpetual, and recall returns a structured stale_warning when a fact is past its threshold so the agent verifies before acting. Cross-agent dreaming synthesizes every connected agent's memories into a shared nightly brief.",
   "backstory": "Guy Hutchins started exploring AI memory with ChatGPT 3.5 using basic text files. When OpenClaw launched and needed better memory, he gave Opie (Claude) a simple prompt: \"If you were a ClawdBot and your user wanted you to have the best memory you could build yourself, what would it look like?\" Opie was on extended thinking and just built it — no clarifying questions, no spec, just shipped a working memory system. Guy gave the same prompt to AL (ChatGPT), who built his own version independently. AL saw Opie's and said it was more in depth. Opie saw AL's and said it had ideas worth blending. The two versions merged. When it came time to name it, the first two suggestions were \"Mnemo\" and \"Cortex.\" Guy picked both. Mnemo Cortex.",
-  "version": "4.18.0",
+  "version": "4.18.1",
   "license": "MIT",
   "homepage": "https://projectsparks.ai/mnemo-cortex",
   "source": "https://github.com/GuyMannDude/mnemo-cortex",
@@ -293,6 +293,7 @@
 
   // Recent releases. An AI reads this when a user asks "what's new?"
   "changelog": [
+    {"version": "4.18.1", "date": "2026-09-04", "changes": ["Cortex Stick on Windows: the eject actually fires — the shell offers the verb as `E&ject`, so `InvokeVerb('Eject')` matched nothing while returning 0; now the verbs are enumerated, matched with the accelerator stripped, and invoked with DoIt(); an absent verb is a loud non-zero exit."]},
     {"version": "4.18.0", "date": "2026-09-04", "changes": ["Cortex Stick: `stick watch` ejects the stick after a verified sync (udisksctl / diskutil / Shell.Application Eject), so 'safe to remove' is literal and a FAT volume never leaves with its dirty bit set; success is verified by the volume being gone, an eject failure toasts `EJECT FAILED: unmount by hand`; `--no-eject` keeps the old stay-mounted re-sync, `stick sync --eject` opts a manual sync in."]},
     {"version": "4.17.4", "date": "2026-09-04", "changes": ["Cortex Stick: `stick watch` survives an unexpected sync error (an unreadable host file, a missing codec dependency) — traceback to the log, a `sync FAILED, nothing moved` toast to the human, then it waits for the next plug-in instead of dying. Before, the only signal was the absence of a toast."]},
     {"version": "4.17.3", "date": "2026-09-04", "changes": ["Cortex Stick: the watcher toast works on Windows (WinRT toast, no module install), so both desks of a two-desk setup can be plug-and-walk-away; a host with no brain repo configured now reports `brain: not configured` instead of `skipped`."]},

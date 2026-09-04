@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.18.1 — Cortex Stick: the Windows eject actually fires (2026-09-04)
+
+Problem: the first Windows eject after 4.18.0 "succeeded" with the volume
+still mounted — the watcher caught it (`EJECT FAILED … still mounted`, toast
+included, which incidentally proved the Windows toast works). A read-only
+probe of the drive's shell verbs showed why: the shell offers the verb as
+`E&ject` (accelerator ampersand), and `InvokeVerb('Eject')` matched no verb
+and returned 0, so the eject was never invoked at all. Same class as the
+localization note in 4.18.0's review — the verb NAME is a claim, not an API.
+Fix: enumerate `Verbs()`, match on the name with `&` stripped
+(case-insensitive), invoke that verb with `DoIt()`; no such verb → a loud
+non-zero exit with the reason, which the existing failure path surfaces. The
+still-mounted message now names the likely holder (a cloud-sync client such
+as Google Drive grabbing the new volume), because that is the other thing
+the probe found running.
+
 ## v4.18.0 — Cortex Stick: eject after the verified sync (2026-09-04)
 
 Problem: "✓ safe to remove" was a claim, not an act. The watcher verified

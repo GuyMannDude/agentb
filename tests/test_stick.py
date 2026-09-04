@@ -1027,7 +1027,12 @@ def test_eject_stick_windows_invokes_shell_eject_on_drive(monkeypatch):
     assert ok, detail
     assert calls[0][0] == "powershell"
     ps = calls[0][-1]
-    assert "ParseName('E:')" in ps and "InvokeVerb('Eject')" in ps
+    assert "ParseName('E:')" in ps
+    # 4.18.1: the verb is offered as "E&ject"; match with '&' stripped and DoIt,
+    # never InvokeVerb('Eject') (matched nothing, returned 0 — S304 live)
+    assert "InvokeVerb" not in ps
+    assert "-replace '&',''" in ps and "-ieq 'Eject'" in ps and "DoIt()" in ps
+    assert "no Eject verb offered" in ps          # an absent verb is a loud non-zero exit
     # refusals: no letter, a UNC share, a folder-mounted volume on the system drive
     for bad, why in [("cortex", "drive letter"),
                      (r"\\server\share\cortex", "drive letter"),
