@@ -1481,8 +1481,91 @@ def _notify_desktop(title: str, body: str) -> None:
         pass
 
 
-def _stick_run_sync(mount, tenants, brain, force, dry_run, notify=False):
-    """Shared by `stick sync` and `stick watch`. Returns True on success."""
+def _volume_present_nt(drive: str) -> bool:
+    return os.path.exists(drive + "\\")
+
+
+def _eject_stick(stick_dir, extra_roots=None) -> tuple[bool, str]:
+    """Unmount/eject the volume that holds the stick, so "safe to remove" is
+    literal. Returns (ok, detail); never raises. Refuses anything that is
+    not a removable volume: on POSIX the mount must sit UNDER one of the
+    stick mount roots (never the root itself, never `/`), on Windows the
+    drive must be a plain letter and not the system drive.
+
+    Why: a FAT volume yanked while mounted keeps its dirty bit, and the next
+    Windows desk nags "scan and fix" (S303: kernel logged "not properly
+    unmounted" twice in one carry). Linux: `udisksctl unmount -b <dev>`
+    (device via findmnt; plain `umount` if udisks is absent); macOS:
+    `diskutil unmount <mount>`; Windows: Shell.Application InvokeVerb
+    ("Eject") on the drive letter. Success is verified by the volume being
+    gone, not by the command's exit code — Windows' eject is asynchronous.
+    """
+    import re
+    import shutil
+    from pathlib import PureWindowsPath
+    from agentb.stick import candidate_mount_roots
+    try:
+        stick_dir = Path(stick_dir)
+        if os.name == "nt":
+            drive = PureWindowsPath(str(stick_dir)).drive  # e.g. 'E:'
+            if not re.fullmatch(r"[A-Za-z]:", drive or ""):
+                return False, f"not a drive letter: {stick_dir}"
+            system = os.environ.get("SystemDrive", "C:")
+            if drive.upper() == system.upper():
+                return False, f"{drive} is the system drive — refusing to eject"
+            ps = ("(New-Object -ComObject Shell.Application).Namespace(17)"
+                  f".ParseName('{drive}').InvokeVerb('Eject')")
+            argv = ["powershell", "-NoProfile", "-NonInteractive",
+                    "-Command", ps]
+            still_present = lambda: _volume_present_nt(drive)  # noqa: E731
+        else:
+            mount = stick_dir.resolve()
+            while not os.path.ismount(mount) and mount.parent != mount:
+                mount = mount.parent
+            # floor: the mount must be a child of a stick mount root. Without
+            # this the walk-up reaches `/` (always a mount) and the command
+            # targets the system disk.
+            roots = [r.resolve() for r in candidate_mount_roots(extra_roots)]
+            if not any(mount != r and mount.is_relative_to(r) for r in roots):
+                return False, (f"{mount} is not under a removable mount root "
+                               "— refusing to unmount")
+            if shutil.which("diskutil"):
+                argv = ["diskutil", "unmount", str(mount)]
+            elif shutil.which("udisksctl") and shutil.which("findmnt"):
+                dev = subprocess.run(
+                    ["findmnt", "-n", "-o", "SOURCE", "--target", str(mount)],
+                    timeout=10, check=False, capture_output=True, text=True,
+                ).stdout.strip()
+                if not dev:
+                    return False, f"findmnt found no device for {mount}"
+                argv = ["udisksctl", "unmount", "-b", dev]
+            else:
+                argv = ["umount", str(mount)]
+            still_present = lambda: os.path.ismount(mount)  # noqa: E731
+        r = subprocess.run(argv, timeout=60, check=False,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            msg = (r.stderr or r.stdout or "").strip()
+            return False, (msg[:200] or f"exit {r.returncode}")
+        for _ in range(60):          # 30 s: Windows' Eject returns before the letter drops
+            if not still_present():
+                return True, "ejected"
+            time.sleep(0.5)
+        return False, "eject command returned 0 but the volume is still mounted"
+    except Exception as e:           # noqa: BLE001 — a sync already landed; never raise past it
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _stick_run_sync(mount, tenants, brain, force, dry_run, notify=False,
+                    eject=False):
+    """Shared by `stick sync` and `stick watch`. Returns True on success.
+
+    With eject=True the volume is unmounted/ejected after the verified sync
+    (never on a dry run, never after a refusal, never when the sync left
+    conflict losers on the stick — those want a human at a mounted stick)
+    and the console line + toast say so; an eject failure is announced
+    loudly AND returns False, because the human's next move is to unmount
+    by hand before pulling."""
     from agentb.config import load_config
     from agentb.stick import StickError, load_host_config, sync as stick_sync_run
 
@@ -1521,7 +1604,25 @@ def _stick_run_sync(mount, tenants, brain, force, dry_run, notify=False):
             "backfill (or run: mnemo-cortex migrate reindex).[/]"
         )
     if not dry_run:
-        console.print("  [green]✓ safe to remove[/] (hashes readback-verified)")
+        title = "Cortex Stick — synced, safe to remove"
+        eject_ok, eject_detail = None, ""
+        if eject and report.conflicts:
+            console.print("  [bold yellow]⚠ conflicts preserved on the stick[/] — "
+                          "left mounted, see state/conflicts/ before pulling")
+            title = "Cortex Stick — synced, CONFLICTS: left mounted, see state/conflicts/"
+        elif eject:
+            console.print("  [green]✓ verified[/] (hashes readback-verified) — ejecting…")
+            eject_ok, eject_detail = _eject_stick(
+                stick_dir, extra_roots=host_cfg.get("mount_roots") or None)
+            if eject_ok:
+                console.print("  [green]✓ ejected[/] — pull it now")
+                title = "Cortex Stick — synced + ejected, pull it now"
+            else:
+                console.print(f"  [bold yellow]⚠ EJECT FAILED[/] ({eject_detail}) "
+                              "— unmount by hand before pulling")
+                title = "Cortex Stick — synced, EJECT FAILED: unmount by hand"
+        else:
+            console.print("  [green]✓ safe to remove[/] (hashes readback-verified)")
         if notify:
             bits = [f"{len(report.to_host)} in, {len(report.to_stick)} out"]
             if report.facts_to_host or report.facts_to_stick:
@@ -1531,8 +1632,11 @@ def _stick_run_sync(mount, tenants, brain, force, dry_run, notify=False):
                 bits.append(f"brain {report.brain}")
             if report.conflicts:
                 bits.append(f"⚠ {len(report.conflicts)} conflict(s)")
-            _notify_desktop("Cortex Stick — synced, safe to remove",
-                            "; ".join(bits))
+            if eject_ok is False:
+                bits.append(f"eject: {eject_detail[:120]}")
+            _notify_desktop(title, "; ".join(bits))
+        if eject_ok is False:
+            return False
     return True
 
 
@@ -1676,9 +1780,12 @@ def stick_brain_clone_cmd(dest, mount):
 @click.option("--force", is_flag=True,
               help="Override the mass-delete guard. Read the refusal first.")
 @click.option("--dry-run", is_flag=True, help="Show the delta, change nothing.")
-def stick_sync_cmd(mount, tenants, brain, force, dry_run):
+@click.option("--eject", is_flag=True,
+              help="Unmount/eject the stick after a verified sync "
+                   "(what `stick watch` does by default).")
+def stick_sync_cmd(mount, tenants, brain, force, dry_run, eject):
     """Bidirectional courier sync with the stick (auto-located if no MOUNT)."""
-    if not _stick_run_sync(mount, tenants, brain, force, dry_run):
+    if not _stick_run_sync(mount, tenants, brain, force, dry_run, eject=eject):
         raise SystemExit(1)
 
 
@@ -1750,13 +1857,19 @@ def stick_repair_cmd(mount):
 @click.option("--notify", is_flag=True,
               help="Desktop toast on each sync and on SYNC REFUSED "
                    "(notify-send / osascript; no-op where unavailable).")
-def stick_watch_cmd(poll, interval, notify):
-    """Foreground watcher: sync on plug-in, re-sync while present.
+@click.option("--eject/--no-eject", default=True, show_default=True,
+              help="Unmount/eject the stick after each verified sync so "
+                   "'safe to remove' is literal. --no-eject keeps the stick "
+                   "mounted and re-syncs every --interval while it stays in.")
+def stick_watch_cmd(poll, interval, notify, eject):
+    """Foreground watcher: sync on plug-in, eject when verified.
 
     Run it under a systemd user unit / Task Scheduler for background courier
-    behavior — plug in, it syncs; pull out, it waits for the next plug-in.
-    With --notify each sync (and any refusal) also raises a desktop toast,
-    so the courier is zero-terminal: plug in, watch the corner of the screen.
+    behavior — plug in, it syncs, it ejects; pull out, it waits for the next
+    plug-in. With --notify each sync (and any refusal) also raises a desktop
+    toast, so the courier is zero-terminal: plug in, watch the corner of the
+    screen. Because the default ejects, --interval only matters under
+    --no-eject (an ejected stick is no longer found until re-plugged).
     """
     from agentb.config import load_config
     from agentb.stick import find_stick, load_host_config
@@ -1772,7 +1885,7 @@ def stick_watch_cmd(poll, interval, notify):
                           f"stick {'present' if present else 'detected'} — syncing")
             try:
                 _stick_run_sync(str(stick_dir), (), None, False, False,
-                                notify=notify)
+                                notify=notify, eject=eject)
             except Exception as e:   # noqa: BLE001 — the watcher must outlive one bad sync
                 # A refusal is a StickError and already toasted inside; this
                 # is the unexpected kind (an unreadable host file, a codec

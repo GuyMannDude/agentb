@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.18.0 — Cortex Stick: eject after the verified sync (2026-09-04)
+
+Problem: "✓ safe to remove" was a claim, not an act. The watcher verified
+the hashes and toasted, but the volume stayed mounted, so every carry ended
+with a yank — and a FAT volume yanked while mounted keeps its dirty bit.
+The next Windows desk then nags "scan and fix" (the first two-desk carry
+logged "not properly unmounted" twice in one afternoon), and a human
+reading that nag reasonably asks whether the stick is the wrong format.
+It is not; the courier just never let go of it.
+Fix: `_eject_stick` unmounts the stick's volume after a verified sync —
+`udisksctl unmount -b <dev>` on Linux (device via findmnt; `umount` if
+udisks is absent), `diskutil unmount` on macOS, Shell.Application's Eject
+verb on Windows. Success means the volume is GONE, verified by probe, not
+by the command's exit code (Windows' eject returns early). `stick watch`
+ejects by default (`--no-eject` restores stay-mounted + interval re-sync);
+`stick sync --eject` opts a manual sync in. The eject refuses anything that
+is not a removable volume — on POSIX the mount must sit under a stick mount
+root (the walk-up would otherwise reach `/`), on Windows the drive must be a
+plain letter and not the system drive — and it is skipped when the sync left
+conflict losers in `state/conflicts/`, since those live only on the stick and
+want a human at a mounted one. The console line becomes
+"✓ ejected — pull it now" and the toast says the same; an eject that fails
+is loud — "EJECT FAILED: unmount by hand" with the reason in the body —
+because that is exactly the case where the human must not yank. A dry run
+or a refusal never ejects. Proven on the return leg of the first fleet
+carry: a manual `udisksctl unmount` after the 10,722-file sync was seen
+by the watcher as "stick removed", which is the behaviour the default now
+produces on its own.
+
 ## v4.17.4 — Cortex Stick: the watcher outlives a failed sync (2026-09-04)
 
 Problem: the first real two-desk carry failed silently. On the Windows desk

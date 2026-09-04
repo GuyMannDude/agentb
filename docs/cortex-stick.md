@@ -35,16 +35,23 @@ mnemo-cortex stick unlock     # same passphrase — enrolls this host
 mnemo-cortex stick sync
 
 # or let it happen automatically while you work:
-mnemo-cortex stick watch      # syncs on plug-in, re-syncs while present
+mnemo-cortex stick watch      # syncs on plug-in, then EJECTS the stick (pull it)
 mnemo-cortex stick watch --notify   # + desktop toast per sync / refusal
+mnemo-cortex stick watch --no-eject # stay mounted, re-sync every --interval
+mnemo-cortex stick sync --eject     # one manual sync that ejects afterwards
 ```
 
 ### Zero-terminal courier (recommended)
 
 Run the watcher as a background unit and the stick becomes plug-and-walk-away:
-insert it, a toast tells you what traveled and that it's safe to remove, pull
-it out. A refusal (torn generation, guard trip, wrong key) also raises a
-toast — unattended mode never hides a stick that needs a human.
+insert it, the sync runs, the stick is unmounted/ejected once the hashes are
+verified, and a toast says "synced + ejected, pull it now". The eject is what
+makes "safe to remove" literal — a FAT stick yanked while mounted keeps its
+dirty bit and the next Windows desk nags "scan and fix". If the eject fails the
+toast says so ("EJECT FAILED: unmount by hand") and the stick stays mounted;
+a sync that left conflict losers in `state/conflicts/` also stays mounted so
+you can read them. A refusal (torn generation, guard trip, wrong key) raises
+a toast too — unattended mode never hides a stick that needs a human.
 
 Linux — systemd user unit (`~/.config/systemd/user/cortex-stick-watch.service`):
 

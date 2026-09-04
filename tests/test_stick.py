@@ -904,3 +904,189 @@ def test_sync_without_brain_repo_reports_not_configured(tmp_path):
     stick = init_stick(tmp_path / "stick")
     r = sync(host, stick, host_id="host-a", pad=False)
     assert r.brain == "not configured"
+
+
+# ── v4.18.0 eject-after-verified-sync: "safe to remove" must be literal ────
+
+def _fake_report(**kw):
+    from agentb.stick import SyncReport
+    r = SyncReport()
+    for k, v in kw.items():
+        setattr(r, k, v)
+    return r
+
+
+def test_eject_stick_linux_udisksctl_and_verifies_gone(monkeypatch, tmp_path):
+    """Linux path: findmnt → device, udisksctl unmount -b <dev>, and success
+    is the mount being GONE, not the command's exit code."""
+    import shutil
+    import subprocess
+    from agentb import cli
+    root = tmp_path.resolve()
+    mount = root / "CORTEX"
+    stick = mount / "cortex"
+    stick.mkdir(parents=True)
+    state = {"mounted": True}
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(os.path, "ismount",
+                        lambda p: Path(p) == mount and state["mounted"])
+    monkeypatch.setattr(shutil, "which",
+                        lambda n: f"/usr/bin/{n}" if n in ("udisksctl", "findmnt") else None)
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if argv[0] == "findmnt":
+            return subprocess.CompletedProcess(argv, 0, stdout="/dev/sdz1\n", stderr="")
+        if argv[0] == "udisksctl":
+            state["mounted"] = False
+            return subprocess.CompletedProcess(argv, 0, stdout="Unmounted /dev/sdz1.\n", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    ok, detail = cli._eject_stick(stick, extra_roots=[str(root)])
+    assert ok, detail
+    assert calls[0][:4] == ["findmnt", "-n", "-o", "SOURCE"]
+    assert calls[1] == ["udisksctl", "unmount", "-b", "/dev/sdz1"]
+
+
+def test_eject_stick_refuses_mount_outside_stick_roots(monkeypatch, tmp_path):
+    """The walk-up must have a floor: a stick dir on the internal disk walks
+    up to `/` (always a mount) and without the floor the command would
+    target the system disk. Refuse, and never even call findmnt."""
+    import shutil
+    import subprocess
+    from agentb import cli
+    stick = tmp_path / "cortex"
+    stick.mkdir()
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = []
+    monkeypatch.setattr(subprocess, "run",
+                        lambda argv, **kw: (calls.append(argv),
+                                            subprocess.CompletedProcess(argv, 0, stdout="/dev/root\n", stderr=""))[1])
+    # real ismount: tmp_path is not a mount, so the walk reaches "/"
+    ok, detail = cli._eject_stick(stick)               # default roots only
+    assert ok is False and "not under a removable mount root" in detail
+    assert calls == []
+    # the root ITSELF is not a stick mount either (mount must be a child)
+    monkeypatch.setattr(os.path, "ismount", lambda p: Path(p) == tmp_path.resolve())
+    ok, detail = cli._eject_stick(stick, extra_roots=[str(tmp_path)])
+    assert ok is False and calls == []
+
+
+def test_eject_stick_reports_failure_never_raises(monkeypatch, tmp_path):
+    import shutil
+    import subprocess
+    from agentb import cli
+    root = tmp_path.resolve()
+    mount = root / "CORTEX"
+    stick = mount / "cortex"
+    stick.mkdir(parents=True)
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(os.path, "ismount", lambda p: Path(p) == mount)
+    monkeypatch.setattr(shutil, "which",
+                        lambda n: f"/usr/bin/{n}" if n in ("udisksctl", "findmnt") else None)
+
+    def run(argv, **kw):
+        if argv[0] == "findmnt":
+            return subprocess.CompletedProcess(argv, 0, stdout="/dev/sdz1\n", stderr="")
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="target is busy")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, detail = cli._eject_stick(stick, extra_roots=[str(root)])
+    assert ok is False and "busy" in detail
+    # still-mounted after rc 0 is ALSO a failure (the verify is the truth)
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda argv, **kw: subprocess.CompletedProcess(
+            argv, 0, stdout="/dev/sdz1\n" if argv[0] == "findmnt" else "", stderr=""))
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    ok, detail = cli._eject_stick(stick, extra_roots=[str(root)])
+    assert ok is False and "still mounted" in detail
+    # and an exception inside is a (False, detail), never a raise
+    monkeypatch.setattr(os.path, "ismount", lambda p: (_ for _ in ()).throw(OSError("boom")))
+    ok, detail = cli._eject_stick(stick, extra_roots=[str(root)])
+    assert ok is False and "boom" in detail
+
+
+def test_eject_stick_windows_invokes_shell_eject_on_drive(monkeypatch):
+    """Windows path is exercised on any host: the drive letter comes from a
+    PureWindowsPath and the verb is Shell.Application's Eject."""
+    import subprocess
+    from agentb import cli
+    monkeypatch.setattr(os, "name", "nt")
+    calls = []
+    monkeypatch.setattr(subprocess, "run",
+                        lambda argv, **kw: (calls.append(argv),
+                                            subprocess.CompletedProcess(argv, 0, stdout="", stderr=""))[1])
+    monkeypatch.setattr(cli, "_volume_present_nt", lambda d: False)   # letter gone → verified
+    monkeypatch.setenv("SystemDrive", "C:")
+    ok, detail = cli._eject_stick(r"E:\cortex")
+    assert ok, detail
+    assert calls[0][0] == "powershell"
+    ps = calls[0][-1]
+    assert "ParseName('E:')" in ps and "InvokeVerb('Eject')" in ps
+    # refusals: no letter, a UNC share, a folder-mounted volume on the system drive
+    for bad, why in [("cortex", "drive letter"),
+                     (r"\\server\share\cortex", "drive letter"),
+                     (r"C:\mnt\stick\cortex", "system drive")]:
+        ok, detail = cli._eject_stick(bad)
+        assert ok is False and why in detail, (bad, detail)
+    assert len(calls) == 1                     # none of the refusals ran a command
+
+
+@pytest.mark.parametrize("eject_result,expect_title", [
+    (None, "safe to remove"),                      # eject off
+    ((True, "ejected"), "ejected, pull it now"),   # eject on, worked
+    ((False, "target is busy"), "EJECT FAILED"),   # eject on, failed → loud
+])
+def test_run_sync_eject_wiring_and_toast(monkeypatch, tmp_path, eject_result, expect_title):
+    """_stick_run_sync: eject runs only when asked, after the verified sync,
+    and the toast title tells the human what to do next."""
+    import agentb.config
+    import agentb.stick
+    from agentb import cli
+
+    class Cfg:
+        data_dir = str(tmp_path)
+
+    monkeypatch.setattr(agentb.config, "load_config", lambda: Cfg())
+    monkeypatch.setattr(agentb.stick, "load_host_config", lambda d: {})
+    monkeypatch.setattr(agentb.stick, "sync",
+                        lambda *a, **kw: _fake_report(to_host=["memories/x/memory/a.json"]))
+    stick_dir = tmp_path / "cortex"
+    stick_dir.mkdir()
+    monkeypatch.setattr(cli, "_stick_locate", lambda m, h: stick_dir)
+    ejects, toasts = [], []
+    monkeypatch.setattr(cli, "_eject_stick",
+                        lambda d, extra_roots=None: (ejects.append(d), eject_result)[1])
+    monkeypatch.setattr(cli, "_notify_desktop",
+                        lambda title, body: toasts.append((title, body)))
+    ok = cli._stick_run_sync(None, (), None, False, False, notify=True,
+                             eject=eject_result is not None)
+    assert len(ejects) == (0 if eject_result is None else 1)
+    assert len(toasts) == 1 and expect_title in toasts[0][0], toasts
+    if eject_result and not eject_result[0]:
+        assert "busy" in toasts[0][1]          # the reason rides in the body
+    # an eject failure is a False return: `stick sync --eject` must exit 1
+    assert ok is (eject_result is None or eject_result[0])
+    # dry run never ejects
+    ejects.clear()
+    cli._stick_run_sync(None, (), None, False, True, notify=True, eject=True)
+    assert ejects == []
+    # conflicts: losers live only on the stick → leave it mounted, say so
+    monkeypatch.setattr(agentb.stick, "sync",
+                        lambda *a, **kw: _fake_report(to_host=["memories/x/memory/a.json"],
+                                                      conflicts=["memories/x/memory/a.json"]))
+    toasts.clear()
+    assert cli._stick_run_sync(None, (), None, False, False, notify=True, eject=True) is True
+    assert ejects == [] and "CONFLICTS" in toasts[0][0] and "left mounted" in toasts[0][0]
+    # a refusal never reaches the eject
+    from agentb.stick import StickError
+    monkeypatch.setattr(agentb.stick, "sync",
+                        lambda *a, **kw: (_ for _ in ()).throw(StickError("torn generation")))
+    toasts.clear()
+    assert cli._stick_run_sync(None, (), None, False, False, notify=True, eject=True) is False
+    assert ejects == [] and "REFUSED" in toasts[0][0]
