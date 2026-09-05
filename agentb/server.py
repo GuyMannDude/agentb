@@ -726,13 +726,14 @@ def assert_safe_auth_posture(config: AgentBConfig) -> None:
         )
 
 
-def _epoch_from_iso(value: str) -> float:
-    """ISO-8601 → epoch seconds. Naive stamps are read as UTC. Anything
-    unparseable returns now — a bad clock must never block a write."""
+def _epoch_from_iso(value: str) -> Optional[float]:
+    """ISO-8601 → epoch seconds; naive stamps are read as UTC. Returns None
+    when the value is not ISO-8601 — the caller decides the fallback and
+    makes it visible. Never raises: a bad clock must never block a write."""
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return time.time()
+        dt = datetime.fromisoformat(value)
+    except (TypeError, ValueError, AttributeError):
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.timestamp()
@@ -1366,18 +1367,36 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         vec_store: VecStore = tenant["vec"]
 
         ts = req.timestamp or datetime.now(timezone.utc).isoformat()
-        memory_id = hashlib.sha256(f"{req.session_id}:{ts}".encode()).hexdigest()[:16]
         # v4.18.2: a caller-supplied timestamp is the memory's birth, not the
         # moment it reached this server. Imports, stick carries and backfills
         # were landing with created_at=now — every recency term (ranker,
         # age_days, stale warnings, dedup age) then saw a 30-day-old memory
-        # as newborn. Unparseable timestamps fall back to now, never to error.
-        created_at = _epoch_from_iso(req.timestamp) if req.timestamp else time.time()
+        # as newborn.
+        # v4.18.3: the fallback is OBSERVABLE (record flag + warning), and a
+        # future-dated stamp is clamped to now — an unclamped one pins recency
+        # at 1.0 forever, suppresses stale warnings and escapes max_age_days.
+        now = time.time()
+        created_at, created_at_fallback = now, False
+        if req.timestamp:
+            parsed = _epoch_from_iso(req.timestamp)
+            if parsed is None:
+                created_at_fallback = True
+                log.warning(f"Writeback {req.session_id}: unparseable timestamp "
+                            f"{req.timestamp!r} — created_at falls back to now")
+            else:
+                created_at = min(parsed, now)
 
         # Embed once, then use the existing same-tenant index for a bounded
         # top-k candidate check before anything is persisted. SQLite work runs
         # through an isolated worker connection in dedup.py.
         full_text = summary + "\n" + "\n".join(key_facts)
+        # v4.18.3: the id mixes in the CONTENT. It used to be session_id:ts
+        # alone, so two writes sharing a stamp (every import, carry and
+        # backfill that reuses one timestamp) silently overwrote each other —
+        # 200 OK, one file on disk. Identical re-sends still map to the same
+        # id, so idempotent retries stay idempotent.
+        memory_id = hashlib.sha256(
+            f"{req.session_id}:{ts}:{full_text}".encode()).hexdigest()[:16]
         embedding = None
         dedup_unchecked = None
         try:
@@ -1450,12 +1469,15 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             "projects_referenced": req.projects_referenced,
             "decisions_made": decisions_made,
             "timestamp": ts, "created_at": created_at,
+            "ingested_at": now,          # v4.18.3: when it reached THIS server (rulekeeper window)
             # v3 fields
             "source": source_used,
             "category": category_used,
             "additional_tags": additional_tags,
             "schema_version": 3,
         }
+        if created_at_fallback:
+            memory_entry["created_at_fallback"] = True
         near_dup_ids = [match["id"] for match in near_duplicates]
         if near_dup_ids:
             memory_entry["near_dup_of"] = near_dup_ids

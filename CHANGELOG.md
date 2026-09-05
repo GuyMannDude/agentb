@@ -1,5 +1,26 @@
 # Changelog
 
+## v4.18.3 — Writeback ids mix in content; timestamp handling is observable and clamped (2026-09-04)
+
+Problem (found by code review of 4.18.2, confirmed end-to-end): the memory
+id was `sha256(session_id:ts)[:16]`, so two writes sharing a timestamp
+string — every import, stick carry and backfill that reuses one stamp —
+silently overwrote each other: both 200 OK, one file on disk, the vec row
+replaced. 4.18.2 made callers pass timestamps and so made this common.
+Also: a future-dated stamp was accepted unclamped (recency pinned at 1.0
+forever, stale warnings suppressed, `max_age_days` never filters it); an
+unparseable stamp fell back to now with no signal; and the rulekeeper's
+7-day window read `created_at`, so a backdated import was never scanned
+for duplicates. Plus 4.18.2 shipped with `robot.info` still at 4.18.1 —
+the test suite was run BEFORE the version bump, not after.
+Fix: id = `sha256(session_id:ts:content)` (identical re-sends stay
+idempotent); future stamps clamp to now; fallback sets
+`created_at_fallback: true` on the record and logs a warning;
+`ingested_at` (arrival) is recorded and the rulekeeper windows on it;
+`robot.info` bumped. Seven new tests including the vec-tier assertion,
+the collision, the idempotent re-send and the rulekeeper window.
+
+
 ## v4.18.2 — Writeback: a caller's timestamp is the memory's birth (2026-09-04)
 
 Problem: `/writeback` accepted `timestamp` and stored it on the record, but

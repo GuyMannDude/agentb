@@ -26,7 +26,11 @@ def scan_tenant(memory_dir: Path, vec_store: VecStore, *, window_days: int = 7,
             memory = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if float(memory.get("created_at") or 0) < cutoff or memory.get("superseded_by"):
+        # The window is about ARRIVAL, not birth: a backdated import must be
+        # scanned in the week it lands. ingested_at since v4.18.3; older
+        # records only carry created_at, which for them equalled arrival.
+        arrived = memory.get("ingested_at") or memory.get("created_at") or 0
+        if float(arrived) < cutoff or memory.get("superseded_by"):
             continue
         memory_id = memory.get("id") or path.stem
         embedding = vec_store.get_embedding(memory_id)
