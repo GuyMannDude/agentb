@@ -284,21 +284,30 @@ def test_on_topic_low_star_beats_off_topic_five_star(tmp_path: Path):
     Raw sims here: on-topic ≈ 0.667 vs off-topic ≈ 0.625 — close enough that
     the raw 0.60/0.25 weighting flipped the order pre-fix."""
     store = TrajectoryStore(tmp_path / "traj")
-    # Distances from the query below: 0.5 (on-topic) vs 0.6 (off-topic)
-    # → raw sims 0.667 vs 0.625.
+    # v4.18.4: vectors are unit-normalised at the index boundary, so distance
+    # is encoded as an ANGLE from the query (axis 0), not a magnitude.
+    # cos 0.875 / 0.82 → unit-vector L2 0.5 (on-topic) vs 0.6 (off-topic)
+    # → raw sims 0.667 vs 0.625, the same band the test always pinned.
+    import math
+
+    def _at_cosine(cos):
+        v = [0.0] * 768
+        v[0], v[1] = cos, math.sqrt(1.0 - cos * cos)
+        return v
+
     on_topic = store.save(
         agent_id="cc", task_type="bus_debug",
         task_description="on topic, decent recipe",
         steps=[{"action": "x", "tool_used": "bash", "result_summary": "y"}],
         outcome="z", rating=3,
-        embedding=_vec_along(0, magnitude=0.5),
+        embedding=_at_cosine(0.875),
     )
     off_topic = store.save(
         agent_id="cc", task_type="bus_debug",
         task_description="off topic, five stars",
         steps=[{"action": "x", "tool_used": "bash", "result_summary": "y"}],
         outcome="z", rating=5,
-        embedding=_vec_along(0, magnitude=0.4),
+        embedding=_at_cosine(0.82),
     )
     query = _vec_along(0, magnitude=1.0)
     hits = store.recall(query, min_rating=3, max_results=2)

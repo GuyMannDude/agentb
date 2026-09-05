@@ -53,7 +53,7 @@ from agentb.classify import classify_category, reclassify_memory_dir, is_routine
 from agentb.dedup import find_near_duplicates
 from agentb.redact import redact_text, redact_obj
 from agentb.capture_gate import CaptureGate
-from agentb.ranking import composite_score, pool_similarities, explore_score
+from agentb.ranking import composite_score, pool_similarities, explore_score, order_revisions
 from agentb.analyst import analyze_tenant, muse_tenant
 from agentb.vec import VecStore, detect_mode as vec_detect_mode, backfill as vec_backfill, VecDimMismatch
 from agentb.trajectory import TrajectoryStore, embedding_text as traj_embedding_text
@@ -107,15 +107,18 @@ class ContextRequest(BaseModel):
     max_results: int = Field(5, ge=1, le=20)
     mode: Optional[str] = Field(
         None,
-        pattern="^(focus|explore)$",
+        pattern="^(focus|explore|recent)$",
         description=(
             "Recall lens. 'focus': best match wins — similarity + recency + "
             "importance + access. 'explore' (the serendipity lens): what does "
             "this remind the store of — prefers the adjacent similarity band, "
-            "ignores recency, favors rarely-recalled memories. Omitted: the "
-            "persona decides (context_bias associative -> explore, else focus; "
-            "the response's `mode` names which lens served). "
-            "Use explore for brainstorming and idea recall."
+            "ignores recency, favors rarely-recalled memories. 'recent' (the "
+            "boot lens): similarity only gates — every on-topic memory is served "
+            "newest first. Omitted: the persona decides (context_bias "
+            "associative -> explore, else focus; the response's `mode` names "
+            "which lens served). Use explore for brainstorming and idea recall; "
+            "use recent for 'what was I doing' — a persona's default lens never "
+            "answers that question."
         ),
     )
     # v3 provenance + decay filters (all optional)
@@ -596,6 +599,15 @@ def merge_passes(passes) -> list:
     return list(merged.values())
 
 
+def chunk_age_days(c, now: float) -> float:
+    """Age of a pooled chunk in days; unknown age sorts as oldest."""
+    if c.age_days is not None:
+        return float(c.age_days)
+    if c.created_at:
+        return (now - float(c.created_at)) / 86400.0
+    return float("inf")
+
+
 def top_relevance(chunks) -> float:
     """Highest raw relevance in a candidate pool (0.0 if empty). Raw, not the
     composite score — the escalation check runs before the re-rank."""
@@ -932,8 +944,12 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         # v3 filter setup. exclude_categories defaults to DEFAULT_HIDDEN_CATEGORIES
         # (session_log). Caller can opt back in by passing an explicit list — even
         # an empty one — to disable hiding.
+        # v4.18.4: the `recent` lens exists for "what was I doing", which
+        # lives in session_log — hiding it by default would make the lens
+        # answer everything except its own question (review, 2026-09-05).
+        # recent hides nothing unless the caller says so.
         if req.exclude_categories is None:
-            effective_exclude = set(DEFAULT_HIDDEN_CATEGORIES)
+            effective_exclude = set() if mode == "recent" else set(DEFAULT_HIDDEN_CATEGORIES)
         else:
             effective_exclude = set(req.exclude_categories)
         # If caller asked for a specific category, never hide it.
@@ -1024,6 +1040,46 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             # the kNN cost of a larger k is negligible and the handler trims to
             # max_results regardless.
             vec_filter_active = bool(req.category) or bool(effective_exclude)
+
+            def _chunk_from_vec_hit(hit) -> ContextChunk:
+                # vec0 distance is L2 by default; convert to similarity-ish (0..1)
+                relevance = 1.0 / (1.0 + hit.distance)
+                # v4.0.1: load category/source from the memory's JSON so the
+                # metadata filter (session_log exclusion, stale, source) applies
+                # to VEC hits too. Without this the VEC tier silently bypassed
+                # every category filter — session_log noise crowded recall.
+                category = provenance_source = None
+                age_days = stale = None
+                revises: list = []
+                if hit.source_file and os.path.exists(hit.source_file):
+                    try:
+                        mj = json.loads(Path(hit.source_file).read_text(encoding="utf-8"))
+                        category = mj.get("category")
+                        provenance_source = mj.get("source")
+                        # v4.18.4: the near-duplicates this write was FORCED past
+                        # (ranking.order_revisions). `supersedes` targets leave the
+                        # index at write time, so they are never in a pool.
+                        if mj.get("near_dup_forced"):
+                            revises = list(mj.get("near_dup_of") or [])
+                    except Exception:
+                        pass
+                if hit.created_at:
+                    age_days = (time.time() - hit.created_at) / 86400.0
+                    if category:
+                        stale = compute_stale_warning(category, hit.created_at)
+                return ContextChunk(
+                    content=hit.text,
+                    source=f"memory:{hit.memory_id}",
+                    relevance=relevance,
+                    cache_tier="VEC",
+                    memory_id=hit.memory_id,
+                    provenance_source=provenance_source,
+                    category=category,
+                    age_days=age_days,
+                    stale_warning=stale,
+                    revises=revises,
+                )
+
             if vec_store.count() > 0:
                 def _vec_pass(multiplier: int) -> bool:
                     """Run one filtered kNN and ingest survivors. Returns False
@@ -1043,36 +1099,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                     for hit in vec_hits:
                         if hit.memory_id in seen_memory_ids:
                             continue
-                        # vec0 distance is L2 by default; convert to similarity-ish (0..1)
-                        relevance = 1.0 / (1.0 + hit.distance)
-                        # v4.0.1: load category/source from the memory's JSON so the
-                        # metadata filter (session_log exclusion, stale, source) applies
-                        # to VEC hits too. Without this the VEC tier silently bypassed
-                        # every category filter — session_log noise crowded recall.
-                        category = provenance_source = None
-                        age_days = stale = None
-                        if hit.source_file and os.path.exists(hit.source_file):
-                            try:
-                                mj = json.loads(Path(hit.source_file).read_text(encoding="utf-8"))
-                                category = mj.get("category")
-                                provenance_source = mj.get("source")
-                            except Exception:
-                                pass
-                        if hit.created_at:
-                            age_days = (time.time() - hit.created_at) / 86400.0
-                            if category:
-                                stale = compute_stale_warning(category, hit.created_at)
-                        c = ContextChunk(
-                            content=hit.text,
-                            source=f"memory:{hit.memory_id}",
-                            relevance=relevance,
-                            cache_tier="VEC",
-                            memory_id=hit.memory_id,
-                            provenance_source=provenance_source,
-                            category=category,
-                            age_days=age_days,
-                            stale_warning=stale,
-                        )
+                        c = _chunk_from_vec_hit(hit)
                         if keep_chunk(c):
                             pass_chunks.append(c)
                             seen_memory_ids.add(hit.memory_id)
@@ -1089,6 +1116,29 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                 # 6.2k files). Escalate once, then accept what we have.
                 if vec_ok and vec_filter_active and len(pass_chunks) < req.max_results:
                     _vec_pass(config.cache.vec_category_overfetch_multiplier * 5)
+                # v4.18.4 — the recent lens RETRIEVES by recency too: the kNN
+                # pool holds the nearest neighbours, and on a store of
+                # thousands of near-identical session logs the newest one is
+                # routinely outside it (review, 2026-09-05). Union the newest
+                # rows into the pool; the band gate below decides on-topic.
+                if mode == "recent":
+                    try:
+                        newest_hits = vec_store.newest(query_embedding, n=overfetch,
+                                                       include_category=req.category or None,
+                                                       exclude_categories=effective_exclude)
+                    except VecDimMismatch as e:
+                        # same failure the kNN leg screams on; never feed
+                        # fabricated distances into the pool (that would also
+                        # mark VEC as served and skip the L3 escape hatch)
+                        log.error(f"vec newest dim mismatch: {e}")
+                        newest_hits = []
+                    for hit in newest_hits:
+                        if hit.memory_id in seen_memory_ids:
+                            continue
+                        c = _chunk_from_vec_hit(hit)
+                        if keep_chunk(c):
+                            pass_chunks.append(c)
+                            seen_memory_ids.add(hit.memory_id)
 
             # L3: the expensive disk-walk (embeds candidates) stays an escape
             # hatch — only runs when VEC couldn't fill the request AND served
@@ -1192,6 +1242,21 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             ]
             all_chunks = [c for s, c in sorted(
                 scored, key=lambda sc: sc[0], reverse=True) if s > 0.0]
+        elif mode == "recent":
+            # v4.18.4 — the boot lens (E1, proving ground S03). "What was I
+            # working on" is a RECENCY question asked over near-identical
+            # session memories: on the focus lens a 0.06-cosine wording gap
+            # (topic nouns) outweighed 13 days of age and the latest session
+            # ranked 12th of 13. No weight fixes that without breaking the
+            # focus contract (an old exact doctrine beats a fresh marginal
+            # state), so it is a different lens: similarity only GATES —
+            # anything inside the pool's band (pool_similarities > 0) is
+            # on-topic — and the date ORDERS. Newest first, the noise band
+            # excluded, unknown age last.
+            now = time.time()
+            sims = pool_similarities([(c.relevance, c.cache_tier) for c in all_chunks])
+            in_band = [c for sim, c in zip(sims, all_chunks) if sim > 0.0]
+            all_chunks = sorted(in_band, key=lambda c: chunk_age_days(c, now))
         elif config.ranking.enabled:
             now = time.time()
 
@@ -1220,7 +1285,11 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             scored.sort(key=lambda sc: sc[0], reverse=True)
             all_chunks = [c for _, c in scored]
 
-        selected = all_chunks[: req.max_results]
+        # v4.18.4: inside the served window a memory that revises another
+        # served memory (forced past the dedup gate, `near_dup_of`) comes
+        # first — the stale truth still serves, after the new one. Membership
+        # is the score's decision; this only orders (ranking.order_revisions).
+        selected = order_revisions(all_chunks[: req.max_results])
         for c in selected:
             cache_hits[c.cache_tier] = cache_hits.get(c.cache_tier, 0) + 1
 
@@ -1481,6 +1550,11 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         near_dup_ids = [match["id"] for match in near_duplicates]
         if near_dup_ids:
             memory_entry["near_dup_of"] = near_dup_ids
+            # v4.18.4: only a write the CALLER forced past the hold is a
+            # revision of what it was held against; a batch import or a
+            # routine-log-shaped write skipped the hold and chose nothing.
+            if req.force:
+                memory_entry["near_dup_forced"] = True
         if req.supersedes:
             memory_entry["supersedes"] = list(dict.fromkeys(req.supersedes))
         if dedup_unchecked:

@@ -1,5 +1,75 @@
 # Changelog
 
+## v4.18.4 — Vectors normalised at the boundary; revision order in the served window; the `recent` lens (2026-09-05)
+
+Problem (found by the memory proving ground, E1): S02 `ranker-current`
+served the stale nozzle memory and S03 `latest-present` missed the
+newest session. The first probe showed WHY, and it was not the weights:
+every hit entered the composite with similarity exactly 1.0. The VEC tier
+maps L2 distance back to cosine assuming unit vectors on both sides;
+Ollama's nomic-embed-text happens to return unit vectors, fastembed's
+returns norm ~20, so every distance was 8-17, every cosine clamped to -1
+and the pool collapsed to a tie — similarity inert, recency and access
+count alone ordered recall (the S289 finding, reproduced). With that
+fixed the failures INVERTED: on S02 the stale memory echoes the question
+("is the nozzle clogged" — cosine 0.92 vs 0.80 for "replaced") and at the
+shipped weights recency can flip ~0.07 cosine, not 0.12; on S03 a
+0.06-cosine wording gap between near-identical session lines outweighed
+13 days of age and the latest session ranked 12th of 13. Neither is a
+weight problem: raising recency breaks the standing contract that an old
+exact doctrine beats a fresh marginal state.
+
+Fix, three parts:
+1. `vec.unit_vector` — every embedding is normalised on insert and on
+   query. Exact cosine mapping for any provider; a no-op on unit vectors.
+   An index written before this by a non-normalising provider is migrated
+   ONCE on open (`_ensure_unit_norm`: scale non-unit rows in place, no
+   re-embed, stamp `vec_meta.unit_norm`) — without that every old row sat
+   at L2 ~|v| behind every new one, for ever. Batched (500 rows per
+   transaction, idempotent, resumes after a crash), connection timeout
+   30 s so a concurrent opener waits instead of raising. Cost: one read
+   of every stored vector, once per index, on the first request that
+   opens the tenant (~3 s per 20k rows).
+2. Revision order (`ranking.order_revisions`): the dedup gate already
+   names the near-duplicate a forced write was held against and the
+   record carries `near_dup_of`. Inside the SERVED window, a memory that
+   revises another served memory comes first — the stale truth still
+   serves, right behind it. Membership is the score's decision; this only
+   orders. (Review caught the first cut: an unbounded demotion ejected a
+   0.90 top hit on the say-so of a 0.10 chunk, and in explore mode zeroed
+   both.) The link only counts when the caller FORCED the write past the
+   hold (`near_dup_forced` on the record): batch imports and routine-log
+   writes skip the hold, chose nothing, and keep `near_dup_of` as audit
+   only. session_log revisers never move; fan-in puts both revisers first;
+   chains settle by iteration (bound is n², one move per pass — review
+   found n+1 left 7 of 200k random graphs unsettled).
+3. `mode: "recent"` — the boot lens for "what was I doing": the pool is
+   the kNN neighbours UNION the newest rows (`VecStore.newest`, so the
+   newest session is retrieved even when it is outside the kNN pool of a
+   log-heavy store; metadata first with the category filter in SQL and an
+   index on created_at, embeddings by id second — a join against vec0
+   scanned every blob, 2.7 s on 20k rows; same dim guard as the kNN, so a
+   mismatch screams instead of fabricating distances); similarity only
+   gates (inside the pool's band = on
+   topic), the date orders, the noise band is excluded. `recent` shows
+   session_log unless the caller excludes it — the lens's own question
+   lives there, and the default hiding would have answered everything but
+   that. The bridge's `mnemo_recall` enum lists it (bridge 2.25.0). No
+   fleet caller names it yet: the proving ground's S03 is the spec.
+
+Also: `tests/test_trajectory.py` encoded distance as vector MAGNITUDE,
+which normalisation erases — re-encoded as an angle, same band pinned.
+
+Tests: +15 (normalisation, one-open migration, six order_revisions
+units incl. the convergence repro, forced-duplicate outranks at recall,
+batch write does NOT, recent lens: ordering + noise band, session_log
+default, retrieval beyond the kNN pool, SQL-side category filter, dim
+guard, 422 on a typo); suite 764 passed / 1 skipped. Proving ground after: Mnemo strict
+AND creative PASS on S01/S02/S03 (was S02 5/6, S03 creative 2/3; S03's
+noise fixture is now dated NEWER than 11 of 13 sessions so a date sort
+alone cannot pass it); planted-failure control still flips all five
+recency checks.
+
 ## v4.18.3 — Writeback ids mix in content; timestamp handling is observable and clamped (2026-09-04)
 
 Problem (found by code review of 4.18.2, confirmed end-to-end): the memory

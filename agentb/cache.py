@@ -40,6 +40,7 @@ class ContextChunk:
         age_days: Optional[float] = None,
         stale_warning: Optional[dict] = None,
         created_at: Optional[float] = None,
+        revises: Optional[list] = None,
     ):
         self.content = content
         self.source = source
@@ -55,6 +56,10 @@ class ContextChunk:
         self.age_days = age_days
         self.stale_warning = stale_warning
         self.created_at = created_at
+        # v4.18.4: ids this memory revises — the near-duplicates a writeback
+        # was held against and the caller then FORCED past (`near_dup_of`
+        # with `near_dup_forced`). Read by ranking.order_revisions.
+        self.revises = revises or []
 
     def to_dict(self) -> dict:
         d = {"content": self.content, "source": self.source,

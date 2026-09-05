@@ -155,3 +155,40 @@ def test_rulekeeper_reports_without_mutating(world):
     assert result["pairs"][0]["new_id"] in {first["memory_id"], forced["memory_id"]}
     assert before == after
     assert "nothing merged or demoted" in format_advisory("cody", result)
+
+
+def test_forced_near_duplicate_outranks_the_memory_it_revises(world):
+    # E1 (proving ground S02, 2026-09-05). Same embedding for both (FakeEmbedding),
+    # same age; the FIRST memory earns access credit from a recall, which at
+    # the shipped weights would keep it on top. The forced write carries
+    # near_dup_of = [first]; at recall the reviser must serve first, and the
+    # revised memory must still be served (demoted, never dropped).
+    client, _ = world
+    first = save(client, "first", category="topology", text="the nozzle is clogged and printing badly").json()
+    client.post("/context", json={"prompt": "nozzle", "agent_id": "cody", "exclude_categories": []})
+    forced = save(client, "second", category="topology", force=True,
+                  text="the nozzle is clogged? no — it was replaced and prints cleanly").json()
+    assert forced["status"] == "archived"
+    chunks = client.post("/context", json={"prompt": "nozzle", "agent_id": "cody",
+                                           "exclude_categories": []}).json()["chunks"]
+    ids = [c["memory_id"] for c in chunks]
+    assert ids.index(forced["memory_id"]) < ids.index(first["memory_id"])
+
+
+def test_batch_write_past_the_gate_does_not_acquire_revision_power(world):
+    # review 2026-09-05: near_dup_of was stamped on non-interactive writes too
+    # (batch / routine logs skip the hold), so a bulk import could re-order
+    # other callers' served windows. Only a FORCED write is a revision.
+    client, root = world
+    first = save(client, "first", category="topology", text="the nozzle is clogged and printing badly").json()
+    client.post("/context", json={"prompt": "nozzle", "agent_id": "cody", "exclude_categories": []})
+    batch = save(client, "second", category="topology", batch=True,
+                 text="the nozzle is clogged? no — it was replaced and prints cleanly").json()
+    assert batch["status"] == "archived"
+    stored = json.loads((root / "cody" / "memory" / f"{batch['memory_id']}.json").read_text())
+    assert stored["near_dup_of"] == [first["memory_id"]]            # audit link kept
+    assert "near_dup_forced" not in stored                          # but no revision claim
+    chunks = client.post("/context", json={"prompt": "nozzle", "agent_id": "cody",
+                                           "exclude_categories": []}).json()["chunks"]
+    ids = [c["memory_id"] for c in chunks]
+    assert ids.index(first["memory_id"]) < ids.index(batch["memory_id"])

@@ -206,3 +206,49 @@ def explore_score(
         + W_EXPLORE_IMPORTANCE * importance
         + W_EXPLORE_NOVELTY * novelty
     )
+
+
+# ── Revision order (E1, 2026-09-05) ─────────────────────────────────────────
+# The proving ground's S02: "the nozzle is clogged" (30 days old) vs "the
+# nozzle was replaced" (today), asked "is the nozzle clogged". The stale
+# memory echoes the question's wording (cosine 0.92 vs 0.80), and at the
+# shipped weights recency can flip a gap of ~0.07 cosine, not 0.12 — so the
+# stale truth was served as current. Raising w_recency would break the
+# standing contract (an old exact doctrine must beat a fresh marginal
+# state), so the weights stay.
+#
+# The signal already exists at WRITE time: the dedup gate held the new
+# memory as a near-duplicate of the old one and named it; the caller forced
+# the write, and the record carries `near_dup_of`. Among memories that are
+# ALL being served, the newer near-duplicate goes first. That is the whole
+# rule: membership is decided by the score, this only orders the served
+# window. A chunk that did not make the window cannot move one that did
+# (review, 2026-09-05: an unbounded demotion ejected a 0.90 top hit on the
+# say-so of a 0.10 chunk, and in explore mode zeroed both). session_log
+# revisers never move (auto-capture carries `near_dup_of` too; a log is not
+# a revision of a doctrine), and the link only counts when the CALLER forced
+# the write past the hold (`near_dup_forced`) — a batch import or a routine
+# log-shaped write skips the hold and chose nothing. Fan-in (two revisers of
+# one memory) puts both first; chains settle by iteration.
+
+
+def order_revisions(chunks: list) -> list:
+    """Reorder the served window so every chunk that revises another chunk
+    in the window comes before it. Same chunks in, same chunks out."""
+    out = list(chunks)
+    # one move per pass; worst case is one-at-a-time insertion, O(n²) moves
+    # (review 2026-09-05: n+1 passes left 7 of 200k random graphs unsettled)
+    for _ in range(len(out) * len(out) + 1):
+        moved = False
+        for i, c in enumerate(out):
+            if c.category == "session_log" or not getattr(c, "revises", None):
+                continue
+            pos = {d.memory_id: j for j, d in enumerate(out) if d.memory_id}
+            ahead = [pos[old] for old in c.revises if old in pos and pos[old] < i]
+            if ahead:
+                out.insert(min(ahead), out.pop(i))
+                moved = True
+                break
+        if not moved:
+            break
+    return out

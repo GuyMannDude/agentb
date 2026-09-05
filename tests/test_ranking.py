@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from agentb.ranking import composite_score, pool_similarities, SIMILARITY_SPAN, _to_cosine
+from agentb.ranking import composite_score, pool_similarities, SIMILARITY_SPAN, _to_cosine, order_revisions
 from agentb.vec import VecStore
 from agentb.config import (
     AgentBConfig, ResilientProviderConfig, ProviderConfig, RankingConfig,
@@ -243,3 +243,145 @@ def test_context_exposes_memory_id(tmp_path, client):
                      distance_vec=list(VEC_A))
     r = client.post("/context", json={"prompt": "who is rocky", "max_results": 1})
     assert r.json()["chunks"][0]["memory_id"] == "mid1"
+
+
+# ── Unit: revision order inside the served window (E1, proving ground S02) ──
+
+class _Chunk:
+    def __init__(self, memory_id, category="topology", revises=None):
+        self.memory_id, self.category, self.revises = memory_id, category, revises or []
+
+
+def _ids(chunks):
+    return [c.memory_id for c in chunks]
+
+
+def test_reviser_moves_ahead_of_what_it_revised_and_nothing_leaves():
+    # the S02 shape: the stale memory echoes the query and scored first; the
+    # forced-through revision was second. The revision goes first; the stale
+    # one is still served, right behind it.
+    stale, fresh, other = _Chunk("stale"), _Chunk("fresh", revises=["stale"]), _Chunk("other")
+    assert _ids(order_revisions([stale, fresh, other])) == ["fresh", "stale", "other"]
+
+
+def test_a_revision_of_a_memory_outside_the_window_changes_nothing():
+    # review 2026-09-05: an unbounded demotion ejected a 0.90 top hit on the
+    # say-so of a 0.10 chunk. The window is what the caller sees; only its
+    # members order each other, so a link to a chunk that is not served is inert.
+    assert _ids(order_revisions([_Chunk("a"), _Chunk("b", revises=["gone"])])) == ["a", "b"]
+
+
+def test_order_revisions_converges_on_a_graph_that_needs_more_passes_than_elements():
+    # review 2026-09-05: n+1 passes left this 6-element graph unsettled (needs 8)
+    m = {k: _Chunk(k) for k in ["m0", "m1", "m2", "m3", "m4", "m5"]}
+    m["m5"].revises, m["m4"].revises, m["m1"].revises = ["m3"], ["m3"], ["m0"]
+    m["m3"].revises, m["m2"].revises = ["m0", "m2"], ["m1"]
+    out = _ids(order_revisions([m[k] for k in ["m0", "m5", "m4", "m1", "m3", "m2"]]))
+    for c in m.values():
+        for old in c.revises:
+            assert out.index(c.memory_id) < out.index(old), (c.memory_id, old, out)
+
+
+def test_session_log_reviser_never_moves():
+    doc, log = _Chunk("doc", category="doctrine"), _Chunk("log", category="session_log", revises=["doc"])
+    assert _ids(order_revisions([doc, log])) == ["doc", "log"]
+
+
+def test_fan_in_puts_both_revisers_first_and_keeps_the_revised():
+    j, i1, i2 = _Chunk("J"), _Chunk("i1", revises=["J"]), _Chunk("i2", revises=["J"])
+    assert _ids(order_revisions([j, i1, i2])) == ["i1", "i2", "J"]
+
+
+def test_revision_chain_settles():
+    a, b, c = _Chunk("a"), _Chunk("b", revises=["a"]), _Chunk("c", revises=["b"])
+    assert _ids(order_revisions([a, b, c])) == ["c", "b", "a"]
+    assert _ids(order_revisions([c, b, a])) == ["c", "b", "a"]        # already ordered: untouched
+
+
+# ── Integration: the recent lens (E1, proving ground S03) ──
+
+def test_recent_lens_orders_on_topic_by_date_and_drops_the_noise_band(tmp_path, client):
+    # three near-identical session memories: the NEWEST is the worst-worded
+    # match (cosine 0.94 vs 0.99 at the top — the S03 shape, where focus let
+    # the wording gap beat the age gap), plus an off-band noise memory.
+    import math
+    now = time.time()
+
+    def _at(cos):
+        v = [0.0] * 768
+        v[0], v[1] = cos, math.sqrt(1.0 - cos * cos)
+        return v
+
+    _seed_vec_memory(tmp_path, "old", "session 1: working on the ranker", "session_log",
+                     distance_vec=_at(0.99), created_at=now - 13 * 86400)
+    _seed_vec_memory(tmp_path, "mid", "session 2: working on the facts ladder", "session_log",
+                     distance_vec=_at(0.97), created_at=now - 6 * 86400)
+    _seed_vec_memory(tmp_path, "new", "session 3: working on the eject holder", "session_log",
+                     distance_vec=_at(0.94), created_at=now)
+    _seed_vec_memory(tmp_path, "noise", "lunch was a sandwich", "session_log",
+                     distance_vec=_at(0.60), created_at=now - 1 * 86400)
+
+    body = {"prompt": "what was I working on", "max_results": 5, "exclude_categories": []}
+    focus = client.post("/context", json={**body, "mode": "focus"}).json()
+    assert [c["memory_id"] for c in focus["chunks"]][0] == "old"   # the failure the lens exists for
+
+    r = client.post("/context", json={**body, "mode": "recent"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["mode"] == "recent"
+    assert [c["memory_id"] for c in data["chunks"]] == ["new", "mid", "old"]   # noise is out of band
+
+
+def test_recent_lens_is_a_valid_mode_and_a_typo_is_not(client):
+    assert client.post("/context", json={"prompt": "x", "mode": "recnt"}).status_code == 422
+
+
+def test_recent_lens_shows_session_logs_without_an_exclude_list(tmp_path, client):
+    # review 2026-09-05: the bridge forwards exclude_categories only when the
+    # caller passes one; with DEFAULT_HIDDEN applied the lens returned
+    # everything except the session memories it exists for.
+    _seed_vec_memory(tmp_path, "log1", "session: working on the ranker", "session_log",
+                     distance_vec=list(VEC_A))
+    focus = client.post("/context", json={"prompt": "what was I doing", "mode": "focus"}).json()
+    assert focus["chunks"] == []                                     # hidden by default on focus
+    recent = client.post("/context", json={"prompt": "what was I doing", "mode": "recent"}).json()
+    assert [c["memory_id"] for c in recent["chunks"]] == ["log1"]     # served on recent
+    hidden = client.post("/context", json={"prompt": "what was I doing", "mode": "recent",
+                                           "exclude_categories": ["session_log"]}).json()
+    assert hidden["chunks"] == []                                    # the caller's word still wins
+
+
+def test_recent_lens_retrieves_the_newest_row_outside_the_knn_pool(tmp_path, client):
+    # 20 memories; the NEWEST is the 20th-nearest (cosine 0.80 vs 0.90+ for
+    # the rest) so a 15-wide kNN pool never holds it — yet it is in band
+    # (0.20 cosine below the best) and must be served first by recent.
+    import math
+    now = time.time()
+
+    def _at(cos):
+        v = [0.0] * 768
+        v[0], v[1] = cos, math.sqrt(1.0 - cos * cos)
+        return v
+
+    for i in range(19):
+        _seed_vec_memory(tmp_path, f"s{i:02d}", f"session {i}: open work", "session_log",
+                         distance_vec=_at(0.99 - i * 0.004), created_at=now - (20 - i) * 86400)
+    _seed_vec_memory(tmp_path, "newest", "session 19: open work", "session_log",
+                     distance_vec=_at(0.80), created_at=now)
+    body = {"prompt": "what was I working on", "max_results": 5}
+    focus = client.post("/context", json={**body, "mode": "focus", "exclude_categories": []}).json()
+    assert "newest" not in [c["memory_id"] for c in focus["chunks"]]
+    recent = client.post("/context", json={**body, "mode": "recent"}).json()
+    assert [c["memory_id"] for c in recent["chunks"]][0] == "newest"
+
+
+def test_recent_lens_survives_a_dim_mismatch_without_fabricating_hits(tmp_path, client):
+    # review 2026-09-05: newest() truncated the zip on a short query and fed
+    # made-up distances into the pool, which also marked VEC as served and
+    # skipped the L3 escape hatch. Same guard as search(), same scream.
+    from agentb.vec import VecDimMismatch, VecStore
+    _seed_vec_memory(tmp_path, "log1", "session: working", "session_log", distance_vec=list(VEC_A))
+    store = VecStore(tmp_path / "agents" / "default" / "vec_index.sqlite")
+    with pytest.raises(VecDimMismatch):
+        store.newest([1.0, 0.0], n=3)
+    store.close()

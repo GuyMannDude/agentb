@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -67,18 +68,57 @@ class VecStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect()
         self._ensure_schema()
+        self._ensure_unit_norm()
 
     def _connect(self) -> sqlite3.Connection:
         # FastAPI lifespan setup and request handling may run on different
         # worker threads (notably TestClient, and some ASGI deployments).
         # sqlite is built in serialized mode; permit the connection to follow
         # the app while bounded dedup queries use their own worker connection.
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
         return conn
+
+    def _ensure_unit_norm(self) -> int:
+        """v4.18.4 one-time migration: rows written before vectors were
+        normalised at the boundary keep whatever length the provider gave
+        them. Against a unit query such a row sits at L2 ~|v| — behind every
+        row written since, for ever. Scale every non-unit row in place (a
+        pure vector op, no re-embedding) and stamp vec_meta so this scan
+        runs once per index. Batched: each batch is its own transaction so
+        the write lock is held for milliseconds, and the work is idempotent
+        (a unit row is skipped), so a crash or a concurrent opener mid-way
+        simply resumes on the next open. Cost is one read of every stored
+        vector, once (measured ~3 s / 20k rows on the all-unit live case).
+        Returns the number of rows fixed."""
+        row = self._conn.execute("SELECT value FROM vec_meta WHERE key = 'unit_norm'").fetchone()
+        if row is not None:
+            return 0
+        fixed = 0
+        batch = 500
+        ids = [r[0] for r in self._conn.execute("SELECT memory_id FROM vec_sources ORDER BY memory_id").fetchall()]
+        for start in range(0, len(ids), batch):
+            chunk = ids[start:start + batch]
+            marks = ",".join("?" * len(chunk))
+            rows = self._conn.execute(
+                f"SELECT memory_id, embedding FROM vec_embeddings WHERE memory_id IN ({marks})", chunk).fetchall()
+            with self._conn:
+                for r in rows:
+                    vec = _deserialize_vector(r["embedding"])
+                    n = math.sqrt(sum(x * x for x in vec))
+                    if n > 0.0 and abs(n - 1.0) > 1e-3:
+                        self._conn.execute("DELETE FROM vec_embeddings WHERE memory_id = ?", (r["memory_id"],))
+                        self._conn.execute("INSERT INTO vec_embeddings(memory_id, embedding) VALUES (?, ?)",
+                                           (r["memory_id"], _serialize_vector(unit_vector(vec))))
+                        fixed += 1
+        with self._conn:
+            self._conn.execute("INSERT OR REPLACE INTO vec_meta(key, value) VALUES ('unit_norm', '1')")
+        if fixed:
+            log.warning(f"vec index {self.db_path}: normalised {fixed} pre-4.18.4 non-unit row(s) in place")
+        return fixed
 
     def _ensure_schema(self) -> None:
         self._conn.executescript(f"""
@@ -96,6 +136,8 @@ class VecStore:
                 created_at REAL NOT NULL,
                 category TEXT
             );
+
+            CREATE INDEX IF NOT EXISTS idx_vec_sources_created ON vec_sources(created_at DESC);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
                 memory_id TEXT PRIMARY KEY,
@@ -186,7 +228,7 @@ class VecStore:
             )
             self._conn.execute(
                 "INSERT INTO vec_embeddings(memory_id, embedding) VALUES (?, ?)",
-                (memory_id, _serialize_vector(embedding)),
+                (memory_id, _serialize_vector(unit_vector(embedding))),
             )
 
     def delete(self, memory_id: str) -> None:
@@ -283,7 +325,7 @@ class VecStore:
             WHERE v.embedding MATCH ? AND k = ?
             ORDER BY v.distance
             """,
-            (_serialize_vector(query_embedding), k),
+            (_serialize_vector(unit_vector(query_embedding)), k),
         ).fetchall()
         hits: list[VecHit] = []
         for r in rows:
@@ -304,6 +346,56 @@ class VecStore:
             )
             if filtering and len(hits) >= top_k:
                 break
+        return hits
+
+    def newest(
+        self,
+        query_embedding: list[float],
+        *,
+        n: int,
+        include_category: Optional[str] = None,
+        exclude_categories: Optional[Iterable[str]] = None,
+    ) -> list[VecHit]:
+        """The `n` most recently created rows, with each row's L2 distance
+        to the (unit-normalised) query computed here — the `recent` lens's
+        retrieval leg (v4.18.4). A kNN pool holds the nearest neighbours;
+        on a store of thousands of near-identical session logs the newest
+        one is routinely outside it. Category filters mirror search() and
+        are applied IN SQL, before the LIMIT. Two statements on purpose: a
+        join against vec0 made SQLite scan every embedding blob (review
+        2026-09-05: 2.7 s on 20k rows vs 4 ms for the metadata alone)."""
+        if len(query_embedding) != EMBED_DIM:
+            raise VecDimMismatch(
+                f"Query embedding dim {len(query_embedding)} != index dim {EMBED_DIM}"
+            )
+        q = unit_vector(query_embedding)
+        where, params = [], []
+        if include_category is not None:
+            where.append("s.category = ?"); params.append(include_category)
+        exclude = list(exclude_categories or ())
+        if exclude:
+            where.append(f"(s.category IS NULL OR s.category NOT IN ({','.join('?' * len(exclude))}))")
+            params.extend(exclude)
+        sql = "SELECT s.memory_id, s.text, s.source_file, s.created_at, s.category FROM vec_sources s"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY s.created_at DESC, s.memory_id DESC LIMIT ?"
+        rows = self._conn.execute(sql, (*params, n)).fetchall()
+        if not rows:
+            return []
+        ids = [r["memory_id"] for r in rows]
+        blobs = {r["memory_id"]: r["embedding"] for r in self._conn.execute(
+            f"SELECT memory_id, embedding FROM vec_embeddings WHERE memory_id IN ({','.join('?' * len(ids))})",
+            ids).fetchall()}
+        hits: list[VecHit] = []
+        for r in rows:
+            blob = blobs.get(r["memory_id"])
+            if blob is None:
+                continue
+            vec = _deserialize_vector(blob)
+            d = math.sqrt(sum((a - b) * (a - b) for a, b in zip(q, vec)))
+            hits.append(VecHit(memory_id=r["memory_id"], text=r["text"], distance=d,
+                               source_file=r["source_file"], created_at=r["created_at"], category=r["category"]))
         return hits
 
     # ── Recall access stats (v4.1, composite ranking signal) ──
@@ -379,6 +471,26 @@ def _serialize_vector(vec: list[float]) -> bytes:
     """sqlite-vec accepts vectors as little-endian float32 byte blobs."""
     import struct
     return struct.pack(f"<{len(vec)}f", *vec)
+
+
+def unit_vector(vec: list[float]) -> list[float]:
+    """Scale a vector to unit length (a zero vector is returned unchanged).
+
+    v4.18.4 (E1, proving ground): the index stores and queries vec0 with L2
+    distance, and the ranker maps that distance back to cosine assuming BOTH
+    sides are unit vectors (ranking._to_cosine: cos = 1 - d^2/2). Ollama's
+    nomic-embed-text happens to return unit vectors, so this held in
+    production by luck of the provider. fastembed's nomic-embed-text-v1.5
+    returns norm ~20: every L2 distance came out 8-17, every cosine clamped
+    to -1, the pool normaliser scored every hit 1.0 and similarity went
+    inert — recency and access count alone decided the order (the S289
+    finding, reproduced on a 4-memory store). Normalising at THIS boundary
+    makes the cosine mapping exact for any provider; on already-unit
+    vectors it is a no-op, so the live index is unchanged."""
+    n = math.sqrt(sum(x * x for x in vec))
+    if n == 0.0:
+        return vec
+    return [x / n for x in vec]
 
 
 def _deserialize_vector(blob: bytes) -> list[float]:

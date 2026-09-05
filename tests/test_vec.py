@@ -46,6 +46,59 @@ def test_upsert_and_search_returns_nearest(tmp_path: Path):
     assert len(hits) == 2
 
 
+def test_vectors_are_normalised_at_the_boundary(tmp_path: Path):
+    # E1 (proving ground, 2026-09-05): the ranker maps vec0's L2 distance back
+    # to cosine assuming unit vectors on both sides. fastembed's nomic returns
+    # norm ~20, so every distance was 8-17, every cosine clamped to -1 and the
+    # whole pool collapsed to a similarity tie. A scaled vector must report
+    # the SAME distance as its unit twin, on insert and on query.
+    import math
+    store = VecStore(tmp_path / "vec.sqlite")
+    store.upsert("unit", "unit", _vec_along(0))
+    store.upsert("big", "big", _vec_along(1, magnitude=20.0))
+    # 45 degrees between axis 0 and 1, scaled: cos = 0.7071 either way
+    q = [0.0] * EMBED_DIM
+    q[0] = q[1] = 15.0
+    hits = {h.memory_id: h.distance for h in store.search(q, top_k=2)}
+    expected = math.sqrt(2.0 - 2.0 * math.cos(math.pi / 4))
+    assert hits["unit"] == pytest.approx(expected, abs=1e-5)
+    assert hits["big"] == pytest.approx(expected, abs=1e-5)
+    # and a far hit is FAR, not a tie at the clamp
+    store.upsert("far", "far", _vec_along(2, magnitude=20.0))
+    far = {h.memory_id: h.distance for h in store.search(q, top_k=3)}["far"]
+    assert far == pytest.approx(math.sqrt(2.0), abs=1e-5)
+    # the stored vector itself is unit length
+    assert math.sqrt(sum(x * x for x in store.get_embedding("big"))) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_pre_existing_non_unit_rows_are_normalised_once_on_open(tmp_path: Path):
+    # review 2026-09-05: an index written before 4.18.4 by a non-normalising
+    # provider keeps norm-20 rows; against unit queries they sit at L2 ~20,
+    # behind every row written since, for ever. Opening the store fixes them
+    # in place (no re-embed) and stamps vec_meta so the scan runs once.
+    import math, sqlite3
+    from agentb.vec import _serialize_vector
+    db = tmp_path / "vec.sqlite"
+    store = VecStore(db)
+    store.upsert("unit", "unit", _vec_along(0))
+    # sneak a raw, un-normalised row in underneath the boundary
+    with store._conn:
+        store._conn.execute("INSERT INTO vec_sources(memory_id, text, created_at) VALUES ('raw', 'raw', 1.0)")
+        store._conn.execute("INSERT INTO vec_embeddings(memory_id, embedding) VALUES (?, ?)",
+                            ("raw", _serialize_vector(_vec_along(1, magnitude=20.0))))
+        store._conn.execute("DELETE FROM vec_meta WHERE key = 'unit_norm'")
+    store.close()
+    store = VecStore(db)     # migration runs here
+    q = [0.0] * EMBED_DIM
+    q[0] = q[1] = 1.0
+    d = {h.memory_id: h.distance for h in store.search(q, top_k=2)}
+    expected = math.sqrt(2.0 - 2.0 * math.cos(math.pi / 4))
+    assert d["raw"] == pytest.approx(expected, abs=1e-5)
+    assert d["unit"] == pytest.approx(expected, abs=1e-5)
+    assert store._conn.execute("SELECT value FROM vec_meta WHERE key='unit_norm'").fetchone()[0] == "1"
+    assert store._ensure_unit_norm() == 0      # stamped: a second open scans nothing
+
+
 def test_upsert_replaces_existing(tmp_path: Path):
     store = VecStore(tmp_path / "vec.sqlite")
     store.upsert("m1", "old text", _vec_along(0))
@@ -452,3 +505,19 @@ async def test_backfill_categories_populates_from_disk(tmp_path: Path):
     assert store.search(_vec_along(0), top_k=1, include_category="topology")[0].memory_id == "a"
     excl = store.search(_vec_along(1), top_k=5, exclude_categories=["session_log"])
     assert "b" not in {h.memory_id for h in excl}
+
+
+def test_newest_filters_in_sql_before_the_limit(tmp_path: Path):
+    # review 2026-09-05: a Python-side filter after LIMIT n*5 returned zero
+    # doctrines from a log-dominated store. The predicate is in the SQL now.
+    store = VecStore(tmp_path / "vec.sqlite")
+    for i in range(40):
+        store.upsert(f"log{i}", "log", _vec_along(0), created_at=1000.0 + i, category="session_log")
+    store.upsert("doc", "doctrine", _vec_along(1), created_at=1.0, category="doctrine")
+    got = store.newest(_vec_along(0), n=3, include_category="doctrine")
+    assert [h.memory_id for h in got] == ["doc"]
+    got = store.newest(_vec_along(0), n=3, exclude_categories=["session_log"])
+    assert [h.memory_id for h in got] == ["doc"]
+    newest = store.newest(_vec_along(0), n=2)
+    assert [h.memory_id for h in newest] == ["log39", "log38"]       # newest first, distance real
+    assert newest[0].distance == pytest.approx(0.0, abs=1e-6)

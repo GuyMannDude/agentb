@@ -12,6 +12,21 @@
 > through those releases. The full history is in the main repo
 > [CHANGELOG.md](../../CHANGELOG.md).
 
+## 2.25.0 — 2026-09-05 — `mnemo_recall` mode gains `recent` (the boot lens)
+
+**Problem.** Mnemo 4.18.4 added a third recall lens, `recent`: the pool is
+the kNN neighbours plus the newest rows, similarity only gates, the date
+orders — for "what was I doing" questions, where the focus lens let a
+wording gap between near-identical session memories outweigh two weeks
+of age (proving ground S03). The bridge's `mode` enum listed only `focus`
+and `explore`, so no client could name it.
+
+**Fix.** `mode` enum is `focus | explore | recent`; description says when
+to use which. Passthrough only — no bridge behaviour changed. The server
+shows `session_log` on `recent` unless the caller excludes it, so the
+bridge does not need to send an exclude list for the lens to answer its
+own question.
+
 ## 2.24.3 — 2026-09-03 — test suite: the empty-query case now asserts
 
 **Problem.** "Empty query returns HTTP error (not crash)" only printed the
