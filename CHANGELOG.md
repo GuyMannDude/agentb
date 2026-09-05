@@ -1,5 +1,25 @@
 # Changelog
 
+## v4.18.5 — CI green again: the Windows eject test no longer crashes pytest on 3.11 (2026-09-05)
+
+Problem: every push since 4.18.0 turned the `test (3.11)` CI job red and
+sent Guy a "CI workflow run failed" email — six in a row — while 3.12
+stayed green. `_eject_stick` built a concrete `Path(stick_dir)` BEFORE
+branching on `os.name`; the cross-host Windows test fakes `os.name = "nt"`,
+and on Python 3.11 `Path()` then resolves to `WindowsPath`, which raises
+`NotImplementedError: cannot instantiate 'WindowsPath' on your system`
+off-Windows (3.12 dropped that check). Worse, pytest builds a `Path`
+while REPORTING the failure, so the run died with INTERNALERROR instead
+of a readable red — the S285 trap in a new coat: the error killed its own
+report.
+
+Fix: the Windows branch uses only `PureWindowsPath` (all it ever needed);
+the concrete `Path` moves into the POSIX branch that resolves the mount.
+The test scopes its `os.name` patch in `monkeypatch.context()`, so a
+future failure restores `os.name` before pytest reports it. No behaviour
+change on any real host. Verified: 764 passed under 3.11 and 3.12 via
+`uv run --python <ver> --isolated`, the same matrix CI runs.
+
 ## v4.18.4 — Vectors normalised at the boundary; revision order in the served window; the `recent` lens (2026-09-05)
 
 Problem (found by the memory proving ground, E1): S02 `ranker-current`

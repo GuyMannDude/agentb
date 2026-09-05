@@ -1505,8 +1505,10 @@ def _eject_stick(stick_dir, extra_roots=None) -> tuple[bool, str]:
     from pathlib import PureWindowsPath
     from agentb.stick import candidate_mount_roots
     try:
-        stick_dir = Path(stick_dir)
         if os.name == "nt":
+            # PureWindowsPath only: a concrete Path() here would pick
+            # WindowsPath, which Python 3.11 refuses to instantiate off-host
+            # (the cross-host test fakes os.name; 4.18.5).
             drive = PureWindowsPath(str(stick_dir)).drive  # e.g. 'E:'
             if not re.fullmatch(r"[A-Za-z]:", drive or ""):
                 return False, f"not a drive letter: {stick_dir}"
@@ -1527,7 +1529,7 @@ def _eject_stick(stick_dir, extra_roots=None) -> tuple[bool, str]:
                     "-Command", ps]
             still_present = lambda: _volume_present_nt(drive)  # noqa: E731
         else:
-            mount = stick_dir.resolve()
+            mount = Path(stick_dir).resolve()
             while not os.path.ismount(mount) and mount.parent != mount:
                 mount = mount.parent
             # floor: the mount must be a child of a stick mount root. Without

@@ -1016,30 +1016,34 @@ def test_eject_stick_windows_invokes_shell_eject_on_drive(monkeypatch):
     PureWindowsPath and the verb is Shell.Application's Eject."""
     import subprocess
     from agentb import cli
-    monkeypatch.setattr(os, "name", "nt")
-    calls = []
-    monkeypatch.setattr(subprocess, "run",
-                        lambda argv, **kw: (calls.append(argv),
-                                            subprocess.CompletedProcess(argv, 0, stdout="", stderr=""))[1])
-    monkeypatch.setattr(cli, "_volume_present_nt", lambda d: False)   # letter gone → verified
-    monkeypatch.setenv("SystemDrive", "C:")
-    ok, detail = cli._eject_stick(r"E:\cortex")
-    assert ok, detail
-    assert calls[0][0] == "powershell"
-    ps = calls[0][-1]
-    assert "ParseName('E:')" in ps
-    # 4.18.1: the verb is offered as "E&ject"; match with '&' stripped and DoIt,
-    # never InvokeVerb('Eject') (matched nothing, returned 0 — S304 live)
-    assert "InvokeVerb" not in ps
-    assert "-replace '&',''" in ps and "-ieq 'Eject'" in ps and "DoIt()" in ps
-    assert "no Eject verb offered" in ps          # an absent verb is a loud non-zero exit
-    # refusals: no letter, a UNC share, a folder-mounted volume on the system drive
-    for bad, why in [("cortex", "drive letter"),
-                     (r"\\server\share\cortex", "drive letter"),
-                     (r"C:\mnt\stick\cortex", "system drive")]:
-        ok, detail = cli._eject_stick(bad)
-        assert ok is False and why in detail, (bad, detail)
-    assert len(calls) == 1                     # none of the refusals ran a command
+    # scoped: on Python 3.11 a patched os.name makes every Path() raise, and
+    # pytest builds one while REPORTING a failure — the context restores
+    # os.name before the report, so a red here reads as a red, not a crash.
+    with monkeypatch.context() as m:
+        m.setattr(os, "name", "nt")
+        calls = []
+        m.setattr(subprocess, "run",
+                  lambda argv, **kw: (calls.append(argv),
+                                      subprocess.CompletedProcess(argv, 0, stdout="", stderr=""))[1])
+        m.setattr(cli, "_volume_present_nt", lambda d: False)   # letter gone → verified
+        m.setenv("SystemDrive", "C:")
+        ok, detail = cli._eject_stick(r"E:\cortex")
+        assert ok, detail
+        assert calls[0][0] == "powershell"
+        ps = calls[0][-1]
+        assert "ParseName('E:')" in ps
+        # 4.18.1: the verb is offered as "E&ject"; match with '&' stripped and DoIt,
+        # never InvokeVerb('Eject') (matched nothing, returned 0 — S304 live)
+        assert "InvokeVerb" not in ps
+        assert "-replace '&',''" in ps and "-ieq 'Eject'" in ps and "DoIt()" in ps
+        assert "no Eject verb offered" in ps          # an absent verb is a loud non-zero exit
+        # refusals: no letter, a UNC share, a folder-mounted volume on the system drive
+        for bad, why in [("cortex", "drive letter"),
+                         (r"\\server\share\cortex", "drive letter"),
+                         (r"C:\mnt\stick\cortex", "system drive")]:
+            ok, detail = cli._eject_stick(bad)
+            assert ok is False and why in detail, (bad, detail)
+        assert len(calls) == 1                     # none of the refusals ran a command
 
 
 @pytest.mark.parametrize("eject_result,expect_title", [
