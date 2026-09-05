@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.18.2 — Writeback: a caller's timestamp is the memory's birth (2026-09-04)
+
+Problem: `/writeback` accepted `timestamp` and stored it on the record, but
+stamped `created_at=now` in both the JSON record and the vec index. Every
+recency consumer — the composite ranker, `age_days` on `/context` chunks,
+stale warnings, the dedup gate's age — therefore saw an imported, carried
+or backfilled 30-day-old memory as newborn. Found by the Memory Proving
+Ground's truth-changes scenario: an aged fixture ranked as if written today.
+Fix: `created_at` derives from the caller's ISO timestamp when one is given
+(`Z` and naive stamps read as UTC); unparseable stamps fall back to now,
+never to an error. No timestamp → unchanged behaviour. Four tests:
+old stamp → old age (record + `/context` age_days), no stamp → newborn,
+garbage stamp → now, `Z`/naive parse equal.
+
+
 ## v4.18.1 — Cortex Stick: the Windows eject actually fires (2026-09-04)
 
 Problem: the first Windows eject after 4.18.0 "succeeded" with the volume

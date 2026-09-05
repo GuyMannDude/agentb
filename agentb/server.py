@@ -726,6 +726,18 @@ def assert_safe_auth_posture(config: AgentBConfig) -> None:
         )
 
 
+def _epoch_from_iso(value: str) -> float:
+    """ISO-8601 → epoch seconds. Naive stamps are read as UTC. Anything
+    unparseable returns now — a bad clock must never block a write."""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return time.time()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
 def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     if config is None:
         config = load_config()
@@ -1355,6 +1367,12 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
 
         ts = req.timestamp or datetime.now(timezone.utc).isoformat()
         memory_id = hashlib.sha256(f"{req.session_id}:{ts}".encode()).hexdigest()[:16]
+        # v4.18.2: a caller-supplied timestamp is the memory's birth, not the
+        # moment it reached this server. Imports, stick carries and backfills
+        # were landing with created_at=now — every recency term (ranker,
+        # age_days, stale warnings, dedup age) then saw a 30-day-old memory
+        # as newborn. Unparseable timestamps fall back to now, never to error.
+        created_at = _epoch_from_iso(req.timestamp) if req.timestamp else time.time()
 
         # Embed once, then use the existing same-tenant index for a bounded
         # top-k candidate check before anything is persisted. SQLite work runs
@@ -1431,7 +1449,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             "key_facts": key_facts,
             "projects_referenced": req.projects_referenced,
             "decisions_made": decisions_made,
-            "timestamp": ts, "created_at": time.time(),
+            "timestamp": ts, "created_at": created_at,
             # v3 fields
             "source": source_used,
             "category": category_used,
@@ -1491,7 +1509,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                     full_text,
                     embedding,
                     source_file=(memory_dir / f"{memory_id}.json").as_posix(),
-                    created_at=time.time(),
+                    created_at=created_at,
                     category=category_used,  # #468: mirror category into the search pre-filter column
                 )
             except VecDimMismatch as e:
