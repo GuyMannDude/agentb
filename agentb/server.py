@@ -24,6 +24,7 @@ import ipaddress
 import logging
 import asyncio
 import statistics
+import uuid
 import httpx
 from collections import OrderedDict
 from contextlib import asynccontextmanager, suppress
@@ -32,13 +33,14 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from agentb import __version__
 from agentb.config import (
     load_config, AgentBConfig, get_agent_data_dir, get_persona, persona_recall_mode, PersonaConfig,
-    validate_agent_id,
+    validate_agent_id, validate_session_id,
     ExpansionConfig,
 )
 from agentb.providers import create_resilient_reasoning, create_resilient_embedding
@@ -203,6 +205,56 @@ class ContextResponse(BaseModel):
     mode: str = "focus"
     agent_id: Optional[str]
     persona: str
+    provider_used: str
+
+
+class ChatTurn(BaseModel):
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., max_length=8000)
+
+
+class ChatRequest(BaseModel):
+    """One Pocket Mnemo turn: recall -> reason -> save, inside one tenant."""
+    message: str = Field(..., min_length=1, max_length=8000,
+                         description="What the person said")
+    agent_id: Optional[str] = Field(
+        None, description="Memory tenant. A scoped token may omit it — the pin decides.")
+    session_id: Optional[str] = Field(
+        None, description="The phone's session (a new one per lid-open). Server-minted if omitted.")
+    persona: Optional[str] = Field(None, description="Persona override: default, strict, creative")
+    history: list[ChatTurn] = Field(
+        default_factory=list, max_length=20,
+        description="Recent turns of this conversation (the phone keeps the transcript)")
+    save: bool = Field(True, description="Save this turn as a memory (source=user, tag pocket)")
+    max_memories: int = Field(6, ge=0, le=20, description="How many memories to recall; 0 = none")
+
+    @field_validator("message")
+    @classmethod
+    def _message_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("message must not be empty or whitespace-only")
+        return v
+
+
+class ChatMemory(BaseModel):
+    memory_id: Optional[str] = None
+    content: str
+    category: Optional[str] = None
+    age_days: Optional[float] = None
+    relevance: float
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    session_id: str
+    agent_id: Optional[str]
+    persona: str
+    # the "what I remember about you" pane — exactly what the reply was given
+    memories: list[ChatMemory]
+    # archived | held (near-duplicate) | paused (capture gate) | skipped | failed
+    save_status: str
+    memory_id: str = ""
+    latency_ms: float
     provider_used: str
 
 
@@ -751,6 +803,56 @@ def _epoch_from_iso(value: str) -> Optional[float]:
     return dt.timestamp()
 
 
+# ── Pocket Mnemo (v4.19) — the phone is the door, this server is the engine ──
+POCKET_APP_DIR = Path(__file__).parent / "app"
+# Closed allowlist: the only files /app/ will ever serve. No directory walk.
+POCKET_APP_ASSETS = {
+    "manifest.webmanifest": "application/manifest+json",
+    "sw.js": "text/javascript",
+    "icon.svg": "image/svg+xml",
+}
+POCKET_MAX_TOKENS = 700          # a phone screen, not an essay
+POCKET_MEMORY_CHARS = 600        # per recalled memory, in the prompt
+POCKET_REPLY_IN_MEMORY = 300     # how much of the reply rides into the saved turn
+POCKET_SYSTEM = (
+    "You are Pocket Mnemo: a small assistant living in someone's pocket whose one "
+    "superpower is memory. The memories below are things this person told you "
+    "before; a line marked 'Pocket replied' is what YOU said back at the time — "
+    "trust the person's words, not your old replies. Use memories when they "
+    "matter. If you don't remember something, say so plainly — never invent a "
+    "memory. When they tell you something new, say you'll remember it. Talk like "
+    "a sharp friend: plain words, short answers that fit a phone screen, no "
+    "corporate voice, no lectures."
+)
+
+
+def _is_pocket_app_path(path: str) -> bool:
+    return path == "/app" or path.startswith("/app/")
+
+
+def _pocket_prompt(memories: list, history: list, message: str) -> str:
+    lines = []
+    if memories:
+        lines.append("What you remember about this person (most relevant first):")
+        for m in memories:
+            if m.age_days is None:
+                age = "unknown age"
+            else:
+                age = "today" if m.age_days < 1 else f"{int(m.age_days)}d ago"
+            lines.append(f"- ({age}) {m.content}")
+    else:
+        lines.append("You have no memories of this person yet.")
+    if history:
+        lines.append("")
+        lines.append("Conversation so far:")
+        for t in history:
+            lines.append(("User: " if t.role == "user" else "You: ") + t.content)
+    lines.append("")
+    lines.append(f"User: {message}")
+    lines.append("You:")
+    return "\n".join(lines)
+
+
 def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     if config is None:
         config = load_config()
@@ -865,7 +967,9 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
     if config.server.auth_token or config.server.scoped_tokens:
         @app.middleware("http")
         async def check_auth(request: Request, call_next):
-            if request.url.path == "/health":
+            # /app/* is the Pocket Mnemo shell: static, secret-free — the
+            # token lives on the phone and rides every /chat call.
+            if request.url.path == "/health" or _is_pocket_app_path(request.url.path):
                 return await call_next(request)
             token = (request.headers.get("X-API-KEY") or
                      request.headers.get("Authorization", "").replace("Bearer ", ""))
@@ -1635,6 +1739,134 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
             redactions=sum(red_counts.values()),
             near_duplicates=near_duplicates,
         )
+
+    # ── Pocket Mnemo: one chat turn (v4.19) ──
+    # recall → reason → save, all inside the caller's tenant, reusing the
+    # /context and /writeback handlers so every rule they enforce (scope pin,
+    # read-only, capture gate, redaction, dedup hold) applies to the phone too.
+    @app.post("/chat", response_model=ChatResponse)
+    async def chat(req: ChatRequest, request: Request):
+        # A scoped token pinned to one tenant may omit agent_id: the pin IS the
+        # identity (the phone only ever holds a token). Master-token callers
+        # still name their tenant, as everywhere else.
+        agent_id = req.agent_id or getattr(request.state, "scoped_agent_id", None)
+        _enforce_scope(request, agent_id)
+        if agent_id is None and tenants.has_named_tenants():
+            raise HTTPException(
+                400, "agent_id is required on a multi-tenant installation")
+        if req.save and agent_id and agent_id in config.agents \
+                and config.agents[agent_id].read_only:
+            raise HTTPException(403, f"Agent '{agent_id}' is read-only")
+        try:
+            if agent_id is not None:
+                validate_agent_id(agent_id)
+            session_id = (validate_session_id(req.session_id) if req.session_id
+                          else f"pocket-{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex[:8]}")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        start = time.time()
+        persona = get_persona(config, req.persona, agent_id)
+
+        # Same redaction choke point as /writeback, /ingest and /preflight: the
+        # message and history go verbatim to a (possibly remote) reasoner, so
+        # a pasted key must be scrubbed BEFORE it leaves the machine — the
+        # save's own redaction would be too late (review, 2026-09-05).
+        red_counts: dict[str, int] = {}
+
+        def _r(text: str) -> str:
+            clean, counts = redact_text(text or "")
+            for k, v in counts.items():
+                red_counts[k] = red_counts.get(k, 0) + v
+            return clean
+
+        message = _r(req.message)
+        history = [ChatTurn(role=t.role, content=_r(t.content)) for t in req.history]
+        if red_counts:
+            log.warning(f"🔒 Redacted {sum(red_counts.values())} secret(s) in /chat "
+                        f"{session_id} before reasoning: "
+                        + ", ".join(f"{k}×{v}" for k, v in red_counts.items()))
+
+        memories: list[ChatMemory] = []
+        if req.max_memories:
+            # Hide nothing: every memory in a pocket tenant came through this
+            # door, and the classifier may file a chat-shaped turn as
+            # session_log — which /context hides by default. A door that
+            # forgets what it was told is the one failure this product cannot
+            # have (review, 2026-09-05).
+            ctx = await context(ContextRequest(
+                prompt=message, agent_id=agent_id, persona=req.persona,
+                max_results=req.max_memories, exclude_categories=[]), request)
+            memories = [
+                ChatMemory(memory_id=c.memory_id, content=c.content[:POCKET_MEMORY_CHARS],
+                           category=c.category, age_days=c.age_days, relevance=c.relevance)
+                for c in ctx.chunks]
+
+        prompt = _pocket_prompt(memories, history, message)
+        try:
+            reply = (await reasoner.generate(
+                prompt, system=POCKET_SYSTEM, max_tokens=POCKET_MAX_TOKENS)).strip()
+        except Exception as e:
+            log.error(f"/chat reasoning failed: {e}")
+            raise HTTPException(503, "reasoning unavailable: every provider failed")
+        if not reply:
+            raise HTTPException(503, "reasoning returned an empty reply")
+
+        # The person's own words ARE the memory (source=user); the reply rides
+        # along as a labelled key_fact so the turn reads whole on recall but
+        # the model's words are never attributed to the person. Every refusal
+        # is reported in save_status — never a silent drop.
+        save_status, memory_id = "skipped", ""
+        if req.save and gate.is_paused():
+            # The capture-pause switch means "nothing lands during this
+            # window" — the phone honours it like every other writer.
+            log.warning(f"/chat save discarded (capture paused): {session_id}")
+            save_status = "paused"
+        elif req.save:
+            reply_cut = reply
+            if len(reply_cut) > POCKET_REPLY_IN_MEMORY:
+                reply_cut = reply_cut[:POCKET_REPLY_IN_MEMORY].rsplit(" ", 1)[0] + "…"
+            wb = WritebackRequest(
+                session_id=session_id, agent_id=agent_id,
+                summary=message, key_facts=[f"Pocket replied: {reply_cut}"],
+                source="user", additional_tags=["pocket"])
+            try:
+                saved = await writeback(wb, request)
+                save_status, memory_id = saved.status, saved.memory_id
+            except HTTPException as e:
+                log.error(f"/chat save refused ({e.status_code}): {e.detail}")
+                save_status = "failed"
+            except Exception as e:
+                log.error(f"/chat save failed: {e}")
+                save_status = "failed"
+
+        return ChatResponse(
+            reply=reply, session_id=session_id, agent_id=agent_id,
+            persona=persona.name, memories=memories,
+            save_status=save_status, memory_id=memory_id,
+            latency_ms=round((time.time() - start) * 1000, 1),
+            provider_used=reasoner.active_label,
+        )
+
+    # ── Pocket Mnemo app (the phone door) ──
+    # Served by the memory server itself: one origin, no CORS, nothing new
+    # listens. The shell holds no secrets (see check_auth), and only the
+    # allowlisted files exist — no traversal, no listing.
+    @app.get("/app", include_in_schema=False)
+    async def pocket_app_redirect():
+        return RedirectResponse("/app/", status_code=307)
+
+    @app.get("/app/", include_in_schema=False)
+    async def pocket_app_index():
+        return FileResponse(POCKET_APP_DIR / "index.html", media_type="text/html",
+                            headers={"Cache-Control": "no-cache"})
+
+    @app.get("/app/{asset}", include_in_schema=False)
+    async def pocket_app_asset(asset: str):
+        media = POCKET_APP_ASSETS.get(asset)
+        if media is None:
+            raise HTTPException(404, "not found")
+        return FileResponse(POCKET_APP_DIR / asset, media_type=media,
+                            headers={"Cache-Control": "no-cache"})
 
     # ── Trajectory Learning (v4.5) ──
     @app.post("/trajectory/save", response_model=TrajectorySaveResponse)

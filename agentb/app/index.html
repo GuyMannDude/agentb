@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0014">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Pocket Mnemo</title>
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/app/icon.svg">
+<style>
+/* Neon Arcade — palette one-home: brain/spec-neon-arcade-v0.md */
+:root{
+  --bg:#0b0014; --fg:#e8f6ff; --accent:#ff2bd6; --black:#1a0b2e; --bblack:#5b3d8a;
+  --red:#ff3864; --green:#2bff88; --yellow:#ffe33d; --blue:#2bd1ff; --cyan:#00f0ff;
+  --purple:#ff2bd6; --bpurple:#ff7fe6; --white:#ffffff;
+  --glow:0 0 12px rgba(255,43,214,.55), 0 0 32px rgba(255,43,214,.25);
+  --glow-cyan:0 0 10px rgba(0,240,255,.5);
+  --mono:"Cascadia Code",Consolas,"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+body.dim{ --glow:none; --glow-cyan:none; --accent:#c92aa8; --cyan:#5bc9d4; --fg:#d6e4ee; }
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:var(--mono);font-size:16px}
+body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+header{display:flex;align-items:center;gap:.6rem;padding:.7rem .9rem;border-bottom:1px solid var(--black);background:linear-gradient(180deg,#12052a,var(--bg))}
+header h1{margin:0;font-size:1.05rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);text-shadow:var(--glow);flex:1}
+header h1 small{display:block;font-size:.6rem;letter-spacing:.3em;color:var(--cyan);text-shadow:var(--glow-cyan)}
+button{font-family:var(--mono);cursor:pointer;border:1px solid var(--bblack);background:var(--black);color:var(--fg);border-radius:8px;padding:.5rem .7rem;font-size:.85rem;letter-spacing:.06em}
+button.primary{border-color:var(--accent);color:var(--white);background:linear-gradient(180deg,#3a0a5e,#1a0b2e);box-shadow:var(--glow)}
+button.ghost{background:transparent}
+button:disabled{opacity:.45;cursor:default}
+main{flex:1;overflow-y:auto;padding:.9rem;display:flex;flex-direction:column;gap:.7rem;-webkit-overflow-scrolling:touch}
+.msg{max-width:88%;padding:.6rem .8rem;border-radius:12px;line-height:1.4;white-space:pre-wrap;word-wrap:break-word;animation:pop .18s ease-out}
+body.dim .msg{animation:none}
+.msg.user{align-self:flex-end;background:#2a0b45;border:1px solid var(--accent);border-bottom-right-radius:3px}
+.msg.bot{align-self:flex-start;background:var(--black);border:1px solid var(--bblack);border-bottom-left-radius:3px}
+.msg.sys{align-self:center;color:var(--cyan);font-size:.8rem;text-align:center;background:transparent;text-shadow:var(--glow-cyan)}
+.msg.err{align-self:center;color:var(--red);font-size:.8rem;text-align:center}
+.meta{font-size:.65rem;color:var(--bblack);margin-top:.3rem;letter-spacing:.05em}
+.meta b{color:var(--green);font-weight:normal}
+.meta b.held{color:var(--yellow)} .meta b.failed,.meta b.paused{color:var(--red)}
+@keyframes pop{from{transform:translateY(6px);opacity:0}to{transform:none;opacity:1}}
+footer{padding:.6rem .9rem calc(.6rem + env(safe-area-inset-bottom));border-top:1px solid var(--black);display:flex;gap:.5rem;align-items:flex-end}
+textarea{flex:1;resize:none;min-height:44px;max-height:140px;background:#100522;color:var(--fg);border:1px solid var(--bblack);border-radius:10px;padding:.6rem .7rem;font-family:var(--mono);font-size:1rem;outline:none}
+textarea:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+.chips{display:flex;gap:.4rem;flex-wrap:wrap;justify-content:center}
+.chip{font-size:.75rem;border-radius:999px;padding:.35rem .7rem}
+/* setup + drawers */
+.panel{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;padding:1.2rem;gap:1rem;overflow-y:auto;z-index:10}
+.panel h2{margin:0;color:var(--accent);text-shadow:var(--glow);letter-spacing:.14em;text-transform:uppercase;font-size:1.1rem}
+.panel p{margin:0;line-height:1.5;color:var(--fg);font-size:.9rem}
+.panel label{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--cyan)}
+.panel input{background:#100522;color:var(--fg);border:1px solid var(--bblack);border-radius:10px;padding:.7rem;font-family:var(--mono);font-size:1rem;width:100%}
+.panel input:focus{border-color:var(--cyan);outline:none;box-shadow:var(--glow-cyan)}
+.drawer{position:fixed;left:0;right:0;bottom:0;max-height:75%;background:#0e0320;border-top:2px solid var(--cyan);box-shadow:0 -6px 30px rgba(0,240,255,.15);border-radius:16px 16px 0 0;padding:1rem;overflow-y:auto;z-index:9;transform:translateY(100%);transition:transform .22s ease-out}
+body.dim .drawer{transition:none}
+.drawer.open{transform:none}
+.drawer h3{margin:0 0 .6rem;color:var(--cyan);text-shadow:var(--glow-cyan);letter-spacing:.14em;text-transform:uppercase;font-size:.85rem}
+.mem{border:1px solid var(--bblack);border-left:3px solid var(--green);border-radius:8px;padding:.5rem .6rem;margin-bottom:.5rem;font-size:.82rem;white-space:pre-wrap;word-wrap:break-word}
+.mem .tag{display:inline-block;font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--yellow);margin-bottom:.25rem}
+.lid{position:fixed;inset:0;background:var(--bg);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;text-align:center;padding:2rem}
+.lid .eye{width:120px;height:14px;border-radius:999px;background:var(--accent);box-shadow:var(--glow);animation:blink 1.6s ease-in-out infinite}
+body.dim .lid .eye{animation:none;height:6px}
+@keyframes blink{0%,100%{transform:scaleY(1)}50%{transform:scaleY(.08)}}
+.lid h2{margin:0;color:var(--cyan);letter-spacing:.2em;text-transform:uppercase;font-size:.95rem;text-shadow:var(--glow-cyan)}
+.lid p{color:var(--bblack);font-size:.8rem;margin:0}
+[hidden]{display:none!important}
+.small{font-size:.7rem;color:var(--bblack);line-height:1.5}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pocket Mnemo<small>the door · the engine stays home</small></h1>
+  <button id="btn-mem" class="ghost" title="what I remember">memory</button>
+  <button id="btn-dim" class="ghost" title="dimmer">dim</button>
+  <button id="btn-lid" title="close the lid">lid</button>
+</header>
+
+<main id="log"></main>
+
+<footer>
+  <textarea id="input" rows="1" placeholder="say something…" autocomplete="off"></textarea>
+  <button id="send" class="primary">send</button>
+</footer>
+
+<!-- setup: token only. the tenant comes back from the server (the token is pinned to it). -->
+<section id="setup" class="panel" hidden>
+  <h2>Pocket Mnemo</h2>
+  <p>This phone is the <b>door</b>. Your memory lives on your own machine (this server). Nothing here goes to a cloud you don't run.</p>
+  <label for="token">your pocket token</label>
+  <input id="token" type="password" inputmode="latin" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="pocket-xxxxx-xxxxx-xxxxx">
+  <p class="small">Server: <span id="origin"></span> · The token is stored only on this phone. Lose the phone? Revoke the token on the server and it's dead.</p>
+  <button id="connect" class="primary">connect</button>
+  <p class="small">Zero memories yet? Tell it something. Close the lid. Open it again. That's the whole trick.</p>
+</section>
+
+<section id="drawer" class="drawer">
+  <h3>what I remember (this turn)</h3>
+  <div id="mems"></div>
+  <p class="small" id="memnote"></p>
+  <button id="btn-close-mem" class="ghost">close</button>
+</section>
+
+<section id="lid" class="lid" hidden>
+  <div class="eye"></div>
+  <h2>lid closed</h2>
+  <p>this conversation is gone from the phone.<br>what you told me is not.</p>
+  <button id="btn-open" class="primary">open the lid</button>
+  <button id="btn-forget" class="ghost">forget this phone's token</button>
+</section>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var store={
+    get:function(k,d){try{var v=localStorage.getItem('pocket.'+k);return v===null?d:JSON.parse(v)}catch(e){return d}},
+    set:function(k,v){try{localStorage.setItem('pocket.'+k,JSON.stringify(v))}catch(e){}},
+    del:function(k){try{localStorage.removeItem('pocket.'+k)}catch(e){}}
+  };
+  var token=store.get('token',''), agent=store.get('agent',null), session=store.get('session',null);
+  var history=store.get('history',[]), lastMems=[], busy=false;
+  var log=$('log'), input=$('input');
+
+  // dimmer — mandatory (Neon Arcade rule 1)
+  if(store.get('dim',false)) document.body.classList.add('dim');
+  $('btn-dim').onclick=function(){document.body.classList.toggle('dim');store.set('dim',document.body.classList.contains('dim'))};
+
+  function el(cls,text){var d=document.createElement('div');d.className='msg '+cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
+  function meta(d,html){var m=document.createElement('div');m.className='meta';m.innerHTML=html;d.appendChild(m)}
+  function detail(r){var d=r.json&&r.json.detail;if(Array.isArray(d))return d.map(function(x){return (x.loc||[]).slice(-1)[0]+': '+x.msg}).join('; ');return (d||r.text||'').toString()}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+
+  function chips(){
+    var c=document.createElement('div');c.className='chips';
+    [['what do you remember about me?','What do you remember about me?'],['remember this…','Remember this: ']].forEach(function(p){
+      var b=document.createElement('button');b.className='chip';b.textContent=p[0];
+      b.onclick=function(){input.value=p[1];input.focus();if(p[1].slice(-1)!==' ')send()};c.appendChild(b)});
+    log.appendChild(c);
+  }
+
+  function boot(){
+    log.innerHTML='';
+    if(!token){$('setup').hidden=false;$('origin').textContent=location.origin;return}
+    $('setup').hidden=true;
+    if(history.length){history.forEach(function(t){el(t.role==='user'?'user':'bot',t.content)})}
+    else{el('sys',store.get('opened',0)>0?'welcome back. the lid was closed — ask me what I remember.':'hello. I remember nothing yet. change that.');chips()}
+  }
+
+  $('connect').onclick=function(){
+    var t=$('token').value.trim();if(!t)return;
+    token=t;store.set('token',t);$('token').value='';agent=null;store.del('agent');boot();input.focus();
+  };
+
+  function send(){
+    var text=input.value.trim();if(!text||busy)return;
+    busy=true;$('send').disabled=true;input.value='';input.style.height='auto';
+    el('user',text);
+    var thinking=el('sys','…');
+    var body={message:text,history:history.slice(-10),session_id:session||undefined};
+    if(agent) body.agent_id=agent;
+    var ctl=('AbortController' in window)?new AbortController():null, timer=ctl&&setTimeout(function(){ctl.abort()},90000);
+    fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json','X-API-KEY':token},body:JSON.stringify(body),signal:ctl?ctl.signal:undefined})
+    .then(function(r){return r.text().then(function(t){var j=null;try{j=JSON.parse(t)}catch(e){}return{ok:r.ok,status:r.status,text:t,json:j}})})
+    .then(function(r){
+      thinking.remove();
+      if(!r.ok){
+        if(r.status===401){token='';agent=null;store.del('token');store.del('agent');el('err','this token was refused. enter it again.');$('setup').hidden=false;$('origin').textContent=location.origin;return}
+        el('err','server said '+r.status+': '+detail(r).slice(0,200));return
+      }
+      var j=r.json; agent=j.agent_id; session=j.session_id; lastMems=j.memories||[];
+      store.set('agent',agent);store.set('session',session);
+      history.push({role:'user',content:text});history.push({role:'assistant',content:j.reply});
+      history=history.slice(-20);store.set('history',history);
+      var d=el('bot',j.reply);
+      var s=j.save_status, label={archived:'remembered',held:'already knew that',paused:'not saved (capture paused)',skipped:'not saved',failed:'save FAILED'}[s]||s;
+      meta(d,'<b class="'+esc(s)+'">'+esc(label)+'</b> · '+lastMems.length+' memor'+(lastMems.length===1?'y':'ies')+' used · '+Math.round(j.latency_ms)+' ms');
+    })
+    .catch(function(e){thinking.remove();el('err',e.name==='AbortError'?'the engine did not answer in 90 s. try again.':'no answer from the engine: '+e.message)})
+    .then(function(){if(timer)clearTimeout(timer);busy=false;$('send').disabled=false;input.focus()});
+  }
+  $('send').onclick=send;
+  input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+  input.addEventListener('input',function(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,140)+'px'});
+
+  // memory drawer — exactly what the last reply was given
+  $('btn-mem').onclick=function(){
+    var box=$('mems');box.innerHTML='';
+    if(!lastMems.length){$('memnote').textContent=history.length?'the last reply used no memories.':'send something first — this shows what the engine recalled for the last reply.'}
+    else{$('memnote').textContent='';lastMems.forEach(function(m){var d=document.createElement('div');d.className='mem';
+      var age=m.age_days==null?'':(m.age_days<1?'today':Math.floor(m.age_days)+'d ago');
+      d.innerHTML='<span class="tag">'+esc(m.category||'memory')+(age?' · '+age:'')+'</span>\n'+esc(m.content);box.appendChild(d)})}
+    $('drawer').classList.add('open');
+  };
+  $('btn-close-mem').onclick=function(){$('drawer').classList.remove('open')};
+
+  // close the lid: the phone forgets the conversation; the engine does not.
+  $('btn-lid').onclick=function(){
+    history=[];session=null;lastMems=[];store.del('history');store.del('session');
+    store.set('opened',(store.get('opened',0))+1);$('drawer').classList.remove('open');$('lid').hidden=false;
+  };
+  $('btn-open').onclick=function(){$('lid').hidden=true;boot();input.focus()};
+  $('btn-forget').onclick=function(){token='';agent=null;store.del('token');store.del('agent');$('lid').hidden=true;boot()};
+
+  // offline shell only when the browser allows it (secure context: https or localhost)
+  if('serviceWorker' in navigator && window.isSecureContext){navigator.serviceWorker.register('/app/sw.js').catch(function(){})}
+  boot();
+})();
+</script>
+</body>
+</html>

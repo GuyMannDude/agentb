@@ -251,6 +251,9 @@ class ExpansionConfig:
 SCOPABLE_ENDPOINTS = frozenset({
     "/context", "/writeback", "/trajectory/save", "/trajectory/recall",
     "/preflight",
+    # /chat composes /context + /writeback: a token scoped to it alone still
+    # reads AND writes memories — inside its pin, never beyond it.
+    "/chat",
 })
 
 

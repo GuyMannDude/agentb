@@ -1,0 +1,14 @@
+{
+  "name": "Pocket Mnemo",
+  "short_name": "Pocket Mnemo",
+  "description": "The phone is the door. Your memory stays on your own machine.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0014",
+  "theme_color": "#0b0014",
+  "icons": [
+    {"src": "/app/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemo-cortex"
-version = "4.18.5"
+version = "4.19.0"
 description = "Don't Fear the /new! Cognitive coprocessor with active memory for AI agents. SQLite-backed total recall."
 readme = "README.md"
 license = {text = "MIT"}
@@ -75,4 +75,8 @@ mnemo = "agentb.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["agentb*", "passport*"]
+
+# Pocket Mnemo: the phone shell ships inside the wheel (served at /app/)
+[tool.setuptools.package-data]
+agentb = ["app/*"]
 

@@ -1,5 +1,58 @@
 # Changelog
 
+## v4.19.0 — Pocket Mnemo: the phone is the door, the engine stays home (2026-09-05)
+
+Problem: the people who most need a memory of their own — an 18-year-old
+builder with a phone and a laptop, Guy at the dentist — had no way in that
+wasn't a terminal. Every door to Mnemo assumed an agent runtime on a desk.
+The one phone plan on the books (`mnemo-remote-mcp-mobile`) was a PUBLIC
+`/mcp` doorway for vendor clouds, and its whole cost was exposure; it stays
+parked.
+
+Fix: a private door. `POST /chat` is one turn inside one tenant: recall via
+the `/context` handler (persona-aware, the caller's lens), the reasoning
+provider already wired for classification and preflight, then a save via
+the `/writeback` handler (`source=user`, tag `pocket`: the person's words
+ARE the memory, the reply rides along as a labelled `key_fact` so the
+model's words are never attributed to the person). Reusing the handlers
+means every rule they enforce applies to the phone unchanged — scope pin,
+read-only tenants, secret redaction on the store, the near-duplicate hold
+— and `/chat` adds the two rules the composition would otherwise miss: the
+message and history are redacted BEFORE they reach the (possibly remote)
+reasoner, and a capture pause discards the save. The outcome comes back as
+`save_status` (archived / held / paused / skipped / failed), never a silent
+drop. Pocket recall hides no category: the classifier may file a
+chat-shaped turn as `session_log`, which `/context` hides by default, and a
+door that forgets what it was told is the one failure this product cannot
+have. A reasoning failure is a 503 and saves nothing. `/chat` joins
+`SCOPABLE_ENDPOINTS`; a scoped token may omit `agent_id` because the pin IS
+the identity, so the phone holds a token and nothing else, and a lost phone
+is one token revoked.
+
+`/app/` is the door itself: a phone-sized web app served by the memory
+server (one origin, no CORS, nothing new listens; a closed allowlist of
+four files, no traversal, no listing; the shell carries no secret so it
+bypasses auth). Chat pane, a "what I remember" pane that shows exactly the
+memories the last reply was given, and a close-the-lid button: the phone
+forgets the conversation, the engine does not — open it again and ask.
+Neon Arcade palette from `spec-neon-arcade-v0.md`, dimmer mandatory. The
+service worker caches the shell only (never `/chat`) and registers only in
+a secure context, so over plain http on the tailnet the page still works
+but installs as a shortcut rather than a full PWA — HTTPS via Tailscale
+Serve is the follow-up, not a v0 blocker.
+
+Verified: 20 new tests (`tests/test_chat.py`) — the lid test (save, new
+session, recalled), history in the prompt, session id validation, blank
+message 422, 503 on provider failure with nothing saved, read-only refused
+before reasoning, multi-tenant 400, `held` on a repeat, `paused` under the
+capture gate, redaction before the reasoner, recall survives a
+`session_log` classification, agent_id validated even on a store-less
+call, scoped token fills its tenant / cannot name another / cannot call
+`/context` or `/writeback` directly, shell public + allowlist-only +
+secret-free. Reviewed (code-reviewer): the redaction gap, the unreachable
+`paused`, the session_log trap and the 403-wipes-token front-end bug were
+all its catches.
+
 ## v4.18.5 — CI green again: the Windows eject test no longer crashes pytest on 3.11 (2026-09-05)
 
 Problem: every push since 4.18.0 turned the `test (3.11)` CI job red and
