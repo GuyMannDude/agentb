@@ -527,3 +527,51 @@ def test_unterminated_but_complete_final_line_is_not_a_crash(tmp_path):
     assert len(lines) == 4 and json.loads(lines[3]) == e4
     rep = Ledger(path).verify(mem)
     assert rep.chain == "intact" and rep.sealed == 4 and rep.ok
+
+
+def test_cli_all_skips_archived_tenant_dirs_out_loud(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    import agentb.config as config_mod
+    from agentb.cli import main
+    for name in ("rocky", "rocky.archived-20260516", "_doctor_test.archived-20260516"):
+        (tmp_path / "agents" / name / "memory").mkdir(parents=True)
+    (tmp_path / "agents" / "rocky.archived-20260516" / "memory" / "r.json").write_text(
+        json.dumps({"id": "r", "summary": "old"}), encoding="utf-8")
+    cfg = AgentBConfig(data_dir=str(tmp_path))
+    monkeypatch.setattr(config_mod, "load_config", lambda path=None: cfg)
+    res = CliRunner().invoke(main, ["ledger", "verify", "--all"])
+    assert res.exit_code == 0, res.output
+    assert "skipped rocky.archived-20260516: not a valid agent_id" in res.output
+    assert "skipped _doctor_test.archived-20260516" in res.output
+    assert "\n  rocky:" in res.output or "rocky: chain" in res.output
+
+
+def test_cli_seal_all_continues_past_one_refused_tenant(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    import httpx
+    import agentb.config as config_mod
+    from agentb.cli import main
+    for name in ("aa", "bb"):
+        (tmp_path / "agents" / name / "memory").mkdir(parents=True)
+    cfg = AgentBConfig(data_dir=str(tmp_path))
+    monkeypatch.setattr(config_mod, "load_config", lambda path=None: cfg)
+
+    class R:
+        def __init__(self, code, body): self.status_code, self._b = code, body
+        @property
+        def text(self): return json.dumps(self._b)
+        def json(self): return self._b
+    posted = []
+    def fake_get(*a, **k): return R(200, {"status": "ok"})
+    def fake_post(url, json=None, headers=None, timeout=None):
+        posted.append(json["agent_id"])
+        if json["agent_id"] == "aa":
+            return R(400, {"detail": "Invalid agent_id"})
+        return R(200, {"agent_id": "bb", "sealed_now": 0, "sealed_ids": [], "ok": True,
+                       "chain": "empty", "entries": 0, "broken_at": None, "reason": None,
+                       "sealed": 0, "altered": [], "missing": [], "unsealed": [], "disputed": []})
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "post", fake_post)
+    res = CliRunner().invoke(main, ["ledger", "seal", "--all"])
+    assert posted == ["aa", "bb"]          # bb still ran after aa's 400
+    assert res.exit_code == 1 and "server said 400" in res.output

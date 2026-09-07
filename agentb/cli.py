@@ -1372,15 +1372,25 @@ def _ledger_tenants(agent, all_agents) -> list[tuple[str, Path]]:
     """--all = every tenant under data_dir/agents PLUS every configured
     agent (a config data_dir override relocates a tenant out of the scan).
     Zero tenants is an error, not a clean report over nothing."""
-    from agentb.config import load_config, get_agent_data_dir
+    from agentb.config import load_config, get_agent_data_dir, validate_agent_id
     config = load_config()
     if all_agents:
         found: dict[str, Path] = {}
         root = Path(config.data_dir) / "agents"
         if root.is_dir():
-            for d in root.iterdir():
-                if (d / "memory").is_dir():
-                    found[d.name] = d / "memory"
+            for d in sorted(root.iterdir()):
+                if not (d / "memory").is_dir():
+                    continue
+                # v4.20.1: an archived tenant dir (`rocky.archived-20260516`)
+                # is not an agent_id the server accepts; feeding it to
+                # /ledger/seal aborted the whole upgrade run on tenant 1 of
+                # 26. Skip it out loud — nothing recalls from it anyway.
+                try:
+                    validate_agent_id(d.name)
+                except ValueError:
+                    console.print(f"  [dim]skipped {d.name}: not a valid agent_id (archived tenant?)[/]")
+                    continue
+                found[d.name] = d / "memory"
         for name in config.agents:
             found[name] = get_agent_data_dir(config, name) / "memory"
         if not found:
@@ -1482,8 +1492,11 @@ def ledger_seal(agent, all_agents):
                 failed = True
                 continue
             if resp.status_code != 200:
+                # One tenant's refusal must not strand the other 25:
+                # report it, keep going, exit 1 at the end.
                 console.print(f"  [red]{agent_id}: server said {resp.status_code} {resp.text[:200]}[/]")
-                raise SystemExit(1)
+                failed = True
+                continue
             rep = resp.json()
             console.print(f"  [bold]{agent_id}[/]: sealed {rep['sealed_now']} now")
             _ledger_print(agent_id, rep)

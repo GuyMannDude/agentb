@@ -1,5 +1,26 @@
 # Changelog
 
+## v4.20.1 — `ledger --all` no longer dies on an archived tenant directory (2026-09-06)
+
+Problem: the 4.20.0 upgrade step, `mnemo-cortex ledger seal --all`, built
+its tenant list from every `agents/<dir>/memory` on disk and POSTed each
+name to `/ledger/seal`. The production host has four archived tenant
+directories with dotted names (`rocky.archived-20260516` and kin) that the
+server's agent_id validator rejects — sorted first, so the run died with a
+400 on tenant 1 of 26 and sealed nothing. A non-200 for any tenant also
+raised on the spot, stranding every tenant after it.
+
+Fix: `_ledger_tenants` runs each on-disk name through `validate_agent_id`
+and skips the ones the server would refuse, printing `skipped <name>: not
+a valid agent_id (archived tenant?)`; the validator itself is untouched
+(an archived tenant is not an agent). The `seal --all` loop reports a
+non-200 for one tenant and continues, exiting 1 at the end, the same way
+it already handled a 409.
+
+Verified: 2 new tests — an archived dotted directory is skipped out loud
+and the valid tenants are still verified; a mid-run non-200 no longer
+stops the tenants after it. Full suite: 814 passed, 1 skipped (was 812 + 2 new).
+
 ## v4.20.0 — Memory Ledger: a tamper-evident chain over what the store was told (2026-09-06)
 
 Problem: a memory record could change on disk and nothing would ever say
