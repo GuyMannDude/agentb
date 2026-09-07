@@ -575,3 +575,49 @@ def test_cli_seal_all_continues_past_one_refused_tenant(tmp_path, monkeypatch):
     res = CliRunner().invoke(main, ["ledger", "seal", "--all"])
     assert posted == ["aa", "bb"]          # bb still ran after aa's 400
     assert res.exit_code == 1 and "server said 400" in res.output
+
+
+def test_cli_seal_all_continues_past_a_transport_error(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    import httpx
+    import agentb.config as config_mod
+    from agentb.cli import main
+    for name in ("aa", "bb"):
+        (tmp_path / "agents" / name / "memory").mkdir(parents=True)
+    cfg = AgentBConfig(data_dir=str(tmp_path))
+    monkeypatch.setattr(config_mod, "load_config", lambda path=None: cfg)
+
+    class R:
+        status_code = 200
+        text = "{}"
+        def json(self): return {"agent_id": "bb", "sealed_now": 0, "sealed_ids": [], "ok": True,
+                                "chain": "empty", "entries": 0, "broken_at": None, "reason": None,
+                                "sealed": 0, "altered": [], "missing": [], "unsealed": [], "disputed": []}
+    posted, timeouts = [], []
+    def fake_get(*a, **k): return R()
+    def fake_post(url, json=None, headers=None, timeout=None):
+        posted.append(json["agent_id"]); timeouts.append(timeout)
+        if json["agent_id"] == "aa":
+            raise httpx.ReadTimeout("timed out")
+        return R()
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "post", fake_post)
+    res = CliRunner().invoke(main, ["ledger", "seal", "--all"])
+    assert posted == ["aa", "bb"]
+    assert res.exit_code == 1 and "ReadTimeout" in res.output and "rerun" in res.output
+    assert all(t.read is None for t in timeouts)      # no read cap on the adopt
+
+
+def test_cli_verify_json_is_pure_with_archived_dirs_present(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    import agentb.config as config_mod
+    from agentb.cli import main
+    for name in ("rocky", "rocky.archived-20260516"):
+        (tmp_path / "agents" / name / "memory").mkdir(parents=True)
+    cfg = AgentBConfig(data_dir=str(tmp_path))
+    monkeypatch.setattr(config_mod, "load_config", lambda path=None: cfg)
+    res = CliRunner().invoke(main, ["ledger", "verify", "--all", "--json"])
+    assert res.exit_code == 0, res.output
+    reports = json.loads(res.stdout)                  # would raise if a notice leaked
+    assert set(reports) == {"rocky"}
+    assert "skipped rocky.archived-20260516" in res.stderr

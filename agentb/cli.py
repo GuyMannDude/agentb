@@ -1388,7 +1388,8 @@ def _ledger_tenants(agent, all_agents) -> list[tuple[str, Path]]:
                 try:
                     validate_agent_id(d.name)
                 except ValueError:
-                    console.print(f"  [dim]skipped {d.name}: not a valid agent_id (archived tenant?)[/]")
+                    # stderr: `verify --all --json` must stay pure JSON on stdout.
+                    click.echo(f"  skipped {d.name}: not a valid agent_id (archived tenant?)", err=True)
                     continue
                 found[d.name] = d / "memory"
         for name in config.agents:
@@ -1484,7 +1485,18 @@ def ledger_seal(agent, all_agents):
         headers = {"X-API-KEY": config.server.auth_token} if config.server.auth_token else {}
         failed = False
         for agent_id, _ in targets:
-            resp = httpx.post(url, json={"agent_id": agent_id}, headers=headers, timeout=120.0)
+            # v4.20.2: no read cap — a first-time adopt of 17k records took
+            # the server ~150 s and the old 120 s cap killed the CLI with a
+            # traceback while the server finished the job. Transport errors
+            # print red and the run continues.
+            try:
+                resp = httpx.post(url, json={"agent_id": agent_id}, headers=headers,
+                                  timeout=httpx.Timeout(10.0, read=None))
+            except httpx.HTTPError as exc:
+                console.print(f"  [red]{agent_id}: {type(exc).__name__}: {exc} — the server may still "
+                              "finish this tenant; rerun `ledger verify` after[/]")
+                failed = True
+                continue
             if resp.status_code == 409:
                 rep = resp.json().get("detail", {})
                 console.print(f"  [red]{agent_id}: chain broken — refusing to adopt[/]")

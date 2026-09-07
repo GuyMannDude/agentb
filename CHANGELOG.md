@@ -1,5 +1,25 @@
 # Changelog
 
+## v4.20.2 — `ledger seal --all` survives a slow tenant; `--json` is pure again (2026-09-06)
+
+Problem: on the production host the first-time adopt of the `cc` tenant
+(17,425 records) took the server about 150 s. The CLI's per-tenant POST
+carried a 120 s timeout, so it died with an uncaught `httpx.ReadTimeout`
+traceback on tenant 5 of 22 while the server finished the job cleanly
+behind it — 17 tenants never posted, and the operator had to rerun. And
+the 4.20.1 `skipped <name>` notices for archived tenant directories went
+to stdout, so `ledger verify --all --json` was no longer parseable JSON.
+
+Fix: the seal POST has no read cap (connect 10 s; the server owns the
+work and the tail); an `httpx.HTTPError` prints red with a "the server
+may still finish this tenant — rerun verify" hint and the run continues,
+exiting 1 at the end. Skip notices go to stderr.
+
+Verified: 2 new tests — a transport error on one tenant does not stop the
+tenants after it and exits 1; `verify --all --json` with an archived dir
+present parses as JSON and the skip notice is on stderr. Full suite:
+816 passed, 1 skipped (was 814 + 2 new).
+
 ## v4.20.1 — `ledger --all` no longer dies on an archived tenant directory (2026-09-06)
 
 Problem: the 4.20.0 upgrade step, `mnemo-cortex ledger seal --all`, built
