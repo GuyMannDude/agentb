@@ -254,6 +254,8 @@ SCOPABLE_ENDPOINTS = frozenset({
     # /chat composes /context + /writeback: a token scoped to it alone still
     # reads AND writes memories — inside its pin, never beyond it.
     "/chat",
+    # v4.20: the ledger endpoints take agent_id and enforce the pin.
+    "/ledger/verify", "/ledger/seal",
 })
 
 

@@ -46,6 +46,7 @@ from agentb.config import (
 from agentb.providers import create_resilient_reasoning, create_resilient_embedding
 from agentb.cache import l3_scan, ContextChunk
 from agentb.fsutil import atomic_write_text as _atomic_write_text
+from agentb.ledger import get_ledger, LedgerBroken
 from agentb.sessions import SessionManager, SessionConfig
 from agentb.provenance import (
     VALID_SOURCES, VALID_CATEGORIES, DEFAULT_HIDDEN_CATEGORIES,
@@ -1676,6 +1677,11 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         await asyncio.to_thread(
             _atomic_write_text, memory_dir / f"{memory_id}.json",
             json.dumps(memory_entry, indent=2, default=str))
+        # v4.20: seal the testimony in the tenant's ledger (append + fsync,
+        # off-loop). The record is on disk first: a crash between the two
+        # leaves an unsealed record, which verify() names — never a sealed
+        # entry with no record behind it.
+        await asyncio.to_thread(get_ledger(memory_dir).seal, memory_entry)
 
         # Demotion keeps the old JSON as audit history while removing it from
         # active vector recall. No memory evidence is deleted.
@@ -2135,6 +2141,52 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
         )
         return {"agent_id": agent_id or "default", **stats}
 
+    # ── Ledger (v4.20): tamper-evident chain over the testimony ──
+    class LedgerSealRequest(BaseModel):
+        agent_id: Optional[str] = Field(
+            None, description="Memory tenant. A scoped token may omit it — the pin decides.")
+
+    def _ledger_tenant(request: Request, agent_id: Optional[str]) -> tuple[Optional[str], dict]:
+        """(resolved agent_id, tenant). A scoped token may omit agent_id —
+        the pin fills it — and the report names the resolved tenant."""
+        pinned = getattr(request.state, "scoped_agent_id", None)
+        if agent_id is None and pinned is not None:
+            agent_id = pinned
+        _enforce_scope(request, agent_id)
+        if agent_id is None and tenants.has_named_tenants():
+            raise HTTPException(
+                400, "agent_id is required on a multi-tenant installation")
+        return agent_id, tenants.get(agent_id)
+
+    @app.get("/ledger/verify")
+    async def ledger_verify(request: Request, agent_id: Optional[str] = None):
+        """Walk the tenant's ledger chain and check every sealed record
+        against disk. Read-only; safe at any time."""
+        agent_id, tenant = _ledger_tenant(request, agent_id)
+        memory_dir = tenant["memory_dir"]
+        report = await asyncio.to_thread(get_ledger(memory_dir).verify, memory_dir)
+        return {"agent_id": agent_id, "ledger": get_ledger(memory_dir).path.as_posix(),
+                **report.to_dict()}
+
+    @app.post("/ledger/seal")
+    async def ledger_seal(request: Request, req: LedgerSealRequest):
+        """Adopt every unsealed record in the tenant (pre-ledger stores,
+        stick carries). Altered records are never re-sealed here, and a
+        broken chain is refused with 409 + the report."""
+        agent_id, tenant = _ledger_tenant(request, req.agent_id)
+        memory_dir = tenant["memory_dir"]
+        ledger = get_ledger(memory_dir)
+        try:
+            sealed = await asyncio.to_thread(ledger.seal_unsealed, memory_dir)
+        except LedgerBroken as exc:
+            # A broken chain cannot adopt: the "unsealed" records may be
+            # forgeries whose seals were deleted. 409 carries the report.
+            raise HTTPException(409, {"error": str(exc), "agent_id": agent_id,
+                                      **exc.report.to_dict()})
+        report = await asyncio.to_thread(ledger.verify, memory_dir)
+        return {"agent_id": agent_id, "sealed_now": len(sealed),
+                "sealed_ids": sealed, **report.to_dict()}
+
     # ── Phase 3: Facts ──
     class FactSaveRequest(BaseModel):
         entity: str
@@ -2308,6 +2360,7 @@ def create_app(config: Optional[AgentBConfig] = None) -> FastAPI:
                         (memory_dir / f"{mid}.json").write_text(
                             json.dumps(entry, indent=2, default=str),
                             encoding="utf-8")
+                        await asyncio.to_thread(get_ledger(memory_dir).seal, entry)
                         emb = await embedder.embed(summary, use_breaker=False, task_type="document")
                         tenant["vec"].upsert(
                             mid, summary, emb,

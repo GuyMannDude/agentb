@@ -1352,6 +1352,161 @@ def migrate_vec_backfill_cmd(agents, all_agents):
 # ─────────────────────────────────────────────
 
 @main.group()
+def ledger():
+    """Memory Ledger — tamper-evident chain over what the store was told.
+
+    Every save seals the memory's testimony (summary, facts, decisions, who,
+    when) into an append-only per-tenant ledger.jsonl. Verify walks the
+    chain and checks every sealed record on disk. Seal adopts records the
+    ledger has never seen (pre-ledger stores, Cortex Stick carries).
+
+    \b
+      mnemo-cortex ledger verify --agent cc        # chain + records, one tenant
+      mnemo-cortex ledger verify --all             # every tenant on this host
+      mnemo-cortex ledger seal --agent cc          # adopt unsealed records
+    """
+    pass
+
+
+def _ledger_tenants(agent, all_agents) -> list[tuple[str, Path]]:
+    """--all = every tenant under data_dir/agents PLUS every configured
+    agent (a config data_dir override relocates a tenant out of the scan).
+    Zero tenants is an error, not a clean report over nothing."""
+    from agentb.config import load_config, get_agent_data_dir
+    config = load_config()
+    if all_agents:
+        found: dict[str, Path] = {}
+        root = Path(config.data_dir) / "agents"
+        if root.is_dir():
+            for d in root.iterdir():
+                if (d / "memory").is_dir():
+                    found[d.name] = d / "memory"
+        for name in config.agents:
+            found[name] = get_agent_data_dir(config, name) / "memory"
+        if not found:
+            console.print(f"[red]No tenants found under {root} or in config.[/]")
+            raise SystemExit(1)
+        return sorted(found.items())
+    if not agent:
+        console.print("[red]Pass --agent <id> or --all.[/]")
+        raise SystemExit(2)
+    return [(agent, get_agent_data_dir(config, agent) / "memory")]
+
+
+def _ledger_server_alive(config) -> bool:
+    """Is a server holding this host's ledger tails? Supervised installs
+    (systemd, launchd) never write the PID file `_is_running` reads, so the
+    probe is the port itself. Refused-connection = down; anything else
+    (timeout, non-200) is ambiguous and the caller must not touch the
+    file — a disk seal beside a live server forks the chain."""
+    import httpx
+    host = config.server.host
+    if host in ("", "0.0.0.0", "::"):
+        host = "localhost"
+    url = f"http://{host}:{config.server.port}/health"
+    try:
+        resp = httpx.get(url, timeout=5.0)
+    except httpx.ConnectError:
+        return False
+    except Exception as exc:
+        console.print(f"[red]Cannot tell whether the server is running ({url}: "
+                      f"{type(exc).__name__}). Refusing to write the ledger file.[/]")
+        raise SystemExit(1)
+    if resp.status_code != 200:
+        console.print(f"[red]{url} answered {resp.status_code} — server state ambiguous. "
+                      "Refusing to write the ledger file.[/]")
+        raise SystemExit(1)
+    return True
+
+
+def _ledger_print(agent_id: str, rep: dict) -> None:
+    color = "green" if rep["ok"] else "red"
+    console.print(f"  [bold]{agent_id}[/]: chain [{color}]{rep['chain']}[/] "
+                  f"({rep['entries']} entries) · sealed {rep['sealed']} · "
+                  f"altered {len(rep['altered'])} · missing {len(rep['missing'])} · "
+                  f"unsealed {len(rep['unsealed'])}"
+                  + (f" · [yellow]disputed {len(rep['disputed'])}[/]" if rep.get("disputed") else ""))
+    if rep.get("broken_at") is not None:
+        console.print(f"    [red]broken at seq {rep['broken_at']}: {rep['reason']}[/]")
+    for label in ("altered", "missing", "disputed"):
+        for mid in rep.get(label, [])[:8]:
+            console.print(f"    [red]{label}[/] {mid}")
+        if len(rep.get(label, [])) > 8:
+            console.print(f"    [dim]… and {len(rep[label]) - 8} more {label}[/]")
+
+
+@ledger.command("verify")
+@click.option("--agent", default=None, help="Tenant to verify.")
+@click.option("--all", "all_agents", is_flag=True, help="Every tenant under data_dir.")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report.")
+def ledger_verify(agent, all_agents, as_json):
+    """Walk the chain and check every sealed record on disk. Read-only.
+    Exit 1 if any tenant is not ok."""
+    from agentb.ledger import Ledger, ledger_path_for
+    reports = {}
+    for agent_id, memory_dir in _ledger_tenants(agent, all_agents):
+        reports[agent_id] = Ledger(ledger_path_for(memory_dir)).verify(memory_dir).to_dict()
+    if as_json:
+        print(json.dumps(reports, indent=2))
+    else:
+        for agent_id, rep in reports.items():
+            _ledger_print(agent_id, rep)
+    if not all(r["ok"] for r in reports.values()):
+        raise SystemExit(1)
+
+
+@ledger.command("seal")
+@click.option("--agent", default=None, help="Tenant to seal.")
+@click.option("--all", "all_agents", is_flag=True, help="Every tenant under data_dir.")
+def ledger_seal(agent, all_agents):
+    """Adopt every unsealed record. Goes through the running server when
+    one answers /health (it owns the chain's tail); writes the file
+    directly only when the port refuses; refuses on anything ambiguous.
+    A broken chain is never adopted onto — exit 1 with the report."""
+    from agentb.config import load_config
+    from agentb.ledger import Ledger, LedgerBroken, ledger_path_for
+    targets = _ledger_tenants(agent, all_agents)
+    config = load_config()
+    if _ledger_server_alive(config):
+        import httpx
+        host = config.server.host if config.server.host not in ("", "0.0.0.0", "::") else "localhost"
+        url = f"http://{host}:{config.server.port}/ledger/seal"
+        headers = {"X-API-KEY": config.server.auth_token} if config.server.auth_token else {}
+        failed = False
+        for agent_id, _ in targets:
+            resp = httpx.post(url, json={"agent_id": agent_id}, headers=headers, timeout=120.0)
+            if resp.status_code == 409:
+                rep = resp.json().get("detail", {})
+                console.print(f"  [red]{agent_id}: chain broken — refusing to adopt[/]")
+                _ledger_print(agent_id, rep)
+                failed = True
+                continue
+            if resp.status_code != 200:
+                console.print(f"  [red]{agent_id}: server said {resp.status_code} {resp.text[:200]}[/]")
+                raise SystemExit(1)
+            rep = resp.json()
+            console.print(f"  [bold]{agent_id}[/]: sealed {rep['sealed_now']} now")
+            _ledger_print(agent_id, rep)
+        if failed:
+            raise SystemExit(1)
+        return
+    failed = False
+    for agent_id, memory_dir in targets:
+        led = Ledger(ledger_path_for(memory_dir))
+        try:
+            sealed = led.seal_unsealed(memory_dir)
+        except LedgerBroken as exc:
+            console.print(f"  [red]{agent_id}: chain broken — refusing to adopt[/]")
+            _ledger_print(agent_id, exc.report.to_dict())
+            failed = True
+            continue
+        console.print(f"  [bold]{agent_id}[/]: sealed {len(sealed)} now")
+        _ledger_print(agent_id, led.verify(memory_dir).to_dict())
+    if failed:
+        raise SystemExit(1)
+
+
+@main.group()
 def stick():
     """Cortex Stick — USB courier sync between two full Mnemo installs.
 

@@ -94,6 +94,7 @@ Mnemo Cortex gives AI agents persistent, local, cross-agent memory. It captures 
 | 📬 **[Disco-Bus](https://github.com/GuyMannDude/disco-bus)** | Agent-to-agent messaging with delivery confirmation. A2A-compatible. Standalone — no Mnemo required. It's what carries traffic between our own agents. |
 | 💾 **[Cortex Stick](docs/cortex-stick.md)** | Sneakernet for AI memory. A USB stick couriers memories, trajectories and facts between two desks — no cloud, no VPN, no account. Optional AES-256; the key never lives on the stick. |
 | 🪪 **Developer's Passport** | Safe behavioral-claim ingestion layer. Review queue + 32 detectors + provenance buckets. Dev-targeted beta. |
+| 🔏 **[Memory Ledger](docs/memory-ledger.md)** | Tamper-evident chain over what the store was told. Every save seals the memory's words; `verify` names any record that changed, went missing, or arrived unsealed. Local evidence, zero dependencies. |
 | 🔩 **Structured Facts** | Key-value store with confidence tracking. When semantic search is the wrong tool — names, settings, entity attributes — facts give you sub-millisecond exact lookup with a three-state confidence ladder. |
 
 > [!NOTE]

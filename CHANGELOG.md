@@ -1,5 +1,121 @@
 # Changelog
 
+## v4.20.0 — Memory Ledger: a tamper-evident chain over what the store was told (2026-09-06)
+
+Problem: a memory record could change on disk and nothing would ever say
+so. A bad migration, a half-finished patch script, a stick sync that
+mangled a file, a tool writing past the server — every one of them leaves
+a record whose words are no longer the words that were saved, and recall
+serves the new words with the same confidence as the old. Mnemo never
+deletes memories (demotion keeps the JSON) precisely so the history is
+load-bearing; a history that can be silently rewritten is not one.
+
+Fix: every record has two halves, and the ledger seals one of them. The
+TESTIMONY is what the person or agent said — `id`, `session_id`,
+`agent_id`, `summary`, `key_facts`, `decisions_made`,
+`projects_referenced`, `timestamp`. The FILING is what the store did with
+it afterwards — category, tags, `superseded_by`, reclassification marks —
+and it is allowed to change. New `agentb/ledger.py`: one append-only
+`ledger.jsonl` per tenant beside `memory/`; each entry carries the SHA-256
+of the sealed fields in canonical JSON, the previous entry's hash (genesis
+= all zeros) and its own hash over the whole entry, written with flush +
+fsync. Every in-process writer seals — `/writeback`, the Analyst and Muse
+notes, archived-session indexing — through one process-wide instance per
+file, so the chain never forks. The record hits disk first, then the seal:
+a crash between the two leaves an unsealed record, never a seal with no
+record behind it. `verify` walks the chain (sequence gap, prev mismatch,
+entry-hash mismatch, torn line → `broken` at that seq) and then checks
+every sealed record on disk: `sealed` / `altered` / `missing` / `unsealed`.
+`seal_unsealed` adopts pre-ledger and carried records, never re-seals an
+altered one — that would launder a tamper into a fresh seal — and refuses
+outright while the chain is broken (a deleted ledger line takes a forged
+record's seal with it, and "adopt the unsealed" would seal the forgery).
+New `GET /ledger/verify` and `POST /ledger/seal` (409 with the report on a
+broken chain), both scopable (a scoped token may omit `agent_id`; the pin
+decides and the report names it; a multi-tenant install without one is a
+400). New CLI `mnemo-cortex ledger verify --agent|--all [--json]`
+(read-only, exit 1 on any not-ok tenant or on zero tenants; `--all` unions
+the on-disk scan with configured agents, so a `data_dir` override is not
+skipped) and `ledger seal` (probes `/health`: server answers → through the
+server, which owns the tail; port refuses → direct to disk; anything
+ambiguous → refuse, because a disk seal beside a live server forks the
+chain). Docs:
+`docs/memory-ledger.md`. This is local evidence, not third-party proof:
+whoever can write the memory files can rewrite the ledger — it catches the
+ordinary disaster, every time, with zero dependencies.
+
+Upgrade note: every existing memory is `unsealed` until you run
+`mnemo-cortex ledger seal --all` once. Unsealed is a to-do, not a failure —
+`ok` stays true. Run it again after each Cortex Stick sync; carried records
+arrive unsealed on the receiving host (each host keeps its own chain).
+
+Credit: the idea is MAYA Memory Lane's sealed session blocks (SHA-256
+fingerprints folding into a chain). Built from zero for Mnemo's per-record
+JSON store and tenant layout — the Clapton Method.
+
+Reviewed (code-reviewer), and the first cut had three real holes it
+caught: (1) a torn final line would swallow the next seal — `seal()`
+appended without checking the file ended in a newline, and the test only
+inspected the returned dict, never the file; (2) `verify()` stopped
+walking at the first break, so every alteration after it read `unsealed`
+(the docs' "to-do, not a failure") and `seal` would have adopted a forged
+record whose ledger line had been deleted; (3) the CLI decided "server
+running" from the PID file only `mnemo-cortex start` writes — on systemd
+and launchd installs `ledger seal --all` (the upgrade step) would have
+written beside the live server and forked every chain. Also from the
+review: the endpoints reported `agent_id: null` for a scoped token; two
+of the three writers fsynced on the event loop; `--all` skipped tenants
+with a `data_dir` override and reported success over zero tenants. The
+second pass caught two more in the fixes themselves: an entry that failed
+its own checks still wrote into the per-record map, so a ledger line
+rewritten in place (or junk appended re-claiming an earlier id) certified
+a forged record as `sealed`; and refusing adoption on any break meant one
+crash mid-append bricked a tenant's `ledger seal` forever. Now only a
+valid entry may speak for a record, and a crash fragment (an unterminated
+tail — the only shape a crash leaves) is quarantined to `ledger.torn` by
+the next write or by `ledger seal`; a bad line mid-file is tampering and
+stays broken. `_torn_tail` reads backwards from the end, O(1) on the hot
+path. The liveness probe honours `server.host` unless it is a wildcard.
+Fixing the first of those exposed the real shape of the problem: a hash
+chain cannot say WHICH of two neighbours was rewritten, only that the link
+broke, so "valid entry" is undefined past a break. `verify` now trusts the
+chain up to the first break (a prev-mismatch at seq k puts both k-1 and k
+on the untrusted side); trusted entries give verdicts, untrusted ones can
+only dispute — new per-record state `disputed` (matches an entry the
+chain cannot vouch for), never `sealed`, and never overruling a trusted
+verdict. Third pass, two more: the trusted/untrusted split was made by
+seq VALUE, so one appended line with a replayed low seq and junk hashes
+walked back into the prefix and certified a forgery — trust is now
+positional (the leading n validated entries, and only those); and "no
+trailing newline" was read as "crash", so a complete final line an editor
+had stripped the newline from was quarantined and the chain gapped —
+quarantine now fires only when the unterminated tail does not parse, a
+parseable one is kept and the next entry starts on its own line, `seal`
+reloads its tail after any quarantine, and a quarantine logs at WARNING
+with path and offset. All fixed above.
+
+Verified: 28 new tests (`tests/test_ledger.py`) — chain from genesis,
+reopen continues the chain, filing changes keep the seal, an edited ledger
+line / a dropped line each report `broken` with the seq and reason, a torn
+final line is broken until the next seal quarantines it to `ledger.torn`
+and the chain reads intact on disk, a crash fragment does not brick
+adoption, junk mid-file stays broken and is not quarantined, an
+edited-in-place ledger line / appended junk re-claiming an earlier id
+leave the records `disputed`, never `sealed`, while the trusted seal still
+names its forgery `altered`; a forgery after a break is still named
+`altered`, an untouched record past it `disputed`, and adoption is
+refused; a replayed low seq appended after a break cannot re-enter the
+prefix; an unterminated but complete final line is kept, not quarantined;
+adopt-but-never-launder,
+one instance per path; through the server: writeback seals, altered
+summary named, filing change keeps the seal, supersede keeps both seals,
+missing file named, `/ledger/seal` adopts a carried record and 409s on a
+broken chain, tenants keep separate chains, multi-tenant needs `agent_id`,
+scoped token pins the ledger and the report names the pin (other tenant
+403; no token 401); CLI: `--all` includes a config-relocated tenant, zero
+tenants exits 1, an ambiguous `/health` refuses to touch the file while a
+refused connection seals to disk. Full suite: 812 passed, 1 skipped (was 784 + 28 new).
+
 ## v4.19.0 — Pocket Mnemo: the phone is the door, the engine stays home (2026-09-05)
 
 Problem: the people who most need a memory of their own — an 18-year-old

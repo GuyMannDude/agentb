@@ -51,6 +51,7 @@ from pathlib import Path
 
 from agentb.cache import cosine_similarity
 from agentb.fsutil import atomic_write_text
+from agentb.ledger import get_ledger
 from agentb.redact import redact_text
 
 log = logging.getLogger("agentb.analyst")
@@ -381,6 +382,7 @@ async def _lens_pass(
             # crash mid-write would truncate the file).
             atomic_write_text(memory_dir / f"{memory_id}.json",
                               json.dumps(entry, indent=2, default=str))
+            await asyncio.to_thread(get_ledger(memory_dir).seal, entry)
             vec_store.upsert(
                 memory_id, full_text, embedding,
                 source_file=(memory_dir / f"{memory_id}.json").as_posix(),
